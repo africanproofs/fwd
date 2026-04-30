@@ -1,0 +1,254 @@
+# Implementation plan
+
+This document is the phased build-out for `fwd` from v0.1.0 (this doc-only ship) to v1.0.0 (first production migration). Each phase has an explicit deliverable, a verification gate, and a recorded version. The next phase does not begin until the previous phase's gate passes.
+
+Phases 9 and 10 are open-ended (rolling migrations and post-v1 hardening). Everything before v1.0.0 is bounded.
+
+## Phase 0 — Documentation and project registration (v0.1.0)
+
+**Status: this ship.**
+
+Deliverables:
+- `README.md`, `CLAUDE.md`, `LICENSE`, `.gitignore`, `.python-version` at repo root.
+- `docs/architecture.md`, `docs/decisions.md`, `docs/threat-model.md`, `docs/implementation-plan.md`, `docs/dependencies.md`.
+- Empty `docs/runbooks/` and `docs/history/` directories ready for content.
+- Project registered in root `proofs.africa/CLAUDE.md` Project Map and Relationships diagram.
+- Git repo initialized, first commit landed, pushed to `gitlab.com/proofs.africa/fwd` (operator action).
+
+Open decisions resolved here (in `decisions.md`):
+- D1 custody backend = Vault Transit self-hosted
+- D2 deployment = Docker Compose, host-agnostic
+- D3 state = SQLite + Litestream
+- D4 Vault distribution = Vault OSS (BSL)
+- D5 key migration = generate fresh + rotate (per-key)
+- D6 unseal share custody = 2 paper + 3 GPG, 3-of-5 threshold
+- D7 repo visibility = public
+- D8 caller authentication = bearer API keys
+
+**Verification gate:** all docs above exist and read as a coherent design. Operator approves the v0.1.0 ship and authorizes Phase 1.
+
+---
+
+## Phase 1 — Coston2 signing spike (v0.2.0)
+
+**Goal: prove the Vault-Transit → Ethereum signing flow end-to-end before committing to a service shape.**
+
+Deliverables (throwaway, not committed to main):
+- A 50–100 line Python script in `scratch/spike.py` (gitignored) that:
+  1. Spins up Vault in dev mode locally (`vault server -dev`).
+  2. Creates one `ecdsa-p256k1` key in Transit at `transit/keys/spike-coston2`.
+  3. Reads the public key via `transit/keys/spike-coston2`, derives the Ethereum address.
+  4. Funds the address with Coston2 testnet tokens (manual: faucet or transfer from existing test wallet).
+  5. Builds a self-transfer EIP-1559 transaction (value = 0).
+  6. Asks Vault to sign the keccak256 digest with `prehashed=true, marshaling_algorithm=asn1`.
+  7. Parses DER, normalizes low-S, recovers v.
+  8. Broadcasts to public Coston2 RPC.
+  9. Polls the receipt until mined, prints the on-chain hash.
+
+**Verification gate:** the transaction is mined on Coston2 with a recoverable signature matching the Vault-derived address. If yes, the architecture is real → proceed to Phase 2. If no, surface the failure mode and revise before proceeding.
+
+Risks retired here:
+- DER parsing against Vault's exact output format.
+- Low-S normalization correctness against EIP-2 enforcement on Flare-stack RPC.
+- v-recovery against `coincurve` against the cached address.
+- Coston2 RPC accepting type-0x02 transactions with our chain_id (114).
+- `hvac` Python client compatibility with Vault's Transit endpoint at the version we'll pin.
+
+---
+
+## Phase 2 — Project scaffold (v0.3.0-alpha)
+
+**Goal: a runnable but inert `fwd` skeleton.**
+
+Deliverables (committed to main):
+- `pyproject.toml` (Poetry, Python 3.12, AP-standard deps).
+- `Dockerfile` building `fwd` from source.
+- `docker-compose.yml` with three services (`fwd`, `vault`, `litestream`), pinned image tags, two networks, two volumes.
+- `.env.example` with documented variables and safe defaults.
+- `src/fwd/` package skeleton: `__init__.py`, `version.py` (= "0.3.0"), `app.py` (FastAPI app with `/healthz` only), `cli.py` (Typer skeleton with `fwd-cli health` and `fwd-cli version`).
+- `tests/` skeleton with one passing unit test.
+- `.gitlab-ci.yml`: lint (ruff), type-check (mypy strict), unit test (pytest), Docker build.
+- `alembic/` initialized; one empty migration as scaffold.
+
+**Verification gate:** `docker compose up -d` brings all three containers up; `curl 127.0.0.1:8080/healthz` returns 200; `fwd-cli health` returns `{"vault": "sealed", "rpc": "unknown", "fwd": "ok"}`. CI green.
+
+---
+
+## Phase 3 — Vault deployment + signing core (v0.3.0)
+
+**Goal: `/v1/sign-and-send` works against Coston2 for one pre-provisioned wallet.**
+
+Deliverables:
+- Vault container init scripts in `scripts/vault-init.sh`: `vault operator init -key-shares=5 -key-threshold=3` → outputs 5 unseal keys + root token. Captured securely by operator; revoked after Phase 3.5.
+- Vault policies in `config/vault/policies/`:
+  - `fwd-app.hcl` — `update` on `transit/sign/+`, `read` on `transit/keys/+`.
+- AppRole auth method enabled; one role for `fwd`; role_id + secret_id injected via env.
+- Transit engine enabled at `transit/`.
+- One key created: `transit/keys/register-coston2-test` (chain_id 114), seeded with Coston2 funds for testing.
+- `src/fwd/signer/vault.py` — `VaultTransitSigner` implementation of the `Signer` protocol.
+- `src/fwd/signer/evm.py` — DER parsing, low-S normalization, v-recovery, EIP-1559 RLP encoding.
+- `src/fwd/api/sign.py` — `POST /v1/sign-and-send` happy path. No nonce manager, no policy yet — uses `eth_getTransactionCount` directly, hardcoded allowlist.
+- Integration test `tests/integration/test_sign_coston2.py` — runs against the deployed compose stack on a CI runner with Vault in dev mode.
+
+**Verification gate:** Phase 1's spike, but as a real test against the deployed service: a request to `/v1/sign-and-send` produces a Coston2 transaction that lands on-chain. Vault root token is then revoked.
+
+---
+
+## Phase 4 — Caller authentication and admin CLI (v0.4.0-alpha)
+
+**Goal: callers identify themselves with API keys; admin CLI manages them.**
+
+Deliverables:
+- `src/fwd/auth/api_key.py` — argon2id-hashed key storage, prefix-based lookup, constant-time comparison.
+- `src/fwd/cli/admin.py` — `fwd-cli callers create|list|revoke` subcommands.
+- Admin endpoint `POST /v1/admin/callers` gated by `FWD_ADMIN_KEY` env var.
+- Bearer-token middleware on all `/v1/*` endpoints (except `/healthz`).
+- Audit log of caller-management operations (every issue/revoke recorded, even though there's no full audit log yet — placeholder writes).
+
+**Verification gate:** an unauthenticated request to `/v1/sign-and-send` returns 401. A request with a revoked key returns 401. A request with a valid key proceeds. CLI can create + revoke keys without service restart.
+
+---
+
+## Phase 5 — State, nonce manager, transaction tracking (v0.4.0)
+
+**Goal: concurrent signing requests against the same wallet land with monotonic nonces and no collisions.**
+
+Deliverables:
+- Alembic migrations for the schema in `architecture.md` (wallets, callers, nonces, transactions, audit_log).
+- `src/fwd/state/db.py` — async SQLAlchemy 2.x setup, WAL pragmas at startup.
+- `src/fwd/state/nonces.py` — `BEGIN IMMEDIATE` reservation, release on confirm, reconciliation on startup (compare DB nonce to `eth_getTransactionCount(latest)` and warn on drift).
+- `src/fwd/watcher/receipts.py` — asyncio task polling pending transactions every block; status transitions; replacement-on-stuck with bumped tip × 1.125, capped at 5 retries.
+- `tx_id` (UUIDv7) introduced; `hashes_json` array tracks hash history under replacement.
+- `GET /v1/transactions/{tx_id}` endpoint.
+
+**Verification gate:** integration test issues 10 concurrent `/v1/sign-and-send` calls against the same wallet on Coston2; all 10 land in monotonically increasing nonces with no gaps and no duplicates. Stuck-tx test (artificially low gas) confirms replacement logic.
+
+---
+
+## Phase 6 — Litestream backup + restore drill (v0.4.0+)
+
+**Goal: documented restore path passes a real drill.**
+
+Deliverables:
+- `litestream` container in compose, replicating `state.db` → Scaleway Object Storage every 10s.
+- `config/litestream/litestream.yml` reading credentials from `.env`.
+- `runbooks/restore.md` documenting the restore procedure.
+- Vault snapshot cron: `vault operator raft snapshot save` nightly, uploaded to the same bucket.
+
+**Verification gate:** Restore drill — run on a clean Docker host:
+1. `docker compose up -d` against a fresh volume set.
+2. `litestream restore` from S3.
+3. Vault snapshot restore.
+4. Unseal Vault.
+5. `fwd-cli reconcile` against on-chain state passes.
+6. Submit a `/v1/sign-and-send` request; confirm it works against the restored state.
+7. Document RTO; target ≤ 30 minutes.
+
+---
+
+## Phase 7 — Policy engine, intent decoder, audit log (v0.5.0)
+
+**Goal: signing requests are gated by ABI-decoded intent against declarative policy; audit chain is verifiable.**
+
+Deliverables:
+- `src/fwd/policy/loader.py` — YAML policy loader, hot-reload on file mtime change.
+- `src/fwd/policy/engine.py` — evaluates `(caller, wallet, contract, method, args, value, rate)` against rules, returns approve/deny + reason.
+- `src/fwd/intent/decoder.py` — ABI parsing for the v1 contract list (FTSO RewardManager, ParticipantRegister, ERC-20 minimal).
+- ABI definitions checked into `config/abi/` for the bound contracts.
+- `src/fwd/audit/log.py` — hash-chained writer: `row_hash = sha256(prev_hash || ts || caller || action || request || decision || outcome)`.
+- `src/fwd/cli/audit.py` — `fwd-cli audit verify` walks the chain and asserts integrity.
+- Synthetic-attack test: a caller with no permissions tries to call a non-allowlisted method; expect 403, audit row recorded with `decision=denied`.
+
+**Verification gate:** synthetic-attack test passes; `fwd-cli audit verify` reports chain integrity; policy hot-reload (modify YAML, watch reload audit row appear) works without restart.
+
+---
+
+## Phase 8 — First production migration: `ftso-fee-claimer` (v1.0.0)
+
+**Goal: AP's most valuable backend `.env PRIVATE_KEY` is replaced by `fwd`. One full reward epoch claimed via `fwd` end-to-end.**
+
+Deliverables:
+- New wallet in Vault: `ftso-claim-flare-prod` (chain_id 14). Generated fresh per D5.
+- New `policy.yaml` entry for `ftso-fee-claimer` × `ftso-claim-flare-prod` with `claim` method allowlisted, beneficiary constraint pinned.
+- On-chain rotation: `setClaimRecipient(<new-fwd-address>)` signed by the identity hardware wallet (`0x26534aC74153E3257dDD3471f96faA33D5D3B575` Flare). Verified on Flare Explorer.
+- `ftso-fee-claimer` updated to call `POST /v1/sign-and-send` instead of locally signing. The `.env` line `PRIVATE_KEY=…` deleted.
+- Test on Songbird first (lower stakes, also rotated to `ftso-claim-songbird-prod`).
+- One full reward epoch claim cycle on Songbird passes.
+- Test on Flare next.
+- One full reward epoch claim cycle on Flare passes.
+- Old `.env` private keys removed from git history (force-overwrite if needed; otherwise considered burned and rotated).
+
+**Verification gate:** one full reward epoch on Flare is claimed via `fwd`, end-to-end, with no fallback path. Audit log confirms the request, decision, and on-chain hash. Operator approves the cutover.
+
+---
+
+## Phase 9 — Rolling migrations of remaining backends (v1.1.x, ongoing)
+
+**Goal: every remaining `.env PRIVATE_KEY` in AP backends is migrated to `fwd`.**
+
+Per-migration deliverables (one per ship):
+- New wallet in Vault.
+- New address generated; old wallet swept to new (or rotated on-chain where applicable).
+- New `policy.yaml` entry.
+- Application code switched to call `fwd`.
+- Old `.env PRIVATE_KEY` deleted.
+- Audit log + integration test green.
+
+Migration order (suggested):
+1. `apregister/` Coston2 test wallet — lowest risk, good practice.
+2. `apcli` — audit which keys it actually holds (some may be redundant with `apregister/`).
+3. `fics` write paths — only if/when `fics` gains write capabilities.
+4. Future Claude agent wallets — provisioned at agent creation, not retroactively.
+
+**Out of scope:** identity addresses, delegation addresses, validator NodeID. These remain offline behind the hardware wallet. They do not migrate.
+
+**Verification gate per migration:** that backend's primary use case works against `fwd`; old `.env` line removed from disk and from any committed `.env.example` files.
+
+---
+
+## Phase 10 — Hardening (v2.x, deferred)
+
+**Goal: production-grade observability, automated unsealing, hardware-backed signing.**
+
+Candidate deliverables (operator chooses ordering and triggers):
+
+- **Auto-unseal.** Either a second tiny Vault as transit-seal seed, or YubiHSM 2 via PKCS#11. Eliminates the manual unseal ritual.
+- **YubiHSM 2 for hardware-isolated signing.** New `Signer` implementation: `YubiHsmSigner`. Per-wallet decision: which keys move to HSM custody. Threat-model upgrade: A3 residual risk shrinks dramatically.
+- **Prometheus metrics.** `/metrics` endpoint exposing: signing latency (histogram), policy decisions (counter by approved/denied), nonce gap (gauge), RPC errors (counter), audit-log size (gauge), Vault seal status (gauge).
+- **Grafana board** + alerting: pages on policy denial spikes, sustained RPC errors, nonce gap > threshold, Vault seal status changes.
+- **On-chain audit-log anchor.** Weekly cron computes Merkle root of audit_log; commits the root via a low-cost transaction to a registry contract on Flare. Forensic non-repudiation.
+- **mTLS for cross-host callers.** cert-manager-style or `fwd`-issued client certs, depending on which callers cross the host boundary.
+- **Dynamic ABI fetch.** Currently the v1 contract ABIs are checked in. A future `fwd-cli abi fetch` from Flare Explorer could remove the manual step, with an operator-approved cache.
+
+Each Phase 10 item is its own ship with its own canonical prompt, gate, and version bump.
+
+---
+
+## Versioning anchor
+
+Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps the next linear patch number in BOTH `pyproject.toml` and `src/fwd/version.py`.
+
+| Phase | Version | Status |
+|---|---|---|
+| 0 | 0.1.0 | This ship |
+| 1 | 0.2.0 | Spike (throwaway code; main version still anchors) |
+| 2 | 0.3.0-alpha | Scaffold |
+| 3 | 0.3.0 | Signing core |
+| 4 | 0.4.0-alpha | Auth |
+| 5 | 0.4.0 | State + nonces |
+| 6 | 0.4.x | Backup + restore |
+| 7 | 0.5.0 | Policy + audit |
+| 8 | 1.0.0 | First production migration |
+| 9 | 1.1.x… | Rolling migrations |
+| 10 | 2.x | Hardening (deferred) |
+
+The version anchor lives in `src/fwd/version.py`, displayed in `/healthz` and the CLI banner. Cross-artifact drift (pyproject.toml ≠ version.py) is caught by a unit test (`tests/unit/test_version_consistency.py`) — added in Phase 2.
+
+---
+
+## Out of scope for this plan
+
+- Detailed canonical prompts for each phase — those are written by the reviewer at ship time, not here.
+- Specific test counts per phase — implementer determines naturally during execution; reviewer's spec asserts test *coverage* shape, not exact counts.
+- Production policy values — they live outside the public repo (per D7).
+- Phase-internal sequencing — implementer chooses optimal order within a phase, subject to the gate.
