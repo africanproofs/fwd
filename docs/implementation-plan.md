@@ -83,10 +83,10 @@ Deliverables (committed to main):
 Deliverables:
 - Vault container init scripts in `scripts/vault-init.sh`: `vault operator init -key-shares=5 -key-threshold=3` → outputs 5 unseal keys + root token. Captured securely by operator; revoked after Phase 3.5.
 - Vault policies in `config/vault/policies/`:
-  - `fwd-app.hcl` — `update` on `transit/sign/+`, `read` on `transit/keys/+`.
+  - `fwd-app.hcl` — `update` on `transit/encrypt/fwd-master` and `transit/decrypt/fwd-master`; `read` on `transit/keys/fwd-master`. (Per v0.1.2: Vault is an envelope-encryption layer, not a signer — there is no `transit/sign/*` capability.)
 - AppRole auth method enabled; one role for `fwd`; role_id + secret_id injected via env.
 - Transit engine enabled at `transit/`.
-- One key created: `transit/keys/register-coston2-test` (chain_id 114), seeded with Coston2 funds for testing.
+- One wallet provisioned via `fwd-cli wallets create register-coston2-test --policy register-coston2-test` (chain_id 114); the resulting Coston2 address is funded with testnet tokens for integration testing. Under the v0.1.2 architecture there is no per-wallet `transit/keys/<wallet>` — Vault holds one shared `transit/keys/fwd-master` (`aes256-gcm96`) and each wallet's secp256k1 privkey is generated externally and stored as a Vault-encrypted ciphertext in SQLite.
 - `src/fwd/signer/envelope.py` — `EnvelopeSigner` implementation: fetches `privkey_ciphertext` + `vault_master_key` from SQLite, calls `transit/decrypt`, signs with `eth-account.Account.sign_transaction`, zeroizes plaintext, returns `SignedTransaction`. (DER parsing and v-recovery are NOT in v1 scope; they return when Phase 10 introduces a hardware signer.)
 - `src/fwd/api/sign.py` — `POST /v1/sign-and-send` happy path. No nonce manager, no policy yet — uses `eth_getTransactionCount` directly, hardcoded allowlist.
 - Integration test `tests/integration/test_sign_coston2.py` — runs against the deployed compose stack on a CI runner with Vault in dev mode.
@@ -102,6 +102,8 @@ Deliverables:
 Deliverables:
 - `src/fwd/auth/api_key.py` — argon2id-hashed key storage, prefix-based lookup, constant-time comparison.
 - `src/fwd/cli/admin.py` — `fwd-cli callers create|list|revoke` subcommands.
+- `src/fwd/cli/wallets.py` — `fwd-cli wallets create|import|list` subcommands per `decisions.md` D9 and `architecture.md` § Wallet provisioning. The `import` subcommand enforces the refusal table (file mode 0600, file owner, 32-byte hex content, name uniqueness, optional `--expected-address` match) before accepting the file.
+- Admin endpoint `POST /v1/admin/wallets` gated by `FWD_ADMIN_KEY` env var (create only — there is no HTTP import endpoint by design).
 - Admin endpoint `POST /v1/admin/callers` gated by `FWD_ADMIN_KEY` env var.
 - Bearer-token middleware on all `/v1/*` endpoints (except `/healthz`).
 - Audit log of caller-management operations (every issue/revoke recorded, even though there's no full audit log yet — placeholder writes).
@@ -236,6 +238,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 0++ | 0.1.2 | Shipped 2026-05-01 (Vault Transit pivot to envelope encryption) |
 | 1 | 0.2.0 | Shipped 2026-05-01 (Coston2 spike against v0.1.2 architecture) |
 | 1+ | 0.2.1 | Shipped 2026-05-01 (pre-Phase-2 doc fixes: failure modes + implementation hazards) |
+| 1++ | 0.2.2 | Shipped 2026-05-01 (wallet create + CLI-only import; export deferred per D9) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |

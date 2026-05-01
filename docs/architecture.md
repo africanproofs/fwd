@@ -301,11 +301,93 @@ Frozen for v1.
 | `GET` | `/v1/transactions/{tx_id}` | caller | Status + hash history + receipt |
 | `GET` | `/v1/audit` | admin | Hash-chained audit log (paginated) |
 | `GET` | `/healthz` | none | Liveness + Vault sealed status + RPC reachability |
-| `POST` | `/v1/admin/wallets` | admin | Provision wallet (creates Vault key, derives address) |
+| `POST` | `/v1/admin/wallets` | admin | Generate privkey internally, encrypt via Vault `fwd-master`, persist ciphertext, return address. See § Wallet provisioning. |
 | `POST` | `/v1/admin/callers` | admin | Issue caller API key |
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke caller |
 
 Admin endpoints require a separate `FWD_ADMIN_KEY` configured at boot. Admin authentication is not policy-controlled — it's the bootstrap.
+
+## Wallet provisioning
+
+Two paths in v1: **create** (`fwd` generates a fresh privkey) and **import** (operator provides an existing privkey via file). Neither path returns plaintext to any caller; plaintext exists in `fwd`'s process memory only during the bounded provisioning operation, then is zeroized per Core invariant #16.
+
+### Create
+
+Generate a fresh wallet. Available via HTTP and CLI:
+
+```
+POST /v1/admin/wallets
+Headers:
+  Authorization: Bearer <FWD_ADMIN_KEY>
+Body:
+  { "name": "register-coston2-test", "policy_path": "register-coston2-test" }
+Response (201):
+  { "name": "register-coston2-test", "address": "0x..." }
+
+# Equivalent CLI:
+fwd-cli wallets create --name register-coston2-test --policy register-coston2-test
+```
+
+Flow:
+
+1. Validate `name` is unique; if not, 409 `wallet_exists`.
+2. Generate privkey via `eth_account.Account.create()` and immediately wrap as `bytearray` for zeroization.
+3. Derive the EIP-55 address from the public key.
+4. Encrypt the privkey via `transit/encrypt/fwd-master` → `vault:v1:<ciphertext>`.
+5. `INSERT INTO wallets (name, address, privkey_ciphertext, vault_master_key='fwd-master', policy_path, created_at)`.
+6. Zeroize the plaintext bytearray.
+7. Audit row: `action='wallet-create', caller=<admin>, outcome=<address>`.
+8. Return `{ name, address }`.
+
+### Import
+
+Use `fwd-cli wallets import` to provision a wallet from an existing 32-byte secp256k1 private key. **CLI only — no HTTP endpoint** (see `decisions.md` D9 for rationale):
+
+```
+fwd-cli wallets import \
+    --name <wallet_name> \
+    --policy <policy_path> \
+    --privkey-file <absolute_path_to_hex_file> \
+    [--expected-address 0x...] \
+    [--shred-source]
+```
+
+The `--privkey-file` must be a regular file, mode `0600`, owned by the user running `fwd-cli`, containing exactly 32 bytes hex-encoded (no `0x` prefix; an optional trailing newline is permitted).
+
+Refusal table (CLI exits with code 2 and prints a clear error):
+
+| Condition | Response |
+|---|---|
+| File does not exist | `privkey-file not found: <path>` |
+| File mode is not `0600` | `privkey-file mode must be 0600 (got <octal>)` |
+| File owner doesn't match current user | `privkey-file must be owned by the user running fwd-cli` |
+| Content doesn't decode to exactly 32 bytes | `privkey-file must contain a 32-byte hex-encoded secp256k1 private key (got <n> bytes)` |
+| Wallet name already exists | `wallet '<name>' already exists` |
+| `--expected-address` provided AND derived doesn't match | `derived address <X> does not match --expected-address <Y>` |
+
+Flow on success:
+
+1. Read file content; verify mode + ownership via `os.stat`.
+2. `bytes.fromhex(content.strip())` → 32-byte privkey, immediately wrapped as `bytearray`.
+3. Derive the EIP-55 address; verify against `--expected-address` if provided.
+4. Encrypt the privkey via `transit/encrypt/fwd-master` → `vault:v1:<ciphertext>`.
+5. `INSERT INTO wallets (...)`.
+6. Zeroize the plaintext bytearray.
+7. Audit row: `action='wallet-import', caller=<operator-uid>, request_json={name, source_file_path, source_file_mode, source_file_owner}, outcome=<address>` — the privkey itself is NOT in the audit; only the source-file metadata.
+8. If `--shred-source`: run `shred -u <path>` (overwrites then unlinks). Exit non-zero with a warning if `shred` fails — the wallet is provisioned but the source file remains on disk for the operator to handle.
+9. Print `{ name, address }`.
+
+**Why CLI-only.** A privkey traversing HTTP enters TLS termination logs, FastAPI access logs, reverse-proxy memory, and any load-balancer headers. CLI-only forces the privkey through a single operator-controlled file path with explicit mode and ownership checks. See `decisions.md` D9 for the full rationale and rejected alternatives.
+
+### Export
+
+Not supported in v1. See `decisions.md` D9 § "When to revisit" for the deferred reasoning. Real-world "export" use cases are handled by:
+
+| Use case | v1 mechanism |
+|---|---|
+| Disaster recovery (host failure) | Litestream restore (SQLite ciphertext) + Vault Raft snapshot restore (master key) on a new host. The wallet keeps signing without any plaintext ever existing on disk. |
+| Migration to a hardware wallet | Generate a new wallet on the HW device, transfer balance on-chain, retire the old `fwd`-resident wallet. |
+| Forensics / non-repudiation | `GET /v1/audit` walks the hash-chained audit log; the signed transactions themselves are forensic evidence. |
 
 ## Idempotency
 
