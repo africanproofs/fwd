@@ -196,9 +196,9 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 
 **Decision.** Three wallet-provisioning paths in v1, with deliberately asymmetric ergonomics:
 
-- **Create — HTTP + CLI.** `POST /v1/admin/wallets` (admin-scoped) and `fwd-cli wallets create` both call the same flow: `fwd` generates a fresh secp256k1 privkey internally via `eth_account.Account.create()`, derives the address, encrypts the privkey via `transit/encrypt/fwd-master`, persists `(name, address, privkey_ciphertext, vault_master_key='fwd-master', policy_path)` in SQLite, and zeroizes the plaintext bytearray. Plaintext privkey never leaves `fwd`'s process; no caller (not even the admin) ever sees it.
+- **Create — HTTP + CLI.** `POST /v1/admin/wallets` (admin-scoped) and `clifwd wallets create` both call the same flow: `fwd` generates a fresh secp256k1 privkey internally via `eth_account.Account.create()`, derives the address, encrypts the privkey via `transit/encrypt/fwd-master`, persists `(name, address, privkey_ciphertext, vault_master_key='fwd-master', policy_path)` in SQLite, and zeroizes the plaintext bytearray. Plaintext privkey never leaves `fwd`'s process; no caller (not even the admin) ever sees it.
 
-- **Import — CLI only.** `fwd-cli wallets import --privkey-file <path>` provisions a wallet from an existing 32-byte hex-encoded privkey supplied by the operator. **No HTTP endpoint.** The CLI enforces a refusal table (file mode, file owner, content shape, name uniqueness) before accepting the file.
+- **Import — CLI only.** `clifwd wallets import --privkey-file <path>` provisions a wallet from an existing 32-byte hex-encoded privkey supplied by the operator. **No HTTP endpoint.** The CLI enforces a refusal table (file mode, file owner, content shape, name uniqueness) before accepting the file.
 
 - **Export — not supported in v1.** Deferred to a future ship gated on a real consumer surfacing.
 
@@ -210,24 +210,24 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 
 **Why CLI-only import.** Forces the privkey to traverse a single, operator-controlled, file-based path with explicit mode and ownership requirements. The privkey never enters `fwd`'s HTTP layer, never lands in any web log, never exists in reverse-proxy memory. The operator's act of placing the file on disk is the import authorization — the same security pattern as `~/.ssh/id_rsa` (file mode 0600 is the contract).
 
-**Refusal table** (codified in `fwd-cli wallets import`; the CLI exits with code 2 and prints a clear error):
+**Refusal table** (codified in `clifwd wallets import`; the CLI exits with code 2 and prints a clear error):
 
 | Condition | Response |
 |---|---|
 | `--privkey-file` does not exist | `privkey-file not found: <path>` |
 | File mode is not exactly `0600` | `privkey-file mode must be 0600 (got <octal>)` |
-| File owner UID doesn't match the user running `fwd-cli` | `privkey-file must be owned by the user running fwd-cli (file_owner=<uid>, current_user=<uid>)` |
+| File owner UID doesn't match the user running `clifwd` | `privkey-file must be owned by the user running clifwd (file_owner=<uid>, current_user=<uid>)` |
 | File content (after stripping whitespace) doesn't decode to exactly 32 bytes via `bytes.fromhex(...)` | `privkey-file must contain a 32-byte hex-encoded secp256k1 private key (got <n> bytes)` |
 | Wallet name already exists in the `wallets` table | `wallet '<name>' already exists` |
 | Optional `--expected-address` is provided AND derived address doesn't match | `derived address <X> does not match --expected-address <Y>` |
 
 **Consequences.**
 
-- Phase 4's admin CLI gains `fwd-cli wallets create`, `fwd-cli wallets import`, and `fwd-cli wallets list` commands. Phase 4's existing scope (caller-auth + admin CLI) is naturally extended; no new phase is created.
+- Phase 4's admin CLI gains `clifwd wallets create`, `clifwd wallets import`, and `clifwd wallets list` commands. Phase 4's existing scope (caller-auth + admin CLI) is naturally extended; no new phase is created.
 - Phase 5 (state schema) is unchanged — the `wallets` table from `architecture.md` already accommodates both create and import paths.
 - Phase 7 (audit log) must include `action='wallet-create'` and `action='wallet-import'` row types. The import audit row records `request_json={name, source_file_path, source_file_mode, source_file_owner}` — file metadata, NOT the privkey. The structlog scrubber from v0.2.1 § Implementation hazards catches any accidental privkey leak in import-path code.
 - D5's "generate fresh + rotate" prescription remains unchanged for the FTSO claim recipient — that key never imports. D9 governs the OTHER wallets (e.g., `apregister/` Coston2 test wallet, ad-hoc operator wallets) where import is operationally acceptable.
-- Operators MUST handle the source `privkey-file` securely BEFORE import: place on a trusted filesystem, ensure mode 0600, choose `--shred-source` if no offline backup is needed. `fwd-cli` cannot retroactively protect a key that was leaked before import.
+- Operators MUST handle the source `privkey-file` securely BEFORE import: place on a trusted filesystem, ensure mode 0600, choose `--shred-source` if no offline backup is needed. `clifwd` cannot retroactively protect a key that was leaked before import.
 
 **When to revisit.**
 

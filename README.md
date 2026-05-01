@@ -2,7 +2,7 @@
 
 Policy-gated signing service for African Proofs' EVM backend keys (Flare, Songbird, Coston2). Replaces every `.env PRIVATE_KEY` across AP automation with one HTTP endpoint, one custody backend, and one tamper-evident audit log.
 
-> **Status: v0.2.2 — Documentation only (+ one validated spike on Coston2).** v0.1.0 landed the architectural spec; v0.1.1 landed pre-Phase-1 doc fixes; v0.1.2 pivoted to Vault Transit envelope encryption after the v0.2.0 first attempt discovered Vault Transit doesn't support secp256k1 signing; v0.2.0 retry validated the revised flow with a real Coston2 transaction; v0.2.1 added pre-Phase-2 implementation-hazard guidance; v0.2.2 documented the wallet-provisioning policy (HTTP+CLI create, CLI-only import, no plaintext export). Phase 2 (project scaffold) is the next ship.
+> **Status: v0.2.3 — Documentation only (+ one validated spike on Coston2).** v0.1.0 landed the architectural spec; v0.1.1 landed pre-Phase-1 doc fixes; v0.1.2 pivoted to Vault Transit envelope encryption after the v0.2.0 first attempt discovered Vault Transit doesn't support secp256k1 signing; v0.2.0 retry validated the revised flow with a real Coston2 transaction; v0.2.1 added pre-Phase-2 implementation-hazard guidance; v0.2.2 documented the wallet-provisioning policy (HTTP+CLI create, CLI-only import, no plaintext export); v0.2.3 renamed the operator-facing CLI from `fwd-cli` to **`clifwd`** (pronounced "Clifford"). Phase 2 (project scaffold) is the next ship.
 
 ## What this repo is
 

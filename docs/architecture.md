@@ -75,7 +75,7 @@ Three Docker services, two Docker networks, two named volumes:
 v1: bearer API keys. Each caller has a key issued by `fwd`'s admin CLI:
 
 ```
-$ docker exec -it fwd fwd-cli callers create \
+$ docker exec -it fwd clifwd callers create \
     --name ftso-fee-claimer \
     --policy ftso-claim-flare-prod
 fwd_live_a8f3c9d2b1e4...
@@ -325,7 +325,7 @@ Response (201):
   { "name": "register-coston2-test", "address": "0x..." }
 
 # Equivalent CLI:
-fwd-cli wallets create --name register-coston2-test --policy register-coston2-test
+clifwd wallets create --name register-coston2-test --policy register-coston2-test
 ```
 
 Flow:
@@ -341,10 +341,10 @@ Flow:
 
 ### Import
 
-Use `fwd-cli wallets import` to provision a wallet from an existing 32-byte secp256k1 private key. **CLI only — no HTTP endpoint** (see `decisions.md` D9 for rationale):
+Use `clifwd wallets import` to provision a wallet from an existing 32-byte secp256k1 private key. **CLI only — no HTTP endpoint** (see `decisions.md` D9 for rationale):
 
 ```
-fwd-cli wallets import \
+clifwd wallets import \
     --name <wallet_name> \
     --policy <policy_path> \
     --privkey-file <absolute_path_to_hex_file> \
@@ -352,7 +352,7 @@ fwd-cli wallets import \
     [--shred-source]
 ```
 
-The `--privkey-file` must be a regular file, mode `0600`, owned by the user running `fwd-cli`, containing exactly 32 bytes hex-encoded (no `0x` prefix; an optional trailing newline is permitted).
+The `--privkey-file` must be a regular file, mode `0600`, owned by the user running `clifwd`, containing exactly 32 bytes hex-encoded (no `0x` prefix; an optional trailing newline is permitted).
 
 Refusal table (CLI exits with code 2 and prints a clear error):
 
@@ -360,7 +360,7 @@ Refusal table (CLI exits with code 2 and prints a clear error):
 |---|---|
 | File does not exist | `privkey-file not found: <path>` |
 | File mode is not `0600` | `privkey-file mode must be 0600 (got <octal>)` |
-| File owner doesn't match current user | `privkey-file must be owned by the user running fwd-cli` |
+| File owner doesn't match current user | `privkey-file must be owned by the user running clifwd` |
 | Content doesn't decode to exactly 32 bytes | `privkey-file must contain a 32-byte hex-encoded secp256k1 private key (got <n> bytes)` |
 | Wallet name already exists | `wallet '<name>' already exists` |
 | `--expected-address` provided AND derived doesn't match | `derived address <X> does not match --expected-address <Y>` |
@@ -536,7 +536,7 @@ Policy is hot-reloaded on file mtime change. Reload writes an audit row.
 3. `vault operator raft snapshot restore vault-snapshot-<ts>.bin`
 4. `docker compose up -d`
 5. Unseal Vault (3 of 5 shares)
-6. Verify nonce reconciliation against on-chain state via `fwd-cli reconcile`
+6. Verify nonce reconciliation against on-chain state via `clifwd reconcile`
 7. Confirm `/healthz` reports green
 
 Target RTO: 30 minutes from a clean host.

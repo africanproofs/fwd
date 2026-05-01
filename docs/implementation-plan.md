@@ -67,12 +67,12 @@ Deliverables (committed to main):
 - `Dockerfile` building `fwd` from source.
 - `docker-compose.yml` with three services (`fwd`, `vault`, `litestream`), pinned image tags, two networks, two volumes.
 - `.env.example` with documented variables and safe defaults.
-- `src/fwd/` package skeleton: `__init__.py`, `version.py` (= "0.3.0"), `app.py` (FastAPI app with `/healthz` only), `cli.py` (Typer skeleton with `fwd-cli health` and `fwd-cli version`).
+- `src/fwd/` package skeleton: `__init__.py`, `version.py` (= "0.3.0"), `app.py` (FastAPI app with `/healthz` only), `cli.py` (Typer skeleton with `clifwd health` and `clifwd version`).
 - `tests/` skeleton with one passing unit test.
 - `.gitlab-ci.yml`: lint (ruff), type-check (mypy strict), unit test (pytest), Docker build.
 - `alembic/` initialized; one empty migration as scaffold.
 
-**Verification gate:** `docker compose up -d` brings all three containers up; `curl 127.0.0.1:8080/healthz` returns 200; `fwd-cli health` returns `{"vault": "sealed", "rpc": "unknown", "fwd": "ok"}`. CI green.
+**Verification gate:** `docker compose up -d` brings all three containers up; `curl 127.0.0.1:8080/healthz` returns 200; `clifwd health` returns `{"vault": "sealed", "rpc": "unknown", "fwd": "ok"}`. CI green.
 
 ---
 
@@ -86,7 +86,7 @@ Deliverables:
   - `fwd-app.hcl` — `update` on `transit/encrypt/fwd-master` and `transit/decrypt/fwd-master`; `read` on `transit/keys/fwd-master`. (Per v0.1.2: Vault is an envelope-encryption layer, not a signer — there is no `transit/sign/*` capability.)
 - AppRole auth method enabled; one role for `fwd`; role_id + secret_id injected via env.
 - Transit engine enabled at `transit/`.
-- One wallet provisioned via `fwd-cli wallets create register-coston2-test --policy register-coston2-test` (chain_id 114); the resulting Coston2 address is funded with testnet tokens for integration testing. Under the v0.1.2 architecture there is no per-wallet `transit/keys/<wallet>` — Vault holds one shared `transit/keys/fwd-master` (`aes256-gcm96`) and each wallet's secp256k1 privkey is generated externally and stored as a Vault-encrypted ciphertext in SQLite.
+- One wallet provisioned via `clifwd wallets create register-coston2-test --policy register-coston2-test` (chain_id 114); the resulting Coston2 address is funded with testnet tokens for integration testing. Under the v0.1.2 architecture there is no per-wallet `transit/keys/<wallet>` — Vault holds one shared `transit/keys/fwd-master` (`aes256-gcm96`) and each wallet's secp256k1 privkey is generated externally and stored as a Vault-encrypted ciphertext in SQLite.
 - `src/fwd/signer/envelope.py` — `EnvelopeSigner` implementation: fetches `privkey_ciphertext` + `vault_master_key` from SQLite, calls `transit/decrypt`, signs with `eth-account.Account.sign_transaction`, zeroizes plaintext, returns `SignedTransaction`. (DER parsing and v-recovery are NOT in v1 scope; they return when Phase 10 introduces a hardware signer.)
 - `src/fwd/api/sign.py` — `POST /v1/sign-and-send` happy path. No nonce manager, no policy yet — uses `eth_getTransactionCount` directly, hardcoded allowlist.
 - Integration test `tests/integration/test_sign_coston2.py` — runs against the deployed compose stack on a CI runner with Vault in dev mode.
@@ -101,8 +101,8 @@ Deliverables:
 
 Deliverables:
 - `src/fwd/auth/api_key.py` — argon2id-hashed key storage, prefix-based lookup, constant-time comparison.
-- `src/fwd/cli/admin.py` — `fwd-cli callers create|list|revoke` subcommands.
-- `src/fwd/cli/wallets.py` — `fwd-cli wallets create|import|list` subcommands per `decisions.md` D9 and `architecture.md` § Wallet provisioning. The `import` subcommand enforces the refusal table (file mode 0600, file owner, 32-byte hex content, name uniqueness, optional `--expected-address` match) before accepting the file.
+- `src/fwd/cli/admin.py` — `clifwd callers create|list|revoke` subcommands.
+- `src/fwd/cli/wallets.py` — `clifwd wallets create|import|list` subcommands per `decisions.md` D9 and `architecture.md` § Wallet provisioning. The `import` subcommand enforces the refusal table (file mode 0600, file owner, 32-byte hex content, name uniqueness, optional `--expected-address` match) before accepting the file.
 - Admin endpoint `POST /v1/admin/wallets` gated by `FWD_ADMIN_KEY` env var (create only — there is no HTTP import endpoint by design).
 - Admin endpoint `POST /v1/admin/callers` gated by `FWD_ADMIN_KEY` env var.
 - Bearer-token middleware on all `/v1/*` endpoints (except `/healthz`).
@@ -143,7 +143,7 @@ Deliverables:
 2. `litestream restore` from S3.
 3. Vault snapshot restore.
 4. Unseal Vault.
-5. `fwd-cli reconcile` against on-chain state passes.
+5. `clifwd reconcile` against on-chain state passes.
 6. Submit a `/v1/sign-and-send` request; confirm it works against the restored state.
 7. Document RTO; target ≤ 30 minutes.
 
@@ -159,10 +159,10 @@ Deliverables:
 - `src/fwd/intent/decoder.py` — ABI parsing for the v1 contract list (FTSO RewardManager, ParticipantRegister, ERC-20 minimal).
 - ABI definitions checked into `config/abi/` for the bound contracts.
 - `src/fwd/audit/log.py` — hash-chained writer: `row_hash = sha256(prev_hash || ts || caller || action || request || decision || outcome)`.
-- `src/fwd/cli/audit.py` — `fwd-cli audit verify` walks the chain and asserts integrity.
+- `src/fwd/cli/audit.py` — `clifwd audit verify` walks the chain and asserts integrity.
 - Synthetic-attack test: a caller with no permissions tries to call a non-allowlisted method; expect 403, audit row recorded with `decision=denied`.
 
-**Verification gate:** synthetic-attack test passes; `fwd-cli audit verify` reports chain integrity; policy hot-reload (modify YAML, watch reload audit row appear) works without restart.
+**Verification gate:** synthetic-attack test passes; `clifwd audit verify` reports chain integrity; policy hot-reload (modify YAML, watch reload audit row appear) works without restart.
 
 ---
 
@@ -221,7 +221,7 @@ Candidate deliverables (operator chooses ordering and triggers):
 - **Grafana board** + alerting: pages on policy denial spikes, sustained RPC errors, nonce gap > threshold, Vault seal status changes.
 - **On-chain audit-log anchor.** Weekly cron computes Merkle root of audit_log; commits the root via a low-cost transaction to a registry contract on Flare. Forensic non-repudiation.
 - **mTLS for cross-host callers.** cert-manager-style or `fwd`-issued client certs, depending on which callers cross the host boundary.
-- **Dynamic ABI fetch.** Currently the v1 contract ABIs are checked in. A future `fwd-cli abi fetch` from Flare Explorer could remove the manual step, with an operator-approved cache.
+- **Dynamic ABI fetch.** Currently the v1 contract ABIs are checked in. A future `clifwd abi fetch` from Flare Explorer could remove the manual step, with an operator-approved cache.
 
 Each Phase 10 item is its own ship with its own canonical prompt, gate, and version bump.
 
@@ -239,6 +239,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 1 | 0.2.0 | Shipped 2026-05-01 (Coston2 spike against v0.1.2 architecture) |
 | 1+ | 0.2.1 | Shipped 2026-05-01 (pre-Phase-2 doc fixes: failure modes + implementation hazards) |
 | 1++ | 0.2.2 | Shipped 2026-05-01 (wallet create + CLI-only import; export deferred per D9) |
+| 1+++ | 0.2.3 | Shipped 2026-05-01 (CLI rename: fwd-cli → clifwd; mechanical rename across docs) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
