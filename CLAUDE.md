@@ -12,7 +12,9 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 ## Scope (current state)
 
-**v0.1.0 (this ship, 2026-04-30):** Documentation only. Architecture, decisions record, threat model, dependency inventory, 10-phase implementation plan. No code, no Docker artifacts, no Vault. Project registered in root `CLAUDE.md` Project Map.
+**v0.1.0 (shipped 2026-04-30):** Documentation only. Architecture, decisions record, threat model, dependency inventory, 10-phase implementation plan. No code, no Docker artifacts, no Vault. Project registered in root `CLAUDE.md` Project Map.
+
+**v0.1.1 (this ship, 2026-04-30):** Pre-Phase-1 documentation fixes from the v0.1.0 CTO review — relational schema for decoded intent and hash history (replacing JSON-blob columns), `Idempotency-Key` header contract, error envelope, versioning policy, and layer-boundary specification. No code yet; specs only. Phase 1 builds against this spec base.
 
 **v0.2.0 (Phase 1 — the spike):** Single throwaway Python script that signs a Coston2 transaction via Vault Transit `ecdsa-p256k1` and broadcasts it. Validates the DER → low-S → v-recovery flow against a real Flare-stack RPC. ~50 lines.
 

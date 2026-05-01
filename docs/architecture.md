@@ -163,9 +163,13 @@ The `/v1/sign-and-send` happy path:
 13. fwd broadcasts via JSON-RPC eth_sendRawTransaction
 
 14. fwd records:
-    - INSERT INTO transactions (tx_id, wallet, chain, intent_json,
-                                nonce, signed_raw, hash_history,
-                                status='submitted')
+    - INSERT INTO transactions (tx_id, wallet, chain, caller, nonce,
+                                contract_address, method_name, value_wei,
+                                idempotency_key, request_json,
+                                signed_raw, status='submitted')
+    - INSERT INTO transaction_args (tx_id, arg_name, arg_type, arg_value)
+        — one row per decoded argument
+    - INSERT INTO transaction_hashes (tx_id, sequence_num=1, hash_hex)
     - INSERT INTO audit_log (caller, action='sign-and-send',
                              request_json, decision='approved',
                              outcome=tx_id, prev_hash, row_hash)
@@ -176,7 +180,7 @@ The `/v1/sign-and-send` happy path:
     - Poll eth_getTransactionReceipt for each pending tx
     - On confirmation: status='confirmed', release nonce
     - On stuck (N blocks elapsed): replace with bumped tip,
-      append to hash_history, audit row
+      append a new row to transaction_hashes (tx_id, sequence_num=N+1, hash_hex), audit row
     - On final failure (5 retries): status='failed', surface alert
 ```
 
@@ -187,9 +191,14 @@ CREATE TABLE wallets (
     name TEXT PRIMARY KEY,
     vault_key_ref TEXT NOT NULL,
     address TEXT NOT NULL,
-    chains TEXT NOT NULL,                    -- JSON array of chain_ids
     policy_path TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE wallet_chains (
+    wallet TEXT NOT NULL REFERENCES wallets(name),
+    chain INTEGER NOT NULL,
+    PRIMARY KEY (wallet, chain)
 );
 
 CREATE TABLE callers (
@@ -202,7 +211,7 @@ CREATE TABLE callers (
 );
 
 CREATE TABLE nonces (
-    wallet TEXT NOT NULL,
+    wallet TEXT NOT NULL REFERENCES wallets(name),
     chain INTEGER NOT NULL,
     next_nonce INTEGER NOT NULL,
     last_confirmed INTEGER,
@@ -211,37 +220,60 @@ CREATE TABLE nonces (
 );
 
 CREATE TABLE transactions (
-    tx_id TEXT PRIMARY KEY,                  -- UUIDv7
-    wallet TEXT NOT NULL,
-    chain INTEGER NOT NULL,
-    caller TEXT NOT NULL,
-    nonce INTEGER NOT NULL,
-    intent_json TEXT NOT NULL,               -- decoded human-readable intent
-    request_json TEXT NOT NULL,              -- full original request
-    signed_raw TEXT,                         -- hex of latest signed tx
-    hashes_json TEXT,                        -- JSON array: [hash_v1, hash_v2, ...]
-    status TEXT NOT NULL,                    -- pending|submitted|mined|replaced|failed
-    submitted_at TIMESTAMP,
-    confirmed_at TIMESTAMP,
-    receipt_json TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    tx_id            TEXT PRIMARY KEY,            -- UUIDv7
+    wallet           TEXT NOT NULL REFERENCES wallets(name),
+    chain            INTEGER NOT NULL,
+    caller           TEXT NOT NULL REFERENCES callers(name),
+    nonce            INTEGER NOT NULL,
+    contract_address TEXT NOT NULL,               -- decoded from request.data
+    method_name      TEXT NOT NULL,               -- decoded from request.data
+    value_wei        TEXT NOT NULL,               -- decimal string; SQLite has no uint256
+    idempotency_key  TEXT,                        -- caller-supplied via header; optional
+    request_json     TEXT NOT NULL,               -- opaque archive of original request
+    signed_raw       TEXT,                        -- hex of latest signed tx
+    status           TEXT NOT NULL,               -- pending|submitted|mined|replaced|failed
+    submitted_at     TIMESTAMP,
+    confirmed_at     TIMESTAMP,
+    receipt_json     TEXT,                        -- opaque archive of RPC receipt
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX idx_tx_idempotency
+  ON transactions (caller, idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE TABLE transaction_args (
+    tx_id     TEXT NOT NULL REFERENCES transactions(tx_id),
+    arg_name  TEXT NOT NULL,
+    arg_type  TEXT NOT NULL,                      -- "address", "uint256", "bytes32", ...
+    arg_value TEXT NOT NULL,
+    PRIMARY KEY (tx_id, arg_name)
+);
+
+CREATE TABLE transaction_hashes (
+    tx_id        TEXT NOT NULL REFERENCES transactions(tx_id),
+    sequence_num INTEGER NOT NULL,                -- 1 = first submission, 2+ = replacements
+    hash_hex     TEXT NOT NULL,
+    submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tx_id, sequence_num)
 );
 
 CREATE TABLE audit_log (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     caller TEXT,
-    action TEXT NOT NULL,                    -- sign-and-send | sign-typed-data | admin-* | ...
+    action TEXT NOT NULL,                         -- sign-and-send | sign-typed-data | admin-* | ...
     request_json TEXT,
-    decision TEXT NOT NULL,                  -- approved|denied|error
+    decision TEXT NOT NULL,                       -- approved|denied|error
     decision_reason TEXT,
-    outcome TEXT,                            -- tx_id, error code, etc.
-    prev_hash TEXT NOT NULL,                 -- hash of previous row (genesis = '0' * 64)
-    row_hash TEXT NOT NULL                   -- hash(prev_hash || ts || caller || action || request_json || decision || outcome)
+    outcome TEXT,                                 -- tx_id, error code, etc.
+    prev_hash TEXT NOT NULL,                      -- hash of previous row (genesis = '0' * 64)
+    row_hash TEXT NOT NULL                        -- hash(prev_hash || ts || caller || action || request_json || decision || outcome)
 );
 
 CREATE INDEX idx_tx_status ON transactions (status);
 CREATE INDEX idx_tx_wallet_chain_nonce ON transactions (wallet, chain, nonce);
+CREATE INDEX idx_tx_method ON transactions (method_name, contract_address);
 CREATE INDEX idx_audit_caller_ts ON audit_log (caller, ts);
 ```
 
@@ -264,6 +296,66 @@ Frozen for v1.
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke caller |
 
 Admin endpoints require a separate `FWD_ADMIN_KEY` configured at boot. Admin authentication is not policy-controlled — it's the bootstrap.
+
+## Idempotency
+
+Callers SHOULD send an `Idempotency-Key` header on every `POST /v1/sign-and-send`. The contract:
+
+| Field | Value |
+|---|---|
+| Header name | `Idempotency-Key` |
+| Format | UUIDv7 (recommended) — any opaque string up to 128 chars |
+| Required? | Optional in v1, recommended for all retry-tolerant callers |
+| Scope | Per-caller — same key used by two different callers is two distinct requests |
+| Storage | `transactions.idempotency_key` with unique index on `(caller, idempotency_key)` |
+| TTL | Indefinite — keys are first-class identifiers, not cache entries |
+
+**Behavior on duplicate:**
+- If a request arrives with an `(caller, Idempotency-Key)` pair that already exists in `transactions`, `fwd` returns the original `tx_id` and current status with HTTP 200.
+- The duplicate request is NOT re-signed, NOT re-broadcast, and NOT re-policy-checked.
+- The duplicate is recorded in the audit log as `action='sign-and-send-duplicate'` with `outcome=<original tx_id>`.
+
+**Behavior on missing header:** request proceeds normally; no idempotency protection applies. Recommended for one-shot ad-hoc operator calls; not recommended for automated callers.
+
+This contract is documented in v0.1.1; implementation lands in Phase 5.
+
+## Error envelope
+
+All `4xx` and `5xx` responses from `/v1/*` endpoints return a JSON body with this shape:
+
+```json
+{
+  "code": "policy_denied",
+  "message": "human-readable description, safe to log",
+  "request_id": "uuid-v7"
+}
+```
+
+Stable error codes:
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `auth_failed` | 401 | Missing or invalid API key |
+| `policy_denied` | 403 | Caller authenticated but action denied by policy |
+| `rate_exceeded` | 403 | Within policy but over rate window |
+| `wallet_not_found` | 404 | Named wallet does not exist or caller cannot see it |
+| `intent_unparseable` | 422 | `data` field could not be ABI-decoded against the bound contract |
+| `nonce_unavailable` | 409 | Nonce reservation contention; caller may retry |
+| `idempotency_replay` | 200 | Duplicate request; original `tx_id` returned (not actually an error — listed for completeness) |
+| `vault_unavailable` | 503 | Vault sealed, unreachable, or returned error |
+| `rpc_failed` | 502 | Upstream JSON-RPC error |
+| `internal_error` | 500 | Unhandled exception |
+
+The response body MUST NOT contain: SQL state, Python tracebacks, Vault error responses, RPC error responses, internal stack frames, environment variable values, file paths, or caller API keys. Sensitive details land in the audit log and structured server logs only.
+
+## Versioning
+
+The HTTP API is versioned via path prefix (`/v1/*`).
+
+- **Field additions** to existing endpoint requests/responses are non-breaking and ship without a version bump.
+- **Field removals**, **semantic changes**, **error-code changes**, and **endpoint removals** are breaking and require `/v2/*`.
+- When `/v2/*` ships, `/v1/*` is supported for at least 6 months and ≥1 reward epoch on every chain `fwd` serves.
+- Deprecation of `/v1/*` is announced via a `Deprecation: true` header on `/v1/*` responses for at least 30 days before removal.
 
 ## Vault configuration
 
@@ -365,6 +457,50 @@ Target RTO: 30 minutes from a clean host.
 | On-chain audit anchor | Weekly commit of audit-log Merkle root to a registry contract | v2 (Phase 10) |
 
 Default-deny in v1 is verified by a synthetic-attack integration test (Phase 7 gate): a caller with no wallet permissions tries to sign; the audit log records the denial; the test reads the row and asserts the chain link integrity.
+
+## Layer boundaries
+
+`fwd` follows a four-layer separation. Each layer's responsibilities and prohibitions are pinned; the package layout enforces them; an import-graph test landed in Phase 2 catches violations.
+
+### Domain (`src/fwd/domain/`)
+
+Pure business logic. Policy evaluation, intent decoding, nonce reservation rules, audit-chain hashing, EIP-1559 RLP encoding, DER parsing, low-S normalization, v-recovery from a digest + (r, s) pair to a candidate address.
+
+**Must NOT:**
+- Import from `infra/`, `app/`, or `api/`
+- Touch SQLite, Vault, RPC, FastAPI, environment variables, or the filesystem
+- Take any I/O dependency, async or sync
+
+### Application (`src/fwd/app/`)
+
+Use-case orchestrators. The `sign-and-send` flow that calls `auth → policy → nonce → sign → broadcast → audit` in order, coordinating between domain and infrastructure adapters.
+
+**Must NOT:**
+- Implement signing math, RLP encoding, or hash-chain hashing (those are domain)
+- Format HTTP responses or CLI output (those are interface)
+- Import from `api/`
+
+### Infrastructure (`src/fwd/infra/`)
+
+External-system adapters. `VaultTransitSigner`, SQLite repositories, JSON-RPC client, Litestream sidecar config, structlog setup, argon2id hasher, ABI-loader filesystem reader.
+
+**Must NOT:**
+- Make policy decisions
+- Mutate the audit log directly (only the application layer composes audit rows; infra writes them at application's request)
+- Import from `app/` or `api/`
+
+### Interface (`src/fwd/api/` and `src/fwd/cli/`)
+
+HTTP handlers (FastAPI routes) and CLI commands (Typer subcommands). Translates external requests into application-layer calls; formats responses; returns the error envelope shape documented above.
+
+**Must NOT:**
+- Decode calldata, manage nonces, call Vault directly, write to SQLite directly
+- Contain branching policy logic
+- Import from `infra/` directly — interface always goes through `app/`
+
+### Enforcement
+
+Phase 2's scaffold pins this layout in `pyproject.toml` and adds `tests/unit/test_layer_boundaries.py` that walks the import graph and fails if any rule above is violated. The test is a hard CI gate.
 
 ## The signer interface (forward compatibility)
 

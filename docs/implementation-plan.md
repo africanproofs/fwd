@@ -118,7 +118,7 @@ Deliverables:
 - `src/fwd/state/db.py` — async SQLAlchemy 2.x setup, WAL pragmas at startup.
 - `src/fwd/state/nonces.py` — `BEGIN IMMEDIATE` reservation, release on confirm, reconciliation on startup (compare DB nonce to `eth_getTransactionCount(latest)` and warn on drift).
 - `src/fwd/watcher/receipts.py` — asyncio task polling pending transactions every block; status transitions; replacement-on-stuck with bumped tip × 1.125, capped at 5 retries.
-- `tx_id` (UUIDv7) introduced; `hashes_json` array tracks hash history under replacement.
+- `tx_id` (UUIDv7) introduced; `transaction_hashes` child table tracks hash history under replacement.
 - `GET /v1/transactions/{tx_id}` endpoint.
 
 **Verification gate:** integration test issues 10 concurrent `/v1/sign-and-send` calls against the same wallet on Coston2; all 10 land in monotonically increasing nonces with no gaps and no duplicates. Stuck-tx test (artificially low gas) confirms replacement logic.
@@ -230,7 +230,8 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 
 | Phase | Version | Status |
 |---|---|---|
-| 0 | 0.1.0 | This ship |
+| 0 | 0.1.0 | Shipped 2026-04-30 |
+| 0+ | 0.1.1 | Shipped 2026-04-30 (pre-Phase-1 doc fixes) |
 | 1 | 0.2.0 | Spike (throwaway code; main version still anchors) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
