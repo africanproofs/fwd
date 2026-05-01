@@ -48,7 +48,7 @@ All three deployed and managed by `docker-compose.yml`. Nothing manual to instal
 | `hvac` | `^2.3` | HashiCorp Vault Python client (Transit-compatible) |
 | `eth-account` | `^0.13` | EIP-1559 transaction encoding, RLP |
 | `eth-utils` | `^5.0` | keccak256, address formatting, EIP-55 checksum |
-| `coincurve` | `^20.0` | secp256k1 native bindings — for v-recovery (try both parities, match against known address) |
+| `coincurve` | `^20.0` | secp256k1 — needed for external privkey generation (`coincurve.PrivateKey()`); v-recovery is no longer in the v1 hot path (eth-account returns Ethereum-shaped output directly), but coincurve stays for key generation and forward-compatibility with future HSM-backed signers that return raw (r, s) |
 | `sqlalchemy` | `^2.0` | DB layer (async) |
 | `aiosqlite` | `^0.20` | Async SQLite driver |
 | `alembic` | `^1.13` | Schema migrations |
@@ -128,10 +128,9 @@ Compared to the AWS-KMS alternative, `fwd` adds *less* total dependency surface 
 
 ## Verification spike (Phase 1 risk retirement)
 
-The Phase 1 spike retires three specific dependency assumptions:
+The Phase 1 spike retires two specific dependency assumptions under the v0.1.2 architecture:
 
-1. **`hvac` against pinned Vault version** — confirm the Transit `sign` endpoint accepts `prehashed=true, marshaling_algorithm=asn1` and returns parseable DER signatures.
-2. **`coincurve` v-recovery** — confirm `coincurve.PublicKey.from_signature_and_message` correctly recovers the public key for both parities, and matching against the address derived from `transit/keys/<name>` works.
-3. **Coston2 RPC accepts our type-0x02 transactions** — confirm `eth_sendRawTransaction` with the encoded transaction succeeds and returns a valid hash.
+1. **Vault Transit `aes256-gcm96` round-trips arbitrary 32-byte plaintext intact** — confirm `transit/encrypt/fwd-master` accepts a base64-encoded 32-byte secp256k1 privkey and `transit/decrypt/fwd-master` returns the original bytes verbatim. The roundtrip is asserted in the spike before the privkey is used.
+2. **`eth-account` 0.13.x signs a type-0x02 (EIP-1559) transaction for chainId 114 that Coston2 RPC accepts** — confirm `Account.sign_transaction(tx_dict, privkey)` produces a correctly-RLP-encoded signed transaction whose `eth_sendRawTransaction` broadcast succeeds and produces a successful receipt.
 
-If any of these fail, dependency selection revisits before Phase 2 begins.
+If either fails, dependency selection revisits before Phase 2 begins. DER parsing, low-S normalization, and v-recovery are NOT exercised in this spike — they are out of scope under v0.1.2 (`eth-account` returns Ethereum-shaped output directly) and return only when Phase 10 introduces a hardware-backed signer.

@@ -4,7 +4,7 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
 
 ## One-paragraph summary
 
-`fwd` is an HTTP signing service. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce, asks HashiCorp Vault Transit to sign the transaction's keccak256 digest, applies low-S normalization and v-recovery, broadcasts the signed transaction, and writes a hash-chained audit row recording the entire decision. Keys are generated inside Vault and cannot be exported via the API. State (nonces, transactions, audit log) lives in SQLite, replicated continuously to Scaleway Object Storage by Litestream. Deployment is a single-host `docker compose up`.
+`fwd` is an HTTP signing service. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce, retrieves the wallet's Vault-wrapped private-key ciphertext from SQLite, asks HashiCorp Vault Transit to decrypt it via `aes256-gcm96` envelope encryption, signs the EIP-1559 transaction in-process with `eth-account`, zeroizes the plaintext key buffer immediately, broadcasts the signed transaction, and writes a hash-chained audit row recording the entire decision. Private keys are generated externally (secure RNG), envelope-encrypted at rest by Vault, and exist as plaintext in `fwd`'s process memory only during the bounded signing operation. State (nonces, transactions, audit log) lives in SQLite, replicated continuously to Scaleway Object Storage by Litestream. Deployment is a single-host `docker compose up`.
 
 ## Component topology
 
@@ -21,7 +21,7 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
                       │  - policy engine (YAML)          │
                       │  - nonce manager (SQLite)        │
                       │  - signing client (Vault HTTP)   │
-                      │  - DER → low-S → v-recovery      │
+                      │  - envelope decrypt + eth-account│
                       │  - RPC broadcast                 │
                       │  - receipt watcher (asyncio task)│
                       │  - audit log (hash-chained)      │
@@ -89,7 +89,7 @@ mTLS / SPIFFE / workload identity is deferred to Phase 10 (or whenever a caller 
 
 ## Signing flow
 
-Critical correction relative to early sketches: Vault Transit does NOT return Ethereum-shaped `(r, s, v)` signatures directly. The `ecdsa-p256k1` key type returns DER-encoded ASN.1 in a `vault:v1:<base64>` envelope. The DER → low-S → v-recovery dance is identical to the AWS-KMS pattern; only custody location and auth shape differ.
+Under the v0.1.2 architecture, Vault Transit operates as an envelope-encryption layer, not a signer — Vault holds an `aes256-gcm96` master key (`fwd-master`) that wraps each wallet's externally-generated secp256k1 private key. At signing time, `fwd` decrypts via `transit/decrypt/fwd-master`, signs in-process with `eth-account` (which returns Ethereum-shaped output directly — no DER parsing or v-recovery needed in v1), and zeroizes the plaintext buffer immediately. DER parsing and v-recovery return only when Phase 10 introduces a hardware-backed `Signer` implementation that emits raw `(r, s)` ASN.1.
 
 The `/v1/sign-and-send` happy path:
 
@@ -132,33 +132,26 @@ The `/v1/sign-and-send` happy path:
 
 8.  fwd builds EIP-1559 unsigned transaction
     - type 0x02
-    - RLP-encode the transaction fields
-    - Compute keccak256(rlp_encoded) → 32-byte digest
+    - chain_id, nonce, maxPriorityFeePerGas, maxFeePerGas, gas, to, value, data, accessList
 
-9.  fwd asks Vault to sign
-    POST /v1/transit/sign/<wallet-key>
-    Body: {
-      input: base64(digest),
-      hash_algorithm: "none",
-      prehashed: true,
-      marshaling_algorithm: "asn1"
-    }
-    Response: { signature: "vault:v1:<base64-DER>" }
+9.  fwd retrieves the wallet's wrapped privkey
+    - SELECT privkey_ciphertext, vault_master_key FROM wallets WHERE name = :w
+    - Result: vault:v1:<ciphertext> blob plus the master-key name
 
-10. fwd parses signature
-    - Strip vault:v1: prefix
-    - base64-decode → DER bytes
-    - Parse SEQUENCE { r INTEGER, s INTEGER }
-    - If s > N/2: s = N - s   (EIP-2 low-S normalization)
+10. fwd asks Vault to decrypt
+    POST /v1/transit/decrypt/<vault_master_key>
+    Body: { "ciphertext": "vault:v1:<...>" }
+    Response: { "data": { "plaintext": "<base64-32-bytes>" } }
 
-11. fwd recovers v
-    - Try y_parity ∈ {0, 1}
-    - ecrecover(digest, r, s, y_parity) → candidate address
-    - Pick whichever matches wallet.address (cached from Vault at startup)
+11. fwd signs in-process
+    - privkey_bytes = base64.b64decode(plaintext)   # 32 bytes
+    - signed = Account.from_key(privkey_bytes).sign_transaction(tx_dict)
+    - tx_hash = signed.hash
+    - signed_raw = signed.raw_transaction
 
-12. fwd splices (r, s, v) into the transaction
-    - Re-encode as type-0x02 signed
-    - tx_hash = keccak256(signed_rlp)
+12. fwd zeroizes the plaintext buffer immediately
+    - Overwrite privkey_bytes in memory before any further I/O
+    - The cached `Account` object (if eth-account caches anything) is discarded
 
 13. fwd broadcasts via JSON-RPC eth_sendRawTransaction
 
@@ -188,11 +181,12 @@ The `/v1/sign-and-send` happy path:
 
 ```sql
 CREATE TABLE wallets (
-    name TEXT PRIMARY KEY,
-    vault_key_ref TEXT NOT NULL,
-    address TEXT NOT NULL,
-    policy_path TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    name                 TEXT PRIMARY KEY,
+    address              TEXT NOT NULL,
+    privkey_ciphertext   TEXT NOT NULL,        -- vault:v1:<base64> envelope from transit/encrypt
+    vault_master_key     TEXT NOT NULL,        -- name of the Transit key used to encrypt (e.g. "fwd-master")
+    policy_path          TEXT NOT NULL,
+    created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE wallet_chains (
@@ -365,7 +359,7 @@ The HTTP API is versioned via path prefix (`/v1/*`).
 | Auto-unseal | None in v1 | Manual Shamir unseal; auto-unseal is Phase 10 |
 | Shamir threshold | 3 of 5 | Survives loss of any 2 share locations |
 | Engines mounted | `transit/` | Only Transit; no KV needed in v1 |
-| Key type | `ecdsa-p256k1` | secp256k1, the Ethereum curve |
+| Key type | `aes256-gcm96` | Symmetric AES-256-GCM; Vault encrypts/decrypts arbitrary 32-byte plaintext (the secp256k1 privkey) |
 | Key flags | `exportable=false`, `derived=false`, `allow_plaintext_backup=false` | Keys cannot be extracted via API |
 | Auth methods | `approle` (for `fwd` itself) | One AppRole per `fwd` deployment; role ID + secret ID via env |
 | Listener | TCP 8200 on `fwd-internal` only | Not reachable from host |
@@ -375,15 +369,19 @@ The HTTP API is versioned via path prefix (`/v1/*`).
 `fwd`'s Vault policy:
 
 ```hcl
-path "transit/sign/+" {
+path "transit/encrypt/fwd-master" {
   capabilities = ["update"]
 }
 
-path "transit/keys/+" {
+path "transit/decrypt/fwd-master" {
+  capabilities = ["update"]
+}
+
+path "transit/keys/fwd-master" {
   capabilities = ["read"]
 }
 
-# NO transit/keys/+/export, NO transit/keys/+/rotate, NO transit/keys/+/config
+# NO transit/sign/*, NO transit/keys/+/export, NO transit/keys/+/rotate, NO transit/keys/+/config
 ```
 
 ## Policy YAML format
@@ -482,7 +480,7 @@ Use-case orchestrators. The `sign-and-send` flow that calls `auth → policy →
 
 ### Infrastructure (`src/fwd/infra/`)
 
-External-system adapters. `VaultTransitSigner`, SQLite repositories, JSON-RPC client, Litestream sidecar config, structlog setup, argon2id hasher, ABI-loader filesystem reader.
+External-system adapters. `EnvelopeSigner` (decrypts wallet ciphertexts via Vault and signs in-process with `eth-account`), SQLite repositories, JSON-RPC client, Litestream sidecar config, structlog setup, argon2id hasher, ABI-loader filesystem reader.
 
 **Must NOT:**
 - Make policy decisions
@@ -508,12 +506,12 @@ Phase 2's scaffold pins this layout in `pyproject.toml` and adds `tests/unit/tes
 
 ```python
 class Signer(Protocol):
-    async def address(self, key_ref: str) -> str: ...
-    async def sign_digest(self, key_ref: str, digest: bytes) -> tuple[int, int]: ...
-    # returns (r, s); v-recovery is the gateway's job
+    async def address(self, wallet_name: str) -> str: ...
+    async def sign_transaction(self, wallet_name: str, tx_dict: dict) -> SignedTransaction: ...
+    # SignedTransaction = NamedTuple of (raw_transaction: bytes, hash: bytes, r: int, s: int, v: int)
 ```
 
-v1 ships one implementation: `VaultTransitSigner`. A future `YubiHsmSigner` (Phase 10, optional) plugs in via the same protocol — `fwd`'s policy engine, audit log, and API surface are unchanged. This is the only forward-compatibility abstraction in the codebase; everything else is concrete to v1.
+v1 ships one implementation: `EnvelopeSigner` — fetches the wallet's Vault-wrapped privkey ciphertext from SQLite, calls `transit/decrypt/fwd-master` to recover plaintext, signs the transaction in-process with `eth-account`, zeroizes the plaintext buffer, and returns the signed payload. A future `YubiHsmSigner` (Phase 10, optional) plugs in via the same protocol — `fwd`'s policy engine, audit log, and API surface are unchanged. Future signer implementations that wrap a remote signing backend (HSM, KMS) will reintroduce DER parsing and v-recovery internally; the protocol only commits to "give me a signed transaction." This is the only forward-compatibility abstraction in the codebase; everything else is concrete to v1.
 
 ## Out-of-scope for this document
 

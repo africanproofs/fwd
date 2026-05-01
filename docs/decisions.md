@@ -6,26 +6,29 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 
 ---
 
-## D1. Custody: HashiCorp Vault Transit, self-hosted
+## D1. Custody: Vault Transit envelope encryption + in-process secp256k1 signing
 
-**Decision.** AP runs HashiCorp Vault on the same Docker host as `fwd`, with the Transit secrets engine providing `ecdsa-p256k1` signing for all `fwd`-managed keys. Keys are `exportable=false`.
+**Decision.** AP runs HashiCorp Vault on the same Docker host as `fwd`, with the Transit secrets engine providing one `aes256-gcm96` master key (`exportable=false`). Each wallet's secp256k1 private key is generated externally (secure RNG via `coincurve` or `eth-account.create()`), envelope-encrypted by Vault (`transit/encrypt/fwd-master`), and stored as a `vault:v1:<ciphertext>` blob in SQLite. At signing time, `fwd` calls `transit/decrypt/fwd-master` to recover plaintext, signs the transaction with `eth-account`, and zeroizes the plaintext buffer immediately. Plaintext private keys never persist on disk and exist in `fwd`'s process memory only during the bounded signing operation.
 
-**Alternatives considered.**
-- **AWS KMS** (or GCP / Azure KMS) — secp256k1 supported, FIPS 140-2 Level 2, ~$1/key/month, well-documented.
-- **YubiHSM 2** — FIPS 140-2 Level 3, ~$650 hardware, key cannot leave chip.
-- **Threshold MPC** (`frost-secp256k1`, Sodot, Lit Protocol) — no single machine has the key.
-- **HashiCorp Vault Enterprise** — same Transit engine plus HSM-native signing.
-- **Web3Signer** — mature EVM-focused signer, supports KMS/Vault backends.
+**Background.** v0.2.0's Phase 1 spike discovered (and the Reviewer independently verified) that Vault Transit — in OSS, OpenBao, and Vault Enterprise's native engine — supports only NIST curves (`ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`) for ECDSA signing. **secp256k1 (Ethereum's curve) is not a supported Transit key type.** The original D1 (Vault Transit signing of ECDSA secp256k1 keys) is technically impossible with the chosen substrate. This decision documents the pivot.
 
-**Why Vault Transit, self-hosted.** AP is Scaleway-native and runs its own RPC, validator, and ML infrastructure. Adding a US-jurisdiction cloud account (AWS) for the most security-critical asset contradicts AP's existing posture. YubiHSM is the right *future* upgrade but adds a hardware dependency tied to one host that v1 doesn't need. Vault Transit gives non-exportable keys, native secp256k1, and self-custody — the three properties that matter — at the cost of operating one StatefulSet.
+**Alternatives considered (revised).**
+- **Path 1: AWS KMS** (or GCP/Azure KMS) — native secp256k1 support since 2021, FIPS 140-2 L2, ~$2–5/mo at AP volume. Rejected: reintroduces the cloud-jurisdiction concern that drove the original D1 toward self-hosting.
+- **Path 2 (chosen): Vault Transit as envelope encryption** — preserves AP sovereignty, Shamir unseal, container topology, at the cost of plaintext privkeys briefly in `fwd`'s process memory at signing.
+- **Path 3: Encrypted file keystore** (eth-account v3 format, passphrase-locked) — simpler than Path 2 but loses Shamir unseal; passphrase compromise = total loss with no equivalent recovery property.
+- **Path 4: YubiHSM 2 + PKCS#11** (pull Phase 10 forward) — strongest custody, $650 hardware, 2–3 days extra engineering. Deferred to Phase 10 as originally planned.
+- **Vault Enterprise** (~$30k+/yr) — not AP-realistic.
+
+**Why Path 2.** Preserves the substantive parts of v0.1.0's design (Vault, Shamir, sovereignty) at $0 incremental cost, with a clear Phase 10 upgrade path to YubiHSM 2 for hardware-isolated signing if needed. The threat-model degradation is real (see threat-model.md A3/A4) but bounded by Core invariant #16 (decrypt-on-demand, zeroize-on-completion), which limits the in-memory exposure window to microseconds per signing operation.
 
 **Consequences.**
-- AP keeps the keys on AP infrastructure. No foreign cloud holds AP's revenue keys.
-- One additional service to operate (Vault). Manual unseal at every restart in v1.
-- DER → low-S → v-recovery is `fwd`'s responsibility (Vault Transit returns ASN.1, not Ethereum-shaped signatures).
-- Forward path to YubiHSM 2 stays open via the `Signer` protocol abstraction in `fwd`'s code.
+- Vault is now an **encryption envelope**, not a signer. Vault's role is reduced to: wrap/unwrap arbitrary 32-byte plaintext using one `aes256-gcm96` master key.
+- Plaintext private keys exist in `fwd`'s process memory only during the bounded signing operation. Mitigated by `mlock` (process-locked memory, no swap), decrypt-on-demand (no caching), and zeroize-on-completion.
+- The `Signer` protocol abstraction in `architecture.md` § The signer interface is unchanged, but the v1 implementation becomes `EnvelopeSigner` (decrypts via Vault, signs with `eth-account`) instead of `VaultTransitSigner`.
+- The DER → low-S → v-recovery code path is removed from v1. `eth-account` returns Ethereum-shaped output directly. The forensic surface for Phase 10 (e.g., YubiHSM PKCS#11) will reintroduce DER + v-recovery, but only when a hardware backend lands.
+- The Vault policy fwd uses gains `transit/encrypt/+` and `transit/decrypt/+` (capability `update`); loses any `transit/sign/+` capability that was previously specified.
 
-**When to revisit.** When AP's signing volume justifies hardware-backed isolation (Phase 10 trigger), or if HashiCorp's licensing changes meaningfully impact AP's use (then OpenBao — see D4).
+**When to revisit.** When AP is ready for Phase 10 hardening: YubiHSM 2 via PKCS#11 (`Signer` protocol implementation #2) gives keys-never-leave-hardware semantics for signing operations and is the canonical upgrade. Until then, Path 2 is the v1 substrate.
 
 ---
 

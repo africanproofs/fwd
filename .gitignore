@@ -35,5 +35,6 @@ fwd-state/
 *.unseal
 *.gpg
 secrets/
+scratch/
 config/policy.yaml
 config/callers.yaml

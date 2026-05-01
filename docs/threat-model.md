@@ -78,43 +78,48 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 ---
 
-### A3. Host root compromise while Vault is unsealed
+### A3. Host root compromise while fwd is running
 
-**How.** Attacker exploits some unrelated vulnerability on the host, chains to root, and inspects the Vault process while it's running.
+**How.** Attacker exploits some unrelated vulnerability on the host, chains to root, and inspects `fwd`'s process memory while it's serving signing requests.
 
-**What the attacker gets.** Vault holds decrypted master key + decrypted Transit keys in memory while unsealed. Root + `ptrace` / `gcore` extracts keys from process memory.
+**What the attacker gets.** During the bounded signing operation, `fwd` decrypts a wallet's privkey via Vault, holds the 32-byte plaintext briefly to sign with `eth-account`, and zeroizes immediately after (Core invariant #16). An attacker with `ptrace` / `gcore` access who times their dump to coincide with an active signing operation can extract that wallet's plaintext privkey. Between signing operations, no plaintext privkeys are in `fwd`'s memory (decrypt-on-demand, no caching).
 
 **Mitigations in place.**
 - Single-purpose host recommendation (no other services running, smallest attack surface).
-- Vault uses `mlock` (`IPC_LOCK` capability in compose) so keys aren't swapped to disk.
+- `fwd` runs with `mlock`-equivalent memory protection (`IPC_LOCK` capability in compose) so plaintext privkeys are not swapped to disk.
+- Decrypt-on-demand (Core invariant #16): plaintext privkeys exist in memory only for microseconds per signing operation.
 - Host hardening runbook: minimal package set, SSH key-only, fail2ban, prompt patching.
 - Audit-log + RPC monitoring: extracted keys would be used to broadcast unauthorized transactions, which we'd see.
 
-**Residual risk.** Real. **This is the biggest residual risk in v1.** A determined attacker who fully owns the host can extract keys.
+**Residual risk.** Real, and a degradation from the originally-intended v0.1.0 design (which was infeasible because Vault Transit doesn't support secp256k1). The exposure window is bounded to active signing operations rather than the full Vault uptime, which is a meaningful improvement over a naive "key in memory all the time" pattern. **This is the biggest residual risk in v1.**
 
-**Mitigation upgrade path.** YubiHSM 2 (Phase 10): keys generated inside the chip, never leave it. Host root can ask the HSM to sign things while they have access, but cannot exfiltrate keys for offline reuse. See `architecture.md` § "Forward compatibility" — the `Signer` protocol exists specifically for this swap.
+**Mitigation upgrade path.** YubiHSM 2 (Phase 10): keys generated inside the chip, never leave it. Host root can ask the HSM to sign things while they have access, but cannot exfiltrate keys for offline reuse — and signing-rate limits in the HSM cap abuse. See `architecture.md` § "Forward compatibility" — the `Signer` protocol exists specifically for this swap.
 
-**Comparison to `.env` baseline.** Today: trivial — read a file. After `fwd`: requires deep host compromise plus active memory exfiltration.
+**Comparison to `.env` baseline.** Today: trivial — read a file. After `fwd`: requires deep host compromise plus active memory exfiltration timed to a signing operation.
 
 ---
 
 ### A4. `fwd` process itself is compromised (bug or supply chain)
 
-**How.** Bug in `fwd`'s policy engine, or malicious dependency, lets an attacker bypass policy checks within the running `fwd` process.
+**How.** Bug in `fwd`'s policy engine or signing path, or malicious dependency, lets an attacker execute code in the running `fwd` process.
 
-**What the attacker gets.** They can request signatures from Vault using `fwd`'s Vault token. **They cannot extract keys** (Vault Transit is `exportable=false`, period — even Vault admin cannot export). They can sign whatever the keys are *capable* of signing until detected.
+**What the attacker gets.** Under Path 2 (v0.1.2 architecture), this is materially worse than the originally-intended design. A compromised `fwd` can:
+- Issue arbitrary `transit/decrypt/fwd-master` calls using its Vault token, recovering ALL wallet privkeys it has ciphertexts for.
+- Sign anything the recovered keys can sign — bypassing fwd's own policy engine.
+- Exfiltrate the plaintext privkeys offline.
+
+This is the cost of collapsing the Vault/fwd process boundary that v0.1.0 originally specified (and which was infeasible because Vault Transit doesn't support secp256k1).
 
 **Mitigations in place.**
-- `fwd`'s code is small and deliberately bounded (see `CLAUDE.md` § "What FWD IS NOT").
-- Public repo invites scrutiny.
-- Default-deny in policy is the first-line enforcement; bypass requires defeating both `fwd`'s policy and Vault's policy.
-- Vault's own ACLs apply to `fwd`'s token: `fwd` can sign with permitted keys, cannot rotate them, cannot export them, cannot read other paths.
-- Vault's audit device logs every signing operation independently of `fwd`'s audit log.
+- `fwd`'s code is small, public, and auditable — bugs surface to scrutiny.
 - Pinned dependency versions; signed Docker images where available.
+- Vault's own audit device logs every `transit/decrypt` operation independently of `fwd`'s audit log — sustained abuse becomes visible in Vault audit even if fwd's audit is corrupted.
+- Default-deny policy: a compromised fwd that goes through its own code paths still hits policy checks. (Bypass requires defeating both `fwd`'s engine AND signing path, not just the engine.)
+- Decrypt-on-demand (Core invariant #16) limits passive exfiltration to "request a signature, observe the decrypt." Bulk decryption (decrypt all wallets, walk away) is detectable in Vault audit as an anomalous burst.
 
-**Residual risk.** Real. The classic "compromise the policy enforcement point" problem. Hard to make zero in any signing service. The Vault-side audit log is the catch — `fwd`'s audit might lie if `fwd` is owned, but Vault's won't.
+**Residual risk.** The strongest argument in v1 for the Phase 10 YubiHSM 2 upgrade. Until Phase 10, this is the genuine "fwd compromise = lose all wallets fwd manages" weakness, mitigated only by Vault audit visibility and policy default-deny on the fwd side.
 
-**Comparison to `.env` baseline.** Today: there is no policy enforcement point. After `fwd`: even if `fwd` is fully owned, keys cannot be extracted; Vault audit catches abuse.
+**Comparison to `.env` baseline.** Today: there is no policy enforcement point. After `fwd`: a compromised `fwd` is similarly catastrophic (key exfiltration possible), but the audit trail and Vault-side visibility make abuse detectable in ways `.env` files do not.
 
 ---
 

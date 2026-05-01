@@ -4,9 +4,9 @@
 
 ## Identity
 
-`fwd` holds AP's automation private keys inside HashiCorp Vault Transit and signs transactions on behalf of authenticated callers, gated by declarative policy and recorded in an append-only audit log. Every `.env PRIVATE_KEY` line in AP backends — `ftso-fee-claimer`, `apregister/`, `apcli`, future `fics` write paths, future Claude agents — calls `fwd` instead of holding keys directly.
+`fwd` holds AP's automation private keys envelope-encrypted by HashiCorp Vault Transit (`aes256-gcm96`, `exportable=false`); decryption and signing happen in `fwd`'s own process post-unwrap, gated by declarative policy and recorded in an append-only audit log. Every `.env PRIVATE_KEY` line in AP backends — `ftso-fee-claimer`, `apregister/`, `apcli`, future `fics` write paths, future Claude agents — calls `fwd` instead of holding keys directly.
 
-The custody property `fwd` rests on: **Vault Transit keys are `exportable=false`. Keys cannot be extracted via the API even by a Vault admin. The signer abuses keys; it cannot exfiltrate them.**
+The custody property `fwd` rests on: **the Vault Transit master encryption key is `exportable=false` and cannot be extracted via the API; private keys are envelope-encrypted at rest and exist as plaintext in `fwd`'s process memory only during the bounded signing operation, after which the buffer is zeroized (Core invariant #16).** This is a deliberate trade-off documented in `decisions.md` D1: the originally-intended design (Vault Transit signing of `ecdsa-p256k1` keys) was infeasible because Vault does not support secp256k1.
 
 The workflow doctrine below is settled — transferred verbatim from FICSM (`../ficsm/CLAUDE.md` § Development workflow), where it was earned through FICS' five-month design cycle and the S0+S1+S2 hardware sealing on 2026-04-25. `fwd` inherits the operating discipline, not the substrate; the substrate (single-purpose signing service vs multi-stratum control plane) is fwd's own.
 
@@ -14,7 +14,9 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 **v0.1.0 (shipped 2026-04-30):** Documentation only. Architecture, decisions record, threat model, dependency inventory, 10-phase implementation plan. No code, no Docker artifacts, no Vault. Project registered in root `CLAUDE.md` Project Map.
 
-**v0.1.1 (this ship, 2026-04-30):** Pre-Phase-1 documentation fixes from the v0.1.0 CTO review — relational schema for decoded intent and hash history (replacing JSON-blob columns), `Idempotency-Key` header contract, error envelope, versioning policy, and layer-boundary specification. No code yet; specs only. Phase 1 builds against this spec base.
+**v0.1.1 (shipped 2026-04-30):** Pre-Phase-1 documentation fixes from the v0.1.0 CTO review — relational schema for decoded intent and hash history (replacing JSON-blob columns), `Idempotency-Key` header contract, error envelope, versioning policy, and layer-boundary specification. No code yet; specs only. Phase 1 builds against this spec base.
+
+**v0.1.2 (this ship, 2026-05-01):** Architecture pivot to Vault Transit envelope encryption. The originally-intended D1 (Vault Transit signing of `ecdsa-p256k1` keys) was found infeasible during the v0.2.0 spike attempt — neither Vault OSS, OpenBao, nor Vault Enterprise's native Transit supports secp256k1 (verified against upstream docs). The revised D1 uses Vault Transit `aes256-gcm96` to envelope-encrypt externally-generated secp256k1 privkeys; signing happens in fwd's process post-decrypt. Trade-off documented in threat-model.md A3/A4: the two-process custody boundary is collapsed to a single process; mitigated by Core invariant #16 (decrypt-on-demand, zeroize-on-completion). Phase 10 YubiHSM 2 remains the canonical upgrade path. No code yet; specs only. v0.2.0 spike retry will run against this revised spec base.
 
 **v0.2.0 (Phase 1 — the spike):** Single throwaway Python script that signs a Coston2 transaction via Vault Transit `ecdsa-p256k1` and broadcasts it. Validates the DER → low-S → v-recovery flow against a real Flare-stack RPC. ~50 lines.
 
@@ -49,7 +51,7 @@ These are not in scope until a real consumer or proven need surfaces. Re-introdu
 
 ## Core invariants
 
-1. **Keys never leave Vault.** Vault Transit, key type `ecdsa-p256k1`, `exportable=false`, `derived=false`. The single architectural property the entire project rests on. Compromise of `fwd` lets the attacker *abuse* keys, never *extract* them.
+1. **Keys never persist plaintext.** Each wallet's secp256k1 private key is generated externally (secure RNG), envelope-encrypted by Vault Transit (`aes256-gcm96`, `exportable=false`), and stored as `vault:v1:<ciphertext>` in SQLite. Plaintext keys exist in `fwd`'s process memory only during the bounded signing operation, are protected by `mlock` against swap, and are zeroized after each signature. The Vault master key cannot be extracted via the API. Compromise of `fwd` while running grants the attacker the ability to extract plaintext keys from process memory at signing time; offline disk theft yields ciphertext only. (See `decisions.md` D1 for the v0.1.2 pivot from the originally-intended Vault Transit signing design, which was infeasible because Vault does not support secp256k1 as a Transit key type.)
 
 2. **Default-deny.** Every signing request is denied unless policy explicitly permits caller × wallet × contract × method × value × rate. New callers and new wallets enter with zero capabilities.
 
@@ -78,6 +80,8 @@ These are not in scope until a real consumer or proven need surfaces. Re-introdu
 14. **Real-RPC verification is the validation.** Unit tests with mocked RPCs are necessary but not sufficient. Every signing-path change must be verified against a live Coston2 RPC before merging to the production-flow code. Mocks lie. Carryover from FICSM Core invariant #13.
 
 15. **Operator gates every production migration.** No automated `.env` sweep. Each application's migration to `fwd` (Phase 8 onwards) is its own ship with its own operator approval — even when the code change is mechanical. Migrations are the moments where a mistake translates to lost keys.
+
+16. **Decrypt-on-demand, zeroize-on-completion.** Plaintext private keys are not cached in `fwd`'s process memory between signing operations. Each `/v1/sign-and-send` call decrypts the wallet's privkey via Vault, signs the transaction with `eth-account`, and zeroizes the plaintext buffer immediately. Process-wide privkey caches are forbidden as a regression. The exposure window for any single privkey is bounded to the duration of one signing operation (microseconds per call at AP volume). Combined with `mlock`-protected process memory, this minimizes the A3/A4 attack surface for the v0.1.2 single-process custody design.
 
 ## Development workflow — Opus prescribes, Sonnet implements with deviation license, Opus reviews with overwrite authority
 
@@ -152,6 +156,6 @@ Per Core invariant #13: every ship bumps the next linear patch number in BOTH `p
 
 `fwd` is not a fork of either. The workflow doctrine (Opus/Sonnet/Reviewer/Operator), the four-layer validation philosophy, the linear-forward versioning, the canonical-prompt completeness checklist, and the substrate ethos (SQLite, single-operator, framework-free) are inherited verbatim from FICSM as design — no FICSM code is imported.
 
-The role itself — *daemon that holds keys and signs on behalf of clients* — is inherited from `keosd` (Antelope/EOSIO `programs/keosd/`). What `fwd` adds that `keosd` does not provide: intent decoding, default-deny per-caller policy, hash-chained audit, EVM-native signing flow, and a custody backend (`Vault Transit`) whose keys are non-exportable by API.
+The role itself — *daemon that holds keys and signs on behalf of clients* — is inherited from `keosd` (Antelope/EOSIO `programs/keosd/`). What `fwd` adds that `keosd` does not provide: intent decoding, default-deny per-caller policy, hash-chained audit, EVM-native signing flow, and a custody backend (Vault Transit `aes256-gcm96` envelope encryption) whose master encryption key is non-exportable by API and whose plaintext private keys exist in `fwd`'s memory only during the bounded signing operation.
 
 The ~50 banked feedback memories at `~/.claude/projects/-home-l-working-gitlab-com-proofs-africa-fics/memory/` and the FICSM doctrine doc at `../ficsm/CLAUDE.md` act as a Phase-0 checklist for `fwd`'s reviewers.

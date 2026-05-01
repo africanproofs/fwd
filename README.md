@@ -2,7 +2,7 @@
 
 Policy-gated signing service for African Proofs' EVM backend keys (Flare, Songbird, Coston2). Replaces every `.env PRIVATE_KEY` across AP automation with one HTTP endpoint, one custody backend, and one tamper-evident audit log.
 
-> **Status: v0.1.0 — Documentation only.** No code, no Docker, no Vault yet. This ship is the architectural spec, the threat model, the phased implementation plan, and the registered project record. Phase 1 (the Coston2 signing spike) is the next ship.
+> **Status: v0.1.2 — Documentation only.** No code, no Docker, no Vault yet. v0.1.0 landed the architectural spec; v0.1.1 landed pre-Phase-1 doc fixes; v0.1.2 landed the Vault Transit envelope-encryption pivot after the v0.2.0 spike attempt discovered that Vault Transit does not support secp256k1. Phase 1 (the Coston2 signing spike) is the next ship.
 
 ## What this repo is
 
@@ -12,7 +12,7 @@ Policy-gated signing service for African Proofs' EVM backend keys (Flare, Songbi
 2. **Default-deny policy.** Per-caller allowlists of `(contract × method × max_value × rate)`. Compromise of one caller is bounded by its policy, not by the wallet's balance.
 3. **Tamper-evident audit log.** Every request, decision, and signature is hash-chained and replayable.
 
-Custody is HashiCorp Vault Transit (`ecdsa-p256k1`, `exportable=false`) running in the same Docker host. Keys never leave the Vault process. State is SQLite + Litestream replicating to Scaleway Object Storage. Deployment is `docker compose up`. See `docs/architecture.md` for the full design.
+Custody is HashiCorp Vault Transit (`aes256-gcm96`, `exportable=false`) running in the same Docker host as an envelope-encryption layer for externally-generated secp256k1 private keys; signing happens in `fwd`'s own process post-decrypt. Plaintext keys exist in memory only during the bounded signing operation. State is SQLite + Litestream replicating to Scaleway Object Storage. Deployment is `docker compose up`. See `docs/architecture.md` for the full design and `docs/decisions.md` D1 for the v0.1.2 architectural pivot.
 
 ## What this repo is NOT
 
@@ -48,6 +48,6 @@ docker exec -it fwd-vault vault operator unseal   # × 3 (3-of-5 threshold)
 
 ## Provenance
 
-- Custody pattern: HashiCorp Vault Transit engine, `ecdsa-p256k1` keys.
+- Custody pattern: HashiCorp Vault Transit engine as envelope-encryption (`aes256-gcm96`); signing in-process with `eth-account` post-decrypt. (See `docs/decisions.md` D1 for v0.1.2 pivot.)
 - Workflow doctrine: inherited verbatim from [`../ficsm/CLAUDE.md`](../ficsm/CLAUDE.md) — Opus prescribes, Sonnet implements with deviation license, Opus reviews with overwrite authority, Operator drives + gates.
 - Lineage: `keosd` (Antelope/EOSIO) is the role; `fwd` is the redesign.

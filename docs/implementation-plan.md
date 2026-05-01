@@ -35,24 +35,26 @@ Open decisions resolved here (in `decisions.md`):
 
 Deliverables (throwaway, not committed to main):
 - A 50–100 line Python script in `scratch/spike.py` (gitignored) that:
-  1. Spins up Vault in dev mode locally (`vault server -dev`).
-  2. Creates one `ecdsa-p256k1` key in Transit at `transit/keys/spike-coston2`.
-  3. Reads the public key via `transit/keys/spike-coston2`, derives the Ethereum address.
-  4. Funds the address with Coston2 testnet tokens (manual: faucet or transfer from existing test wallet).
-  5. Builds a self-transfer EIP-1559 transaction (value = 0).
-  6. Asks Vault to sign the keccak256 digest with `prehashed=true, marshaling_algorithm=asn1`.
-  7. Parses DER, normalizes low-S, recovers v.
-  8. Broadcasts to public Coston2 RPC.
-  9. Polls the receipt until mined, prints the on-chain hash.
+  1. Spins up Vault in dev mode locally (`vault server -dev` in a Docker container).
+  2. Creates one `aes256-gcm96` key in Transit at `transit/keys/fwd-master`.
+  3. Generates a fresh secp256k1 private key externally (via `coincurve.PrivateKey()` or `eth_account.Account.create()`).
+  4. Computes the Ethereum address from the public key.
+  5. Encrypts the privkey via `transit/encrypt/fwd-master` → `vault:v1:<ciphertext>` blob.
+  6. Pauses for the operator to fund the address with Coston2 testnet tokens (manual: faucet at https://faucet.flare.network/coston2).
+  7. Decrypts the ciphertext back via `transit/decrypt/fwd-master` to recover the plaintext privkey.
+  8. Builds a self-transfer EIP-1559 transaction (value = 0).
+  9. Signs in-process with `eth_account.Account.from_key(plaintext).sign_transaction(tx_dict)` and zeroizes the plaintext buffer.
+ 10. Broadcasts to public Coston2 RPC.
+ 11. Polls the receipt until mined, prints the on-chain hash.
 
 **Verification gate:** the transaction is mined on Coston2 with a recoverable signature matching the Vault-derived address. If yes, the architecture is real → proceed to Phase 2. If no, surface the failure mode and revise before proceeding.
 
 Risks retired here:
-- DER parsing against Vault's exact output format.
-- Low-S normalization correctness against EIP-2 enforcement on Flare-stack RPC.
-- v-recovery against `coincurve` against the cached address.
-- Coston2 RPC accepting type-0x02 transactions with our chain_id (114).
-- `hvac` Python client compatibility with Vault's Transit endpoint at the version we'll pin.
+- Vault Transit `aes256-gcm96` round-trips arbitrary 32-byte plaintext (the secp256k1 privkey) intact via encrypt/decrypt.
+- `eth-account` 0.13.x produces a correctly-RLP-encoded type-0x02 (EIP-1559) signed transaction for chain_id 114 from a raw 32-byte privkey.
+- Coston2 RPC accepting type-0x02 transactions broadcast via `eth_sendRawTransaction`.
+- `hvac` Python client compatibility with Vault's `transit/encrypt` and `transit/decrypt` endpoints at the version we'll pin.
+- DER parsing, low-S normalization, and v-recovery — **NOT retired in this spike.** These are deferred until a hardware-backed signer (Phase 10) requires them.
 
 ---
 
@@ -85,8 +87,7 @@ Deliverables:
 - AppRole auth method enabled; one role for `fwd`; role_id + secret_id injected via env.
 - Transit engine enabled at `transit/`.
 - One key created: `transit/keys/register-coston2-test` (chain_id 114), seeded with Coston2 funds for testing.
-- `src/fwd/signer/vault.py` — `VaultTransitSigner` implementation of the `Signer` protocol.
-- `src/fwd/signer/evm.py` — DER parsing, low-S normalization, v-recovery, EIP-1559 RLP encoding.
+- `src/fwd/signer/envelope.py` — `EnvelopeSigner` implementation: fetches `privkey_ciphertext` + `vault_master_key` from SQLite, calls `transit/decrypt`, signs with `eth-account.Account.sign_transaction`, zeroizes plaintext, returns `SignedTransaction`. (DER parsing and v-recovery are NOT in v1 scope; they return when Phase 10 introduces a hardware signer.)
 - `src/fwd/api/sign.py` — `POST /v1/sign-and-send` happy path. No nonce manager, no policy yet — uses `eth_getTransactionCount` directly, hardcoded allowlist.
 - Integration test `tests/integration/test_sign_coston2.py` — runs against the deployed compose stack on a CI runner with Vault in dev mode.
 
@@ -232,6 +233,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 |---|---|---|
 | 0 | 0.1.0 | Shipped 2026-04-30 |
 | 0+ | 0.1.1 | Shipped 2026-04-30 (pre-Phase-1 doc fixes) |
+| 0++ | 0.1.2 | Shipped 2026-05-01 (Vault Transit pivot to envelope encryption) |
 | 1 | 0.2.0 | Spike (throwaway code; main version still anchors) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
