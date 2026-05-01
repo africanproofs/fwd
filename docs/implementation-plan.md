@@ -6,7 +6,7 @@ Phases 9 and 10 are open-ended (rolling migrations and post-v1 hardening). Every
 
 ## Phase 0 — Documentation and project registration (v0.1.0)
 
-**Status: this ship.**
+**Status: Shipped 2026-04-30.**
 
 Deliverables:
 - `README.md`, `CLAUDE.md`, `LICENSE`, `.gitignore`, `.python-version` at repo root.
@@ -235,6 +235,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 0+ | 0.1.1 | Shipped 2026-04-30 (pre-Phase-1 doc fixes) |
 | 0++ | 0.1.2 | Shipped 2026-05-01 (Vault Transit pivot to envelope encryption) |
 | 1 | 0.2.0 | Shipped 2026-05-01 (Coston2 spike against v0.1.2 architecture) |
+| 1+ | 0.2.1 | Shipped 2026-05-01 (pre-Phase-2 doc fixes: failure modes + implementation hazards) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |

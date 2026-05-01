@@ -177,6 +177,22 @@ The `/v1/sign-and-send` happy path:
     - On final failure (5 retries): status='failed', surface alert
 ```
 
+### Failure modes in the signing flow
+
+The v0.1.2 envelope-encryption design introduces `transit/decrypt/fwd-master` as a new failure point in the critical path. The principle: **if the failure occurs before broadcast (steps 1–12), the reserved nonce is released back to the pool in the same SQLite transaction; if at or after broadcast (steps 13+), the nonce stays committed and the receipt watcher reconciles.**
+
+| Step | Failure | Response | Nonce |
+|---|---|---|---|
+| 6 | SQLite busy / lock timeout on nonce reservation | 409 `nonce_unavailable`; caller may retry | Not committed |
+| 7 | RPC timeout on `eth_feeHistory` | 502 `rpc_failed` (after one retry) | Not committed |
+| 9 | Wallet not found | 404 `wallet_not_found` | Not committed |
+| 10 | **Vault decrypt fails** (sealed, network failure, key version mismatch) | **503 `vault_unavailable`. Reserved nonce is RELEASED in the same SQLite transaction (`UPDATE nonces SET next_nonce = next_nonce - 1 WHERE wallet = :w AND chain = :c AND next_nonce - 1 = :reserved`).** No on-chain side effect. | Released |
+| 11 | `eth-account` rejects `tx_dict` (malformed) | 422 `intent_unparseable` | Released |
+| 13 | RPC `eth_sendRawTransaction` rejects (invalid signature, nonce too low, etc.) | 502 `rpc_failed` | **Stays committed** — the tx may have been seen by other nodes; receipt watcher decides whether to replace |
+| 13 | RPC timeout (response unknown) | Treat as committed: status='submitted' with no on-chain hash yet; receipt watcher polls `eth_getTransactionCount` to detect on-chain landing | Stays committed |
+
+Every failure writes an audit row recording the caller, the request, the failed step, and the response code. The structlog scrubber (see `## Implementation hazards` below) ensures no plaintext privkey reaches the audit log under any failure path.
+
 ## SQLite schema
 
 ```sql
@@ -499,6 +515,49 @@ HTTP handlers (FastAPI routes) and CLI commands (Typer subcommands). Translates 
 ### Enforcement
 
 Phase 2's scaffold pins this layout in `pyproject.toml` and adds `tests/unit/test_layer_boundaries.py` that walks the import graph and fails if any rule above is violated. The test is a hard CI gate.
+
+## Implementation hazards (v0.1.2 envelope encryption)
+
+Three implementation patterns specific to the v0.1.2 envelope-encryption signing flow. Each is enforced by code or test in Phase 3+; this section documents them so the patterns are visible during Phase 2's scaffold and Phase 3's signing-core development.
+
+### 1. No plaintext caching between requests
+
+Core invariant #16 (decrypt-on-demand, zeroize-on-completion) forbids caching plaintext private keys in process-wide state between signing operations. Every `/v1/sign-and-send` decrypts → signs → zeroizes, even if the same wallet was used 10 milliseconds ago.
+
+**Enforcement in Phase 3+:** a unit test asserts `EnvelopeSigner` has no instance-level state holding plaintext bytes. Specifically: after each `sign_transaction` call, an introspection check confirms no attribute on the signer instance is a `bytes` or `bytearray` of length 32.
+
+**Why this matters:** an attacker who compromises `fwd` with a cache present can dump every cached privkey in one shot; without a cache, they must wait for and intercept a signing event per wallet — an attack that is detectable in Vault's audit log as a burst of `transit/decrypt` calls.
+
+### 2. `bytearray`, not `bytes`, for privkey buffers
+
+Python's `bytes` is immutable: you cannot zeroize it. The signing flow must use `bytearray` from the moment the privkey enters the process to the moment it's overwritten:
+
+```python
+# CORRECT
+privkey = bytearray(base64.b64decode(plaintext))   # mutable
+... sign with bytes(privkey) ...                   # cast for the API call only
+for i in range(len(privkey)):
+    privkey[i] = 0                                 # in-place overwrite
+
+# WRONG
+privkey = base64.b64decode(plaintext)              # immutable bytes; cannot be zeroized
+... sign with privkey ...
+del privkey                                        # garbage; the underlying buffer may persist
+```
+
+The v0.2.0 spike's `zeroize()` helper (preserved verbatim in `docs/history/0.2.0-spike-coston2.md`) is the canonical pattern. Phase 3's `EnvelopeSigner` must copy this discipline.
+
+**Enforcement in Phase 3+:** a unit test confirms the post-zeroize buffer contains only zeros AND that `type(buf) is bytearray` (not `bytes`).
+
+**Caveat:** Python's GC may have already copied the bytes object internally before it was wrapped in `bytearray()`. This is a best-effort mitigation, not a hard guarantee. True zero-copy privkey handling requires a C extension or `ctypes`-based memory pinning; that complexity is acceptable in Phase 10 hardening, not Phase 3.
+
+### 3. Structlog scrubber redacts hex-shaped 32-byte values
+
+The most severe disclosure path under v0.1.2 is a logged privkey — accidental `logger.exception()` inside the signing critical section, or a `repr()` on a stack frame containing the privkey buffer, leaks forever (log files get backed up, shipped to centralized stores, indexed by misconfigured log collectors).
+
+**Enforcement in Phase 3+:** the structlog configuration must include a custom processor that filters any string value matching `^(0x)?[0-9a-fA-F]{64}$` regardless of field name, replacing it with `<redacted-32-byte-hex>`. Plus a test that constructs a synthetic privkey, runs a synthetic signing flow that intentionally raises an exception inside the signing critical section, and grep's the captured log output for any 32-byte hex pattern matching the privkey. The grep must return zero matches.
+
+**Why this matters:** every other anti-pattern leaves recoverable state. A logged privkey is a permanent leak.
 
 ## The signer interface (forward compatibility)
 
