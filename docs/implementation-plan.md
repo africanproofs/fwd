@@ -234,7 +234,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 0 | 0.1.0 | Shipped 2026-04-30 |
 | 0+ | 0.1.1 | Shipped 2026-04-30 (pre-Phase-1 doc fixes) |
 | 0++ | 0.1.2 | Shipped 2026-05-01 (Vault Transit pivot to envelope encryption) |
-| 1 | 0.2.0 | Spike (throwaway code; main version still anchors) |
+| 1 | 0.2.0 | Shipped 2026-05-01 (Coston2 spike against v0.1.2 architecture) |
 | 2 | 0.3.0-alpha | Scaffold |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
