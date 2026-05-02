@@ -235,6 +235,43 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 - **Plaintext export** if disaster recovery, HW-wallet migration, or forensics genuinely needs a path that the existing mechanisms (Litestream restore, on-chain rotation, audit log) can't serve. Re-introducing export requires explicit operator authorization tied to the use case AND would probably argue for moving custody to YubiHSM 2 first (since hardware-isolated keys are non-exportable by construction — settling the architectural question for good).
 - **HTTP import endpoint** if an automation use case surfaces (e.g., a future bulk-migration tool). Re-introducing HTTP import requires explicit operator authorization AND a new threat-model section for the new exposure surface.
 
+## D10. Token lifecycle: re-auth on 403 (v1), proactive renewal at Phase 7, periodic tokens at Phase 8
+
+**Decision.** `fwd` authenticates against Vault via AppRole at process startup (`POST /v1/auth/approle/login` with `(role_id, secret_id)` from env), caches the resulting client token in `mlock`-protected memory, and uses a single defensive fallback for token expiry: on any 403 response from a Vault API call, re-authenticate and retry the failed call exactly once. **No background renewal task in v1; no periodic-token configuration in v1.** AppRole role TTL stays at the v0.3.0a1 defaults: `token_ttl=24h, token_max_ttl=72h`. The strategy is staged: a proactive `auth/token/renew-self` background task lands in Phase 7 (alongside policy + audit hardening); periodic-token migration (`token_period`) lands at Phase 8 (first production migration), if and only if a real high-volume consumer materializes.
+
+**Alternatives considered.**
+
+- **Background `renew-self` task at v0.3.0a4 (Phase 3b).** Asyncio task runs every `ttl/3` seconds; calls `POST /v1/auth/token/renew-self` while within `max_ttl`; falls back to full re-auth at the `max_ttl` boundary. Rejected for v1: ~80 lines of code (renewal loop, expiry tracking, `lease_id` bookkeeping, integration test with shortened TTL or mocked clock) shipped without a high-volume consumer to drive the design. Phase 3b's verification gate is one wallet creation; Phase 3c is one mock-RPC sign-and-send; Phase 8's first real consumer (`ftso-fee-claimer`) signs ~once per reward epoch (3.5 days, well under the 24h TTL). The 403 fallback covers all v1 volumes. Premature optimization; ships in Phase 7.
+
+- **Periodic tokens (`token_period=24h`) at v0.3.0a4.** AppRole role configured with `token_period` instead of `token_ttl/token_max_ttl`. Periodic tokens can be renewed indefinitely within `period` seconds; never hit a max_ttl boundary. Canonical Vault recipe for daemon services ([Vault docs: AppRole patterns](https://developer.hashicorp.com/vault/tutorials/recommended-patterns/pattern-approle)). Rejected for v1: requires re-running `vault-init.sh` with new role flags (operator-side change, not just a code change), and gives no benefit at Phase 3b's volume since renewal isn't yet implemented. Migrate when the renewal task lands AND when a real high-frequency consumer materializes — both naturally aligned with Phase 7/8.
+
+- **Re-auth on every signing call.** Rejected: doubles round-trips, defeats the point of token caching, increases load on Vault.
+
+- **Long-lived single token** (e.g., `token_ttl=8760h`). Rejected: increases blast radius of a leaked token; Vault's docs explicitly recommend against it for service accounts; a leaked token usable for a year is structurally indistinguishable from a static API key (a regression).
+
+**Why this staging.**
+
+1. **v1 volumes are low.** Wallet creation is rare (operator-driven). Phase 3c's verification gate is one Coston2 tx. Phase 8's `ftso-fee-claimer` claims ~once per reward epoch. Token won't expire mid-test or mid-claim. The 403 fallback is sufficient and exercises the re-auth path end-to-end.
+2. **The 403 fallback is defense-in-depth even after Phase 7 lands.** Clock skew, vault failover, manual revocation — all surface as 403. Building it first means the renewal task adds complexity *without changing the surface contract*.
+3. **Real consumers drive design.** Designing a renewal protocol against a hypothetical every-minute workload is a Karpathy violation ("simplicity first"). When a real consumer (e.g., `fics` write paths under operator-approved automation, or AI-agent signing) lands, the workload's actual shape (request bursts vs steady state, latency tolerance, max gap-without-signing) informs the renewal interval and the fallback cost.
+4. **Periodic tokens are operator-side.** Switching from `token_ttl/token_max_ttl` to `token_period` is a `vault-init.sh` flag change; same Vault client code on either side. Decoupling means the migration can ride alongside Core invariant #17's production wipe-and-redo without code churn.
+
+**Consequences.**
+
+- **v0.3.0a4 (Phase 3b)** ships `infra/vault_client.py` with: `_login()` on init, `encrypt(plaintext) -> ciphertext` and `decrypt(ciphertext) -> plaintext` using cached `X-Vault-Token`, single-retry-on-403 inside an `_request()` helper. Approximately 50 lines of auth logic. Verifies the auth path against the live dev Vault as part of the integration test.
+- **v0.3.0 (Phase 3c)** uses `decrypt()` in the signing path. No auth changes; same client.
+- **Phase 7 (v0.5.0)** adds: an asyncio background task that calls `auth/token/renew-self` every `lease_duration / 3` seconds; a structlog event on each renew/re-auth; an integration test that exercises a 24h+ token cycle (mocked clock OR shortened TTL on the AppRole role). Approximately 80 lines of code + one new test.
+- **Phase 8 (v1.0.0)** evaluates: if the first production consumer exhibits high-frequency signing AND the operator wants to eliminate the 72h `max_ttl` re-auth boundary, re-run `vault-init.sh` with `token_period=24h, token_max_ttl=0`. The Vault client adapts automatically. Operator runbook gains an entry documenting the migration: stop fwd → re-run script with new flags → restart fwd.
+- **Token caching** continues to honor Core invariant #16 (`mlock` against swap; zeroize on logout/shutdown). The cached token is a bearer credential; same hygiene as a wallet privkey.
+- **The Phase 7 renewal task** must consult `lease_renewable` and `lease_duration` from the login response, NOT hardcoded TTL values — Vault may rotate role config underneath us.
+
+**When to revisit.**
+
+- **High-volume consumer surfaces in Phase 4–6.** If a real workload starts pushing into the every-minute regime before Phase 7 ships, accelerate the renewal task into the same ship as the consumer's migration. Don't wait for Phase 7 to ship if the workload demands it.
+- **Vault changes its renewal protocol.** Unlikely for OSS in v1.x but possible. Re-evaluate when fwd lands on Vault 1.20+ or migrates off Vault.
+- **Periodic-token security audit at Phase 8.** Trade-off: no automatic credential rotation in exchange for no `max_ttl` pain. Operator must accept that `secret_id` rotation is now their hygiene task (e.g., quarterly, or on incident). Document in the production runbook before the migration ships.
+- **Token-stealing attack surfaces in the threat model.** A1–A12 currently treat process-memory compromise as game-over (privkeys + token both exposed). If a more granular attacker model emerges (e.g., side-channel reading token without privkey), shorter TTLs become valuable and this decision needs refresh.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

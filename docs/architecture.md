@@ -482,6 +482,52 @@ path "transit/keys/fwd-master" {
 # NO transit/sign/*, NO transit/keys/+/export, NO transit/keys/+/rotate, NO transit/keys/+/config
 ```
 
+## Auth lifecycle
+
+Per `decisions.md` D10, `fwd` uses a staged token-management strategy: minimum viable in v1, proactive renewal at Phase 7, periodic tokens at Phase 8 if warranted.
+
+### v1 (Phase 3b–6)
+
+| Event | Action |
+|---|---|
+| `fwd` startup | `POST /v1/auth/approle/login` with `(FWD_VAULT_ROLE_ID, FWD_VAULT_SECRET_ID)` from env. Cache `client_token`, `lease_duration`, `lease_renewable` in `mlock`-protected memory. |
+| Any Vault call (`encrypt`, `decrypt`) | Send with `X-Vault-Token: <client_token>` header. |
+| 403 from any Vault call | Re-auth (single fresh `auth/approle/login`). Update cached token. Retry the failed call exactly once. If retry also returns 403, surface the error to the caller. |
+| `fwd` shutdown | No explicit token revocation; the token expires naturally at `token_ttl`. Cached token bytes are zeroized in `__aexit__`. |
+
+No background task. No proactive renewal. Suitable for v1 volumes (wallet creation: rare; signing: ~once per FTSO epoch / per register tx / etc., well below the 24h TTL).
+
+### Phase 7 hardening (v0.5.0)
+
+Add an asyncio background task started in `VaultClient.__aenter__`:
+
+- Sleeps `lease_duration / 3` seconds at a time.
+- If renewable AND `now + (lease_duration / 3) < max_ttl_deadline`: `POST /v1/auth/token/renew-self`. Update `expires_at`.
+- Else: full re-auth via `auth/approle/login`. Update cached token.
+- Cancel-clean on `__aexit__`.
+
+The 403 fallback in `_request()` stays as defense-in-depth (clock skew, vault failover, race between renewal and 403, manual revocation).
+
+### Phase 8 production (v1.0.0)
+
+When the first production consumer migrates, the operator evaluates switching the AppRole `fwd` role from `(token_ttl=24h, token_max_ttl=72h)` to `(token_period=24h, token_max_ttl=0)`. Periodic tokens can be renewed indefinitely within `period` seconds; the 72h `max_ttl` re-auth boundary disappears. Same client code on either side; only the role config changes.
+
+Migration procedure (operator runbook, lands at Phase 8):
+
+```sh
+docker compose stop fwd
+docker exec -e VAULT_TOKEN=<root-token> fwd-vault \
+    vault write auth/approle/role/fwd \
+    token_policies=fwd-app \
+    token_period=24h \
+    token_max_ttl=0 \
+    secret_id_ttl=0 \
+    secret_id_num_uses=0
+docker compose start fwd
+```
+
+Trade-off: no automatic credential rotation. Operator-driven `secret_id` rotation (quarterly, or on incident) becomes the periodic hygiene task.
+
 ## Policy YAML format
 
 ```yaml
