@@ -10,7 +10,8 @@ services:
     command: ["chown -R vault:vault /vault/data && exec /usr/local/bin/docker-entrypoint.sh server"]
     volumes:
       - vault-data:/vault/data
-      - ./config/vault/config.hcl:/vault/config/config.hcl:ro
+      - ./config/vault/:/vault/config/:ro
+      - ./scripts/:/vault/scripts/:ro
     networks:
       - fwd-internal
     restart: unless-stopped
