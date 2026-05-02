@@ -34,7 +34,9 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 **v0.3.0a3 (shipped 2026-05-02):** Doctrine codification — new Core invariant #17 ("Vault Shamir distribution is dev-elidable, production-mandatory"). Captures the dev-mode shortcut (single mode-0600 file at `~/.fwd-dev/vault-init-output.json`, no D6 distribution) that the operator authorized for Phase 3a–7 development to reduce friction while no production wallet is custodied; AND the mandatory wipe-and-redo procedure (`docker compose down && docker volume rm fwd_vault-data && shred -u …` + full D6 redo) at the Phase 8 production cut. Also references-back to invariant #7 as the structural justification: Vault behind a single-laptop file when holding production privkeys is `.env PRIVATE_KEY=` in a different costume. No code changes; doctrine only. Reviewer-only commit (no Sonnet involvement). Phase 3b shifts to v0.3.0a4.
 
-**v0.3.0a4 (this ship, 2026-05-02):** Doctrine — new `decisions.md` D10 ("Token lifecycle: re-auth on 403 (v1), proactive renewal at Phase 7, periodic tokens at Phase 8") and matching `architecture.md` § Auth lifecycle. Captures the staged Vault token-management strategy: Phase 3b ships minimum viable (login on startup, cached token, single-retry-on-403); Phase 7 adds an asyncio `auth/token/renew-self` background task; Phase 8 evaluates migration to periodic tokens (`token_period=24h`) for high-frequency consumers. Reasoning: 403 fallback is the canonical defense-in-depth even after Phase 7 lands; v1 volumes (wallet creation rare; FTSO epoch claims every 3.5d) don't justify the renewal-task complexity yet; periodic-token migration is a `vault-init.sh` flag change with no client refactor. The actual `infra/vault_client.py` lands in v0.3.0a5 (Phase 3b). No code changes; doctrine only. Reviewer-only commit. Phase 3b shifts to v0.3.0a5.
+**v0.3.0a4 (shipped 2026-05-02):** Doctrine — new `decisions.md` D10 ("Token lifecycle: re-auth on 403 (v1), proactive renewal at Phase 7, periodic tokens at Phase 8") and matching `architecture.md` § Auth lifecycle. Captures the staged Vault token-management strategy: Phase 3b ships minimum viable (login on startup, cached token, single-retry-on-403); Phase 7 adds an asyncio `auth/token/renew-self` background task; Phase 8 evaluates migration to periodic tokens (`token_period=24h`) for high-frequency consumers. Reasoning: 403 fallback is the canonical defense-in-depth even after Phase 7 lands; v1 volumes (wallet creation rare; FTSO epoch claims every 3.5d) don't justify the renewal-task complexity yet; periodic-token migration is a `vault-init.sh` flag change with no client refactor. The actual `infra/vault_client.py` lands in v0.3.0a5 (Phase 3b). No code changes; doctrine only. Reviewer-only commit. Phase 3b shifts to v0.3.0a5.
+
+**v0.3.0a5 (this ship, 2026-05-02):** Doctrine — enforced hand-off demarcation in canonical prompts. Updates the Reviewer obligations in § Development workflow to require EXACTLY this format for every hand-off in a `~/.claude/plans/fwd-canonical-prompt-*.md` file: bold marker `**HAND-OFF — <recipient> (paste verbatim into <destination>):**` on its own line, a blank line, then a fenced code block (4-backtick if payload contains 3-backticks; 5-backtick if nested deeper) wrapping the entire hand-off payload end-to-end. Pre-handoff scan adds a `grep -c '^\*\*HAND-OFF — '` check. Reason: pasting "go look at this paragraph" rather than "copy these exact bytes between these fences" is a recurring source of subtle Sonnet deviations (truncation, accidentally-included Reviewer asides, instructions buried in prose). The fence is a hard boundary. No code changes; doctrine only. Reviewer-only commit. Phase 3b shifts to v0.3.0a6.
 
 **v0.3.0 (Phase 2–4):** Project scaffold (Poetry, FastAPI, Dockerfile, `docker-compose.yml`), Vault deployed in compose, signing core for `/v1/sign-and-send` against Coston2. Single pre-provisioned wallet. Integration test green.
 
@@ -113,7 +115,18 @@ Reviewer obligations:
 - Phase 0: read code, verify codebase semantics, surface design questions to operator.
 - Draft a self-contained canonical prompt at `~/.claude/plans/fwd-canonical-prompt-<ship>.md`.
 - Pre-handoff scan: shell-var substitution defects, identifier-rename completeness, multi-segment `bash -c` wrapping (FICSM Core invariant #19).
-- Demarcate hand-off content explicitly with a `**HAND-OFF — <recipient> (paste verbatim into <destination>):**` block.
+- **Demarcate every hand-off in canonical prompts with EXACTLY this format — no variations:**
+    1. **A bold marker on its own line**: `**HAND-OFF — <recipient> (paste verbatim into <destination>):**`
+    2. **A blank line.**
+    3. **A fenced code block** wrapping the entire hand-off payload end-to-end (use 4 backticks if the payload contains 3-backtick blocks; 5 backticks if nested deeper). **Nothing outside the fences belongs to the hand-off.**
+
+  Pre-handoff scan (mandatory, runs against the canonical prompt before announcing it ready):
+  ```sh
+  grep -c '^\*\*HAND-OFF — ' ~/.claude/plans/fwd-canonical-prompt-<ship>.md  # ≥ 1
+  ```
+  AND a manual eyeball: the line immediately after the bold marker is empty; a fenced block opens within the next 3 lines and closes before any non-handoff content resumes.
+
+  **Why this is enforced.** A Sonnet session pasted from "go look at this paragraph here" rather than "copy these exact bytes between these fences" is a recurring source of subtle deviations (truncation at paragraph boundaries, accidentally-included Reviewer-aside text, missed instructions buried in surrounding prose). The fence is a hard boundary the operator can copy verbatim with zero ambiguity. **No exceptions** — even a one-line hand-off goes inside fences. Every canonical prompt at `~/.claude/plans/fwd-canonical-prompt-*.md` MUST satisfy this; a prompt missing the demarcation is incomplete and must not be handed off.
 
 ### Implementer (Sonnet 4.6) — IMPLEMENTS, WITH LICENSE TO DEVIATE
 

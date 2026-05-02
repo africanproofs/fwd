@@ -245,6 +245,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 3a-fix | 0.3.0a2 | Shipped 2026-05-02 (Reviewer-only fix-up: VAULT_ADDR in compose env so the vault CLI uses HTTP — surfaced during manual verification ritual) |
 | 3a-doc | 0.3.0a3 | Shipped 2026-05-02 (Doctrine: Core invariant #17 — Vault Shamir distribution is dev-elidable, production-mandatory; wipe-and-redo procedure at Phase 8 cut) |
 | 3a-doc | 0.3.0a4 | Shipped 2026-05-02 (Doctrine: D10 — staged token lifecycle: 403-fallback v1 → renew-self Phase 7 → periodic tokens Phase 8; architecture.md § Auth lifecycle) |
+| 3a-doc | 0.3.0a5 | Shipped 2026-05-02 (Doctrine: enforced hand-off demarcation in canonical prompts — bold marker + fenced block, no exceptions) |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
 | 5 | 0.4.0 | State + nonces |
