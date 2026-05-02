@@ -8,6 +8,13 @@ services:
     # Docker named volumes are created root-owned, so we chown /vault/data first.
     entrypoint: ["/bin/sh", "-c"]
     command: ["chown -R vault:vault /vault/data && exec /usr/local/bin/docker-entrypoint.sh server"]
+    environment:
+      # The vault CLI defaults to https://127.0.0.1:8200 when VAULT_ADDR is unset.
+      # Our listener is HTTP (config.hcl tls_disable=true; fwd-internal is the
+      # security boundary). Without this, every `docker exec fwd-vault vault <cmd>`
+      # fails with "http: server gave HTTP response to HTTPS client". Setting it
+      # in container env makes vault-init.sh and the runbook commands work as-is.
+      VAULT_ADDR: http://127.0.0.1:8200
     volumes:
       - vault-data:/vault/data
       - ./config/vault/:/vault/config/:ro
