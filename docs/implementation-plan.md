@@ -243,6 +243,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 2 | 0.3.0-alpha | Shipped 2026-05-01 (project scaffold: pyproject + Dockerfile + compose + src/fwd/ + tests + alembic + CI) |
 | 3a | 0.3.0a1 | Shipped 2026-05-02 (Phase 3a — Vault deployment: init script + fwd-app policy + AppRole + runbook) |
 | 3a-fix | 0.3.0a2 | Shipped 2026-05-02 (Reviewer-only fix-up: VAULT_ADDR in compose env so the vault CLI uses HTTP — surfaced during manual verification ritual) |
+| 3a-doc | 0.3.0a3 | Shipped 2026-05-02 (Doctrine: Core invariant #17 — Vault Shamir distribution is dev-elidable, production-mandatory; wipe-and-redo procedure at Phase 8 cut) |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
 | 5 | 0.4.0 | State + nonces |
