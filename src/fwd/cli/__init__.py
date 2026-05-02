@@ -1,0 +1,1 @@
+"""clifwd — operator-facing CLI."""

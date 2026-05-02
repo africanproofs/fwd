@@ -1,0 +1,57 @@
+default:
+  image: python:3.12-slim-bookworm
+  cache:
+    key:
+      files:
+        - poetry.lock
+    paths:
+      - .venv/
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends build-essential libffi-dev libsecp256k1-dev pkg-config
+    - pip install --no-cache-dir poetry==1.8.5
+    - poetry config virtualenvs.in-project true
+    - poetry install --with dev
+
+stages:
+  - lint
+  - typecheck
+  - test
+  - build
+
+lint:
+  stage: lint
+  script:
+    - poetry run ruff check .
+    - poetry run ruff format --check .
+
+typecheck:
+  stage: typecheck
+  script:
+    - poetry run mypy --strict src/
+
+test:
+  stage: test
+  script:
+    - poetry run pytest -v --cov=fwd --cov-report=term-missing tests/
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+
+build:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  before_script: []
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker build -t "registry.gitlab.com/proofs.africa/fwd/fwd:${CI_COMMIT_SHORT_SHA}" .
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "main" ]; then
+        echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+        docker push "registry.gitlab.com/proofs.africa/fwd/fwd:${CI_COMMIT_SHORT_SHA}"
+        docker tag "registry.gitlab.com/proofs.africa/fwd/fwd:${CI_COMMIT_SHORT_SHA}" "registry.gitlab.com/proofs.africa/fwd/fwd:latest"
+        docker push "registry.gitlab.com/proofs.africa/fwd/fwd:latest"
+      fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'

@@ -1,0 +1,10 @@
+# Phase 2 placeholder: replicates state.db to a local volume inside the
+# litestream container. This is NOT a real backup. Phase 6 swaps the replica
+# for Scaleway Object Storage (S3-compatible) using the LITESTREAM_S3_*
+# environment variables in .env.
+
+dbs:
+  - path: /data/state.db
+    replicas:
+      - type: file
+        path: /var/lib/litestream/local-replica

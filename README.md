@@ -2,7 +2,7 @@
 
 Policy-gated signing service for African Proofs' EVM backend keys (Flare, Songbird, Coston2). Replaces every `.env PRIVATE_KEY` across AP automation with one HTTP endpoint, one custody backend, and one tamper-evident audit log.
 
-> **Status: v0.2.3 — Documentation only (+ one validated spike on Coston2).** v0.1.0 landed the architectural spec; v0.1.1 landed pre-Phase-1 doc fixes; v0.1.2 pivoted to Vault Transit envelope encryption after the v0.2.0 first attempt discovered Vault Transit doesn't support secp256k1 signing; v0.2.0 retry validated the revised flow with a real Coston2 transaction; v0.2.1 added pre-Phase-2 implementation-hazard guidance; v0.2.2 documented the wallet-provisioning policy (HTTP+CLI create, CLI-only import, no plaintext export); v0.2.3 renamed the operator-facing CLI from `fwd-cli` to **`clifwd`** (pronounced "Clifford"). Phase 2 (project scaffold) is the next ship.
+> **Status: v0.3.0-alpha — Project scaffold landed (+ one validated spike on Coston2).** v0.1.0–v0.2.3 documented the architecture; v0.2.0 validated the signing flow with a real Coston2 transaction; v0.3.0-alpha lands the runnable-but-inert scaffold (pyproject.toml, Dockerfile, docker-compose with three services, src/fwd/ four-layer skeleton, tests, alembic, CI). Phase 3 (Vault deployment + signing core) is the next ship.
 
 ## What this repo is
 
@@ -26,13 +26,23 @@ See `CLAUDE.md` § "What FWD Deliberately IS NOT" for the hard policy. Briefly:
 
 ## Setup
 
-Coming in Phase 2. The intended bring-up is:
+Local development:
 
 ```bash
-cp .env.example .env       # edit RPC URLs, Litestream credentials
-docker compose up -d       # starts vault, fwd, litestream
-docker exec -it fwd-vault vault operator unseal   # × 3 (3-of-5 threshold)
+# Prerequisites: Python 3.12, Poetry ≥ 1.8, Docker + Docker Compose v2.
+poetry install
+poetry run pytest                    # unit tests
+poetry run ruff check .              # lint
+poetry run mypy --strict src/        # type-check
+
+# Bring up the compose stack:
+cp .env.example .env
+docker compose up -d
+curl http://127.0.0.1:8080/healthz
+poetry run clifwd health             # equivalent CLI probe
 ```
+
+Phase 2 ships an inert scaffold — Vault is uninitialized, no wallets are provisioned, no signing path is wired. Phase 3 lands `vault operator init`, AppRole auth, and `/v1/sign-and-send` against Coston2.
 
 ## Documentation
 

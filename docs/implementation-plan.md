@@ -240,7 +240,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 1+ | 0.2.1 | Shipped 2026-05-01 (pre-Phase-2 doc fixes: failure modes + implementation hazards) |
 | 1++ | 0.2.2 | Shipped 2026-05-01 (wallet create + CLI-only import; export deferred per D9) |
 | 1+++ | 0.2.3 | Shipped 2026-05-01 (CLI rename: fwd-cli → clifwd; mechanical rename across docs) |
-| 2 | 0.3.0-alpha | Scaffold |
+| 2 | 0.3.0-alpha | Shipped 2026-05-01 (project scaffold: pyproject + Dockerfile + compose + src/fwd/ + tests + alembic + CI) |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
 | 5 | 0.4.0 | State + nonces |

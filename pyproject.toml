@@ -1,0 +1,69 @@
+[tool.poetry]
+name = "fwd"
+version = "0.3.0a0"
+description = "Flare Wallet Daemon — policy-gated signing service for AP backend keys"
+authors = ["African Proofs <khosimorafo@yahoo.com>"]
+readme = "README.md"
+license = "MIT"
+packages = [{ include = "fwd", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115"
+uvicorn = { extras = ["standard"], version = "^0.30" }
+pydantic = "^2.9"
+pydantic-settings = "^2.6"
+httpx = "^0.27"
+hvac = "^2.3"
+eth-account = "^0.13"
+eth-utils = "^5.0"
+coincurve = "^20.0"
+sqlalchemy = "^2.0"
+aiosqlite = "^0.20"
+alembic = "^1.13"
+argon2-cffi = "^23.1"
+pyyaml = "^6.0"
+structlog = "^24.4"
+prometheus-client = "^0.21"
+tenacity = "^9.0"
+typer = "^0.16"
+rich = "^13.9"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3"
+pytest-asyncio = "^0.24"
+pytest-cov = "^6.0"
+ruff = "^0.8"
+mypy = "^1.13"
+types-pyyaml = "^6.0"
+
+[tool.poetry.scripts]
+clifwd = "fwd.cli.main:app"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "TCH"]
+ignore = ["E501"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src"
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["hvac.*", "coincurve.*", "eth_account.*", "eth_utils.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[build-system]
+requires = ["poetry-core>=1.8"]
+build-backend = "poetry.core.masonry.api"
