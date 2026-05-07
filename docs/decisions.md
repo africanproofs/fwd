@@ -272,6 +272,156 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 - **Periodic-token security audit at Phase 8.** Trade-off: no automatic credential rotation in exchange for no `max_ttl` pain. Operator must accept that `secret_id` rotation is now their hygiene task (e.g., quarterly, or on incident). Document in the production runbook before the migration ships.
 - **Token-stealing attack surfaces in the threat model.** A1–A12 currently treat process-memory compromise as game-over (privkeys + token both exposed). If a more granular attacker model emerges (e.g., side-channel reading token without privkey), shorter TTLs become valuable and this decision needs refresh.
 
+## D11. Admin auth and caller auth are distinct, never bridged
+
+**Decision.** `fwd` has exactly two auth boundaries in v1, and they share no code path:
+
+- **Admin auth** — single static bearer token, sourced from the `FWD_ADMIN_KEY` env var, gated by `src/fwd/api/admin_auth.py::require_admin`. Used **only** for `/v1/admin/*` endpoints (provisioning: `POST /v1/admin/wallets`, `POST /v1/admin/callers`, `DELETE /v1/admin/callers/{name}`, future admin operations). No caller endpoint accepts an admin key. Constant-time compare via `hmac.compare_digest`. 401 on missing/invalid; 503 when `FWD_ADMIN_KEY` is empty.
+- **Caller auth** — argon2id-hashed bearer tokens issued by `fwd` itself (via `clifwd callers create`), persisted to the `callers` table, looked up by prefix at request time. Gated by `src/fwd/api/caller_auth.py::require_caller` (Phase 4). Used **only** for caller-facing endpoints (`/v1/sign-and-send`, `/v1/sign-typed-data`, `/v1/wallets`, `/v1/transactions/{tx_id}`). No admin endpoint accepts a caller token.
+
+The `require_admin` and `require_caller` dependencies live in separate modules (`api/admin_auth.py` vs `api/caller_auth.py`), have separate type aliases, and surface different exceptions. A request that lands on a caller endpoint with an admin token is rejected exactly as a request with a forged token would be — there is **no fallback** to admin-key auth on caller endpoints, and no fallback to caller-token auth on admin endpoints.
+
+**Alternatives considered.**
+
+- **Single auth dependency that resolves either type.** Rejected. Conflating admin and caller identity removes the bright line that protects admin operations from a leaked caller key (and vice versa). The two have fundamentally different threat models: admin is a static operator credential rotated manually; callers are programmatically-issued, scoped, and revocable.
+- **Caller endpoints accept admin key as a "super-user" override.** Rejected. Admin keys cannot impersonate callers — that would defeat per-caller policy enforcement and per-caller audit attribution. If an operator needs to test a caller's permissions, they issue themselves a caller token and use it.
+- **Phase 4 swaps `admin_required` to a polymorphic auth dependency that gates on URL prefix.** Rejected. URL-based auth dispatch is an anti-pattern (attackers control URLs); explicit per-endpoint dependencies are cleaner and harder to misroute.
+
+**Why this matters.** v0.3.x ships with `/v1/sign-and-send` temporarily admin-gated as a stand-in until Phase 4 lands caller auth (per `architecture.md` § Caller authentication). The risk surfaced in the v0.3.1 audit (F2.4): implementation inertia in Phase 4 might preserve the admin-gating "just for now" or build caller auth as a wrapper around admin auth. This decision pins the design before Phase 4 implementation begins.
+
+**Consequences.**
+
+- **v0.4.0-alpha (Phase 4)** ships `src/fwd/api/caller_auth.py::require_caller` (new module), an `app/caller_resolution.py` use case (lookup by prefix → argon2id verify → return resolved caller + policy_path), and the caller-auth path through `app/dependencies.py`. The existing `admin_required` is unchanged. `/v1/sign-and-send` swaps `dependencies=[admin_required]` to `dependencies=[caller_required]`; URL stays.
+- **Tests verify the bright line:** an admin token presented to `/v1/sign-and-send` returns 401 (not 200); a caller token presented to `/v1/admin/wallets` returns 401 (not 200). These are explicit unit tests in v0.4.0-alpha, not implicit.
+- **Audit-log attribution** is correct from Phase 4 day one: caller-endpoint actions log the resolved caller name, never the literal "admin"; admin-endpoint actions log the operator UID where derivable, never a caller name.
+
+**When to revisit.**
+
+- **A genuine super-admin operation surfaces** that the operator wants exposed via API rather than `clifwd` (e.g., emergency caller revocation). At that point, decide whether to (a) extend the admin-only API surface or (b) issue an admin user a caller token with elevated policy. Default to (b) for the principle-of-least-privilege.
+- **Phase 10 mTLS** — when callers leave the host, the bearer-token model may be augmented with cert-based identity. The two-auth-boundary discipline still applies; only the credential format changes.
+
+## D12. CLI in-process pattern for `clifwd wallets import`
+
+**Decision.** `clifwd wallets import` (per D9: CLI-only, no HTTP endpoint) does NOT call any HTTP API. It opens an in-process composition root via `from fwd.app.dependencies import SignerCM, get_signer`, reads the privkey file, validates against the D9 refusal table (mode 0600, owner UID, 32-byte hex content, name uniqueness, optional `--expected-address` match), and calls a new `app/wallet_import.py::import_wallet` use case. The CLI module itself imports only from `fwd.app.*` and standard library; no `fwd.infra.*` imports.
+
+The new use case `app/wallet_import.py` exposes:
+
+```python
+async def import_wallet(
+    signer: EnvelopeSigner,
+    *,
+    name: str,
+    policy_path: str,
+    privkey_file: Path,
+    expected_address: str | None = None,
+) -> WalletImportResult: ...
+```
+
+It performs the file read, refusal-table validation, address derivation + match check, encryption + persistence (delegating to `EnvelopeSigner.import_wallet`, a new method that mirrors `create_wallet` but accepts an externally-provided privkey bytearray instead of generating one).
+
+`clifwd wallets create` keeps its existing HTTP-client shape (it calls `POST /v1/admin/wallets`). The two flows diverge at the CLI surface, not the use-case surface. The CLI manages SQLite session and Vault client lifecycle via `SignerCM` exactly as the api layer does — same composition root, same async-context-manager idiom.
+
+**Alternatives considered.**
+
+- **Allow `cli/` to import from `infra/` directly** (loosen the layer-boundary test). Rejected. The CLI boundary is what stops a CLI command from accidentally bypassing the use-case layer's exception translation, audit logging (Phase 7), and policy hooks. The boundary is asymmetric for a reason: HTTP commands go through the use case; in-process commands also go through the use case.
+- **Spawn a dedicated subprocess** that talks to `fwd`'s running container via a Unix socket. Rejected as Phase 10 over-engineering. The CLI runs in the same Python process tree as the daemon's deployment context (`docker exec fwd clifwd ...` on the production host); in-process is correct here.
+- **Have `clifwd` proxy through a hidden admin HTTP endpoint that accepts privkey bodies**. **Strongly rejected.** Reintroduces the HTTP privkey-traversal that D9 explicitly forbids. Privkeys never enter HTTP.
+- **Inline the import flow in `clifwd wallets import`** without an `app/wallet_import.py` use case (just call `EnvelopeSigner` directly from cli). Rejected. Mixes interface-layer and infra-layer responsibilities; defeats the use-case orchestration pattern that Phase 7's audit-log row will hook into.
+
+**Why this matters.** The v0.3.1 audit (F3.2) flagged that the existing "CLI as HTTP client" pattern conflicts with D9's CLI-only import requirement. Without an explicit decision before Phase 4, Sonnet would either (a) violate the layer-boundary test and require a path-(b) rewrite, or (b) inline infra calls from the CLI and leak the use-case boundary. This decision pins the right shape.
+
+**Consequences.**
+
+- **v0.4.0-alpha (Phase 4)** adds `src/fwd/app/wallet_import.py` (the use case), extends `src/fwd/infra/envelope_signer.py::EnvelopeSigner` with `import_wallet(privkey_buf, ...)` (mirrors `create_wallet` but accepts the privkey externally), and adds `src/fwd/cli/wallets.py::import_` subcommand that opens `SignerCM` and calls the use case.
+- **Layer-boundary test** stays as-is — `cli: {app, domain}` and `app: {domain, infra}` continue to hold.
+- **Phase 7's audit row** for `action='wallet-import'` (per `architecture.md` § Wallet provisioning) hooks into `app/wallet_import.py`, not into the CLI.
+
+**When to revisit.**
+
+- **A second in-process CLI command lands** (e.g., a Phase 6 restore command). Same pattern: app-layer use case + thin CLI wrapper.
+- **Phase 10 splits `clifwd` into a separate package distributed to operator workstations** that talks to a remote `fwd`. At that point, in-process import gets reconsidered: either keep file-on-host with the host-pinned CLI, or design a different secure-import path. Don't pre-decide.
+
+## D13. Policy ownership: caller-keyed, with wallet-level constraints reserved for Phase 7
+
+**Decision.** Policy is **caller-keyed** — when caller `X` requests `/v1/sign-and-send` for wallet `Y` invoking method `M` on contract `C`, `fwd` resolves the caller's `policy_path` against `policy.yaml` permissions and evaluates the (caller × wallet × contract × method × args) tuple. The wallet's `policy_path` (already on the `wallets` table since v0.3.0a6) is reserved for Phase 7 wallet-level constraints (per-wallet rate limits, per-wallet daily-spend caps); v0.4.0-alpha through v0.4.x persist it without using it for permission decisions.
+
+The policy.yaml structure (Phase 7) lands as:
+
+```yaml
+version: 1
+
+callers:
+  ftso-fee-claimer-prod:
+    policy_path: ftso-claim
+  apregister-e2e:
+    policy_path: apregister-e2e
+
+wallets:
+  claim-recipient-flare-prod:
+    policy_path: claim-recipient        # Phase 7 wallet-level constraints
+  register-coston2-test:
+    policy_path: register-coston2-test
+
+permissions:                            # PRIMARY indirection: keyed by caller.policy_path
+  ftso-claim:
+    contracts:
+      "0x...RewardManager":
+        methods:
+          claim:
+            max_value_wei: 0
+        wallet_allowlist: ["claim-recipient-flare-prod"]
+    rate:
+      per_hour: 100
+      per_day: 1000
+
+  apregister-e2e:
+    contracts:
+      "0xF9fDB...":
+        methods:
+          register:
+            max_value_wei: 0
+        wallet_allowlist: ["register-coston2-test"]
+    rate:
+      per_hour: 50
+      per_day: 200
+
+wallet_constraints:                     # SECONDARY indirection: keyed by wallet.policy_path; Phase 7+
+  claim-recipient:
+    max_daily_aggregate_wei: 0          # claim-only wallet, never sends value
+  register-coston2-test:
+    max_daily_aggregate_wei: 1000000000000000000  # 1 C2FLR/day
+```
+
+Permission evaluation order (Phase 7):
+1. Resolve caller's `policy_path` → permissions block.
+2. Check `wallet_allowlist` includes the requested wallet.
+3. Check contract address in allowlist.
+4. Check method in allowlist.
+5. Check decoded args within bounds (`max_value_wei`, recipient pattern).
+6. Check rate limit (per-hour, per-day) on (caller, wallet, contract, method) key.
+7. Check `wallet_constraints[wallet.policy_path].max_daily_aggregate_wei` against pending+confirmed value sum.
+8. Default-deny on any failure.
+
+**Alternatives considered.**
+
+- **Wallet-keyed policy** (each wallet has a list of permitted callers/contracts/methods). Rejected for caller intuition: a caller asking "what can I sign?" is the more common operator question, not "what can be signed with this wallet?". Caller-keyed reads naturally; wallet-keyed inverts the mental model.
+- **`(caller, wallet)` join key** (permissions are explicit per-pair). Rejected for cardinality: with 5 callers and 50 wallets, that's 250 explicit permission rows; the caller-keyed model with `wallet_allowlist` collapses this to 5 caller rows. Adds complexity without information-theoretic gain.
+- **Drop `wallets.policy_path` entirely** (it's currently unused; Phase 4 doesn't need it). Rejected. Schema migrations are expensive; the field is already populated for existing wallets; Phase 7 has a clear use for it (per-wallet aggregate constraints). Keeping it costs zero in v0.4.x and unlocks Phase 7 cleanly.
+
+**Why this matters.** The v0.3.1 audit (F7.4) flagged that `policy_path` is currently a free-form string with no policy semantics. Phase 4 will add the `callers` table with its own `policy_path`; without a decision on the relationship, Phase 4 might bake in the wrong indirection (e.g., wallet-keyed) that Phase 7 then has to undo.
+
+**Consequences.**
+
+- **v0.4.0-alpha (Phase 4)** ships the `callers` table with `policy_path TEXT NOT NULL`. The CLI `clifwd callers create --name <n> --policy <path>` accepts the path as a free-form string (Phase 7 validates it against `policy.yaml`). Phase 4 does NOT yet evaluate permissions — the temporary admin-gate on `/v1/sign-and-send` does not depend on policy_path.
+- **v0.4.0 (Phase 5)** schema migration adds the full SQLite tables; `wallets.policy_path` and `callers.policy_path` are stored, no enforcement.
+- **v0.5.0 (Phase 7)** introduces the policy engine that loads `policy.yaml`, resolves both `policy_path` indirections, evaluates the tuple per the order above. The Phase 7 canonical prompt will spec the engine's evaluation algorithm formally.
+- **Phase 4's admin-key creation flow** continues to accept a free-form `policy_path` for both wallets and callers; consistency is verified at Phase 7 load time (unknown `policy_path` → policy.yaml load fails noisily; default-deny applies until operator fixes).
+
+**When to revisit.**
+
+- **A real consumer needs a policy shape outside this model** (e.g., delegated signing with caller-of-caller chains, multi-signature requirements, time-of-day constraints). Re-evaluate at Phase 7 spec time; don't extend the schema speculatively.
+- **`wallet_allowlist` becomes unwieldy** (e.g., a caller permitted on >50 wallets). Phase 7 may add wildcards or pattern matching; that's an extension, not a reversal of D13.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.
