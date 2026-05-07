@@ -1,6 +1,6 @@
-"""POST /v1/sign-and-send - admin-gated in v0.3.0; caller-auth in Phase 4.
+"""POST /v1/sign-and-send — caller-auth in v0.4.0-alpha+ (was admin-gated in v0.3.0-v0.3.x).
 
-Per architecture.md § API surface + § Signing flow.
+Per architecture.md § API surface + § Signing flow + decisions.md D11.
 v0.3.0 hardcoded allowlist: Coston2 (chain_id=114) only. Phase 7 lifts
 with policy.yaml.
 """
@@ -12,7 +12,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from fwd.api.admin_auth import admin_required
+from fwd.api.caller_auth import caller_required
 from fwd.app.dependencies import (
     RpcManagerCM,
     SignerCM,
@@ -78,7 +78,7 @@ class SignAndSendResponse(BaseModel):
     "/v1/sign-and-send",
     response_model=SignAndSendResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[admin_required],
+    dependencies=[caller_required],
 )
 async def post_sign_and_send(
     body: SignAndSendBody,

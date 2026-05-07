@@ -1,0 +1,133 @@
+"""Wallet-import use case: D9 refusal-table tests."""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from fwd.app.wallet_import import (
+    PrivkeyFileBadContent,
+    PrivkeyFileBadMode,
+    PrivkeyFileBadOwner,
+    PrivkeyFileNotFound,
+    WalletAddressMismatch,
+    WalletImportRequest,
+    WalletNameTakenImport,
+    import_wallet,
+)
+from fwd.infra.wallet_repo import Wallet, WalletExistsError
+
+
+def _write_privkey(tmp_path: pytest.TempPathFactory, content: str = "aa" * 32) -> os.PathLike[str]:  # type: ignore[type-arg]
+    p = tmp_path / "privkey.hex"
+    p.write_text(content, encoding="ascii")
+    p.chmod(0o600)
+    return p
+
+
+def _mock_signer(wallet: Wallet | None = None, side_effect: Exception | None = None) -> MagicMock:
+    signer = MagicMock()
+    if side_effect is not None:
+        signer.import_wallet = AsyncMock(side_effect=side_effect)
+    else:
+        signer.import_wallet = AsyncMock(return_value=wallet or _dummy_wallet())
+    return signer
+
+
+def _dummy_wallet() -> Wallet:
+    from datetime import UTC, datetime
+
+    return Wallet(
+        name="w1",
+        address="0x" + "ab" * 20,
+        privkey_ciphertext="vault:v1:abc",
+        vault_master_key="fwd-master",
+        policy_path="policies/test.yaml",
+        created_at=datetime.now(UTC),
+    )
+
+
+# --- Refusal table tests (D9) -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_file_not_found_raises(tmp_path: pytest.TempPathFactory) -> None:
+    missing = tmp_path / "nope.hex"
+    req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=missing)
+    with pytest.raises(PrivkeyFileNotFound):
+        await import_wallet(req, _mock_signer())
+
+
+@pytest.mark.asyncio
+async def test_bad_mode_raises(tmp_path: pytest.TempPathFactory) -> None:
+    p = _write_privkey(tmp_path)
+    os.chmod(p, 0o644)
+    req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
+    with pytest.raises(PrivkeyFileBadMode):
+        await import_wallet(req, _mock_signer())
+
+
+@pytest.mark.asyncio
+async def test_bad_owner_raises(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = _write_privkey(tmp_path)
+    monkeypatch.setattr(os, "getuid", lambda: 9999)
+    req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
+    with pytest.raises(PrivkeyFileBadOwner):
+        await import_wallet(req, _mock_signer())
+
+
+@pytest.mark.asyncio
+async def test_bad_content_not_hex_raises(tmp_path: pytest.TempPathFactory) -> None:
+    p = tmp_path / "privkey.hex"
+    p.write_text("not-hex-content!", encoding="ascii")
+    p.chmod(0o600)
+    req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
+    with pytest.raises(PrivkeyFileBadContent):
+        await import_wallet(req, _mock_signer())
+
+
+@pytest.mark.asyncio
+async def test_bad_content_wrong_length_raises(tmp_path: pytest.TempPathFactory) -> None:
+    p = tmp_path / "privkey.hex"
+    p.write_text("abcd" * 4, encoding="ascii")  # 8 bytes, not 32
+    p.chmod(0o600)
+    req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
+    with pytest.raises(PrivkeyFileBadContent):
+        await import_wallet(req, _mock_signer())
+
+
+@pytest.mark.asyncio
+async def test_wallet_exists_raises(tmp_path: pytest.TempPathFactory) -> None:
+    p = _write_privkey(tmp_path)
+    req = WalletImportRequest(name="dup", policy_path="policies/w.yaml", privkey_file=p)
+    signer = _mock_signer(side_effect=WalletExistsError("dup"))
+    with pytest.raises(WalletNameTakenImport):
+        await import_wallet(req, signer)
+
+
+@pytest.mark.asyncio
+async def test_address_mismatch_surfaces(tmp_path: pytest.TempPathFactory) -> None:
+    p = _write_privkey(tmp_path)
+    req = WalletImportRequest(
+        name="w",
+        policy_path="policies/w.yaml",
+        privkey_file=p,
+        expected_address="0x" + "00" * 20,
+    )
+    mismatch = WalletAddressMismatch(expected="0x" + "00" * 20, derived="0x" + "ab" * 20)
+    signer = _mock_signer(side_effect=mismatch)
+    with pytest.raises(WalletAddressMismatch):
+        await import_wallet(req, signer)
+
+
+@pytest.mark.asyncio
+async def test_happy_path_returns_wallet(tmp_path: pytest.TempPathFactory) -> None:
+    p = _write_privkey(tmp_path)
+    req = WalletImportRequest(name="w1", policy_path="policies/w.yaml", privkey_file=p)
+    wallet = _dummy_wallet()
+    result = await import_wallet(req, _mock_signer(wallet=wallet))
+    assert result.name == "w1"

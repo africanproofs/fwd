@@ -251,8 +251,8 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 3-gate | 0.3.1 | Shipped 2026-05-07 (Reviewer-only — Phase 3 verification gate met live: Coston2 tx 0x8ab03b3d... mined block 30251692, from = 0x33191597... matches wallet — full custody chain proven on-chain) |
 | 3-corrections | 0.3.2 | Shipped 2026-05-07 (Reviewer-only — v0.3.1 audit corrections: real mlockall + IPC_LOCK, field-aware structlog scrubber, zeroize/no-cache tests, settings layer-boundary, threat-model A5+summary fix, hazards #1/#2/#3 to past tense, Core invariant #18 — doctrine and code do not drift) |
 | 3-pre4-doc | 0.3.3 | Shipped 2026-05-07 (Reviewer-only — pre-Phase-4 doctrine: D11 admin/caller auth bright line, D12 CLI in-process import pattern, D13 caller-keyed policy with wallet-level Phase-7 hooks; closes audit F2.4, F3.2, F7.4) |
-| 3 | 0.3.0 | Signing core |
-| 4 | 0.4.0-alpha | Auth |
+| 4 | 0.4.0a1 | Shipped 2026-05-07 (Phase 4 — caller authentication: argon2id API keys, callers table + Alembic 0003, api/caller_auth.py D11-isolated, POST/DELETE/GET /v1/admin/callers, clifwd callers create/list/revoke, clifwd wallets import + list stub, /v1/sign-and-send → caller_required, 115 unit tests) |
+| 5 | 0.4.0 | State + nonces |
 | 5 | 0.4.0 | State + nonces |
 | 6 | 0.4.x | Backup + restore |
 | 7 | 0.5.0 | Policy + audit |

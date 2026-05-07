@@ -8,6 +8,8 @@ closes them on exit.
 from __future__ import annotations
 
 from fwd.app.wallet_create import VaultUnavailableError
+from fwd.infra.caller_repo import Caller as Caller  # re-export for api/caller_auth.py
+from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.rpc import RpcManager
@@ -51,3 +53,19 @@ def get_signer() -> SignerCM:
 
 def get_rpc_manager() -> RpcManagerCM:
     return RpcManagerCM()
+
+
+class CallerRepoCM:
+    """Async context manager. Yields a CallerRepo backed by a session."""
+
+    async def __aenter__(self) -> CallerRepo:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return CallerRepo(self._session)
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_caller_repo() -> CallerRepoCM:
+    return CallerRepoCM()

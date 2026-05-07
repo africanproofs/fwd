@@ -28,6 +28,7 @@ from fastapi import FastAPI
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Mapping, MutableMapping
 
+from fwd.api.callers import router as callers_router
 from fwd.api.health import router as health_router
 from fwd.api.sign import router as sign_router
 from fwd.api.wallets import router as wallets_router
@@ -188,3 +189,4 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(wallets_router)
 app.include_router(sign_router)
+app.include_router(callers_router)

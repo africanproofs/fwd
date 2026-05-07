@@ -36,6 +36,19 @@ def _zeroize(buf: bytearray) -> None:
         buf[i] = 0
 
 
+class WalletImportInvalidLength(Exception):  # noqa: N818
+    """Raised when the supplied privkey is not exactly 32 bytes."""
+
+
+class WalletAddressMismatch(Exception):  # noqa: N818
+    """Raised when --expected-address doesn't match the derived address."""
+
+    def __init__(self, *, expected: str, derived: str) -> None:
+        self.expected = expected
+        self.derived = derived
+        super().__init__(f"derived address {derived} does not match --expected-address {expected}")
+
+
 class EnvelopeSigner:
     def __init__(self, vault: VaultClient, repo: WalletRepo) -> None:
         self._vault = vault
@@ -76,6 +89,51 @@ class EnvelopeSigner:
                 s=int(signed.s),
                 v=int(signed.v),
             )
+        finally:
+            _zeroize(privkey_buf)
+
+    async def import_wallet(
+        self,
+        *,
+        name: str,
+        privkey_buf: bytearray,
+        policy_path: str,
+        expected_address: str | None = None,
+    ) -> Wallet:
+        """Like create_wallet but with externally-provided privkey.
+
+        Per D12: the caller (app/wallet_import.py) supplies the privkey as
+        a bytearray that this method will zeroize in finally. Caller is
+        responsible for NOT retaining a reference to the buffer after this
+        returns; the bytearray identity is preserved (in-place overwrite).
+
+        Validates the privkey length (32 bytes) and optionally the derived
+        EIP-55 address against `expected_address`. Raises:
+          - WalletImportInvalidLength: privkey_buf is not 32 bytes.
+          - WalletAddressMismatch: derived address ≠ expected_address.
+          - WalletExistsError: name PK collision.
+        """
+        if len(privkey_buf) != 32:
+            _zeroize(privkey_buf)
+            raise WalletImportInvalidLength(len(privkey_buf))
+
+        try:
+            # 1. Derive address.
+            account = Account.from_key(bytes(privkey_buf))
+            derived_address = to_checksum_address(account.address)
+            if expected_address is not None and derived_address.lower() != expected_address.lower():
+                raise WalletAddressMismatch(expected=expected_address, derived=derived_address)
+            # 2. Encrypt.
+            ciphertext = await self._vault.encrypt(bytes(privkey_buf))
+            # 3. Persist.
+            wallet = await self._repo.create(
+                name=name,
+                address=derived_address,
+                privkey_ciphertext=ciphertext,
+                vault_master_key="fwd-master",
+                policy_path=policy_path,
+            )
+            return wallet
         finally:
             _zeroize(privkey_buf)
 

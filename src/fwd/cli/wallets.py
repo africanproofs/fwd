@@ -1,19 +1,33 @@
 """clifwd wallets — wallet management subcommands.
 
-Phase 3b ships `create` only. `list` and `import` land in Phase 4 per
-decisions.md D9.
-
-The CLI is an HTTP client (mirrors the `clifwd health` pattern). It does
-NOT instantiate Vault/SQLite directly — that would mean the daemon isn't
-the single owner of state.
+create  — HTTP client (POST /v1/admin/wallets), mirrors clifwd health.
+list    — HTTP client (GET /v1/admin/wallets stub; prints not-yet message).
+import  — IN-PROCESS per D12 (file-based privkey; never traverses HTTP).
+          Opens SignerCM from app.dependencies and calls
+          app.wallet_import.import_wallet.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+from pathlib import Path  # noqa: TC003
 
 import httpx
 import typer
+
+from fwd.app.dependencies import get_signer
+from fwd.app.wallet_import import (
+    PrivkeyFileBadContent,
+    PrivkeyFileBadMode,
+    PrivkeyFileBadOwner,
+    PrivkeyFileNotFound,
+    ShredSourceFailed,
+    WalletAddressMismatch,
+    WalletImportRequest,
+    WalletNameTakenImport,
+    import_wallet,
+)
 
 app = typer.Typer(name="wallets", help="Manage fwd-custodied wallets.")
 
@@ -52,3 +66,98 @@ def create(
         raise typer.Exit(code=3)
     typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
     raise typer.Exit(code=1)
+
+
+@app.command(name="list")
+def list_command() -> None:
+    """List wallets (admin-only HTTP).
+
+    NOTE: the caller-facing GET /v1/wallets endpoint is Phase 7+; this
+    is the admin-side equivalent. Phase 4 does NOT add a caller-facing
+    list endpoint because it requires policy.yaml's wallet_allowlist.
+    GET /v1/admin/wallets is not yet implemented in the API; this command
+    is a placeholder that informs the operator.
+    """
+    typer.echo(
+        "clifwd wallets list: GET /v1/admin/wallets not yet implemented (Phase 5+).",
+        err=True,
+    )
+    raise typer.Exit(code=1)
+
+
+@app.command(name="import")
+def import_command(
+    name: str = typer.Option(..., "--name", help="Unique wallet name."),  # noqa: B008
+    policy: str = typer.Option(..., "--policy", help="policy_path."),  # noqa: B008
+    privkey_file: Path = typer.Option(  # noqa: B008
+        ...,
+        "--privkey-file",
+        help=(
+            "Absolute path to a 32-byte hex-encoded privkey file "
+            "(mode 0600, owner=current user)."
+        ),
+    ),
+    expected_address: str | None = typer.Option(  # noqa: B008
+        None,
+        "--expected-address",
+        help=("Optional EIP-55 address; reject import if derived address doesn't match."),
+    ),
+    shred_source: bool = typer.Option(  # noqa: B008
+        False,
+        "--shred-source",
+        help="Run `shred -u` on the source file after successful import.",
+    ),
+) -> None:
+    """Import a wallet from a host file (in-process per D12).
+
+    Refusal table (D9):
+      - File must exist.
+      - File mode must be exactly 0600.
+      - File owner must match the user running clifwd.
+      - File content (after strip) must decode to exactly 32 bytes hex.
+      - Wallet name must not exist.
+      - --expected-address (if provided) must match the derived address.
+    """
+    asyncio.run(
+        _run_import(
+            WalletImportRequest(
+                name=name,
+                policy_path=policy,
+                privkey_file=privkey_file.resolve(),
+                expected_address=expected_address,
+                shred_source=shred_source,
+            )
+        )
+    )
+
+
+async def _run_import(request: WalletImportRequest) -> None:
+    """Open SignerCM and call the import use case in-process."""
+    cm = get_signer()
+    try:
+        async with cm as signer:
+            wallet = await import_wallet(request, signer)
+    except PrivkeyFileNotFound as exc:
+        typer.echo(f"privkey-file not found: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    except PrivkeyFileBadMode as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except PrivkeyFileBadOwner as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except PrivkeyFileBadContent as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except WalletNameTakenImport as exc:
+        typer.echo(f"wallet '{exc}' already exists", err=True)
+        raise typer.Exit(code=3) from exc
+    except WalletAddressMismatch as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except ShredSourceFailed as exc:
+        typer.echo(f"warning: shred failed: {exc}", err=True)
+        typer.echo("  wallet was imported successfully; manually shred the source.", err=True)
+        raise typer.Exit(code=6) from exc
+
+    typer.echo(f"imported: {wallet.name} @ {wallet.address}")
