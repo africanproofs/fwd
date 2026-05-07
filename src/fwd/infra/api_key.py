@@ -3,7 +3,9 @@
 Per docs/architecture.md § Caller authentication and decisions.md D8:
 caller bearer tokens are argon2id-hashed and prefix-indexed.
 
-Token format: `fwd_live_<43-char-base64url>` (252 bits of entropy).
+Token format: `fwd_live_<43-char-base64url>` (256 bits of entropy from
+32 random bytes via secrets.token_urlsafe(32); base64url has no padding
+so 32 bytes → exactly 43 chars).
 - Constant prefix `fwd_live_` (9 chars) — environment indicator.
 - 43-char random portion (base64url of 32 random bytes).
 - Total length: 52 chars.
@@ -14,10 +16,13 @@ Storage:
   `fwd_live_` part) — used as a SQL filter to narrow the verify
   scope to a single row in the common case.
 
-Phase 4 uses argon2-cffi defaults (memory=64MB, parallelism=2,
-iterations=3, hash_len=32). These are CPU-bound; expect ~50-100ms
-per verify on commodity hardware. Phase 7 may add a per-process
-verification cache.
+Phase 4 uses argon2-cffi PasswordHasher() defaults (as of argon2-cffi
+23.1.0: time_cost=3, memory_cost=65536 KiB, parallelism=4, hash_len=32,
+salt_len=16). These exceed OWASP 2024 minimum recommendations for
+argon2id (m=46 MiB t=1 p=1 OR m=19 MiB t=2 p=1). They are CPU-bound;
+expect ~50-100ms per verify on commodity hardware. Phase 7 may add a
+per-process verification cache. Closes v0.4.0a1 audit F5.2 (the prior
+comment said "252 bits" and "parallelism=2" — both wrong).
 """
 
 from __future__ import annotations

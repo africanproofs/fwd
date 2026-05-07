@@ -310,3 +310,125 @@ def _assert_no_32byte_state(signer: EnvelopeSigner) -> None:
                 f"hazard #1 violation: signer.{name!r} holds a 32-byte "
                 f"{type(value).__name__} ({len(value)} bytes)"
             )
+
+
+# --- architecture.md hazard #1, #2 enforcement for import_wallet ---------
+# Phase 4 added a third privkey path: EnvelopeSigner.import_wallet (D12,
+# operator-supplied privkey from a host file). The v0.3.2 hazard tests
+# covered create_wallet and sign_transaction; these add the matching
+# import_wallet coverage. Closes audit F1.1 (v0.4.0a1 audit).
+
+
+@pytest.mark.asyncio
+async def test_import_wallet_buffer_is_all_zero_after_zeroize() -> None:
+    """Hazard #2 contract for import_wallet's privkey buffer.
+
+    The bytearray supplied by the caller (app/wallet_import.py) is
+    zeroized in EnvelopeSigner.import_wallet's finally — the bytes
+    snapshot taken AFTER _zeroize must be all zeros.
+    """
+    from eth_account import Account
+
+    real = Account.create()
+    privkey_bytes = bytes(real.key)
+
+    vault = MagicMock()
+    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    repo = MagicMock()
+
+    async def _create(**kwargs: Any) -> Wallet:
+        return Wallet(
+            name=kwargs["name"],
+            address=kwargs["address"],
+            privkey_ciphertext=kwargs["privkey_ciphertext"],
+            vault_master_key=kwargs["vault_master_key"],
+            policy_path=kwargs["policy_path"],
+            created_at=datetime.now(UTC),
+        )
+
+    repo.create = _create
+
+    captured_post_zeroize: list[bytes] = []
+    real_zeroize = envelope_signer_module._zeroize
+
+    def spy_zeroize(buf: bytearray) -> None:
+        real_zeroize(buf)
+        captured_post_zeroize.append(bytes(buf))
+        assert isinstance(buf, bytearray), "hazard #2: buffer must be bytearray, not bytes"
+
+    privkey_buf = bytearray(privkey_bytes)
+    with patch.object(envelope_signer_module, "_zeroize", spy_zeroize):
+        signer = EnvelopeSigner(vault, repo)
+        await signer.import_wallet(name="iw", privkey_buf=privkey_buf, policy_path="p")
+
+    assert len(captured_post_zeroize) == 1, "_zeroize should fire exactly once per import_wallet"
+    assert captured_post_zeroize[0] == b"\x00" * 32
+
+
+@pytest.mark.asyncio
+async def test_import_wallet_buffer_zero_on_address_mismatch() -> None:
+    """Hazard #2 holds even when import_wallet raises WalletAddressMismatch.
+
+    The finally-block must fire. Verifies the buffer is zeroized even on
+    the user-error path.
+    """
+    from eth_account import Account
+
+    from fwd.infra.envelope_signer import WalletAddressMismatch
+
+    real = Account.create()
+    privkey_bytes = bytes(real.key)
+    wrong_address = "0x" + "00" * 20
+
+    vault = MagicMock()
+    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    repo = MagicMock()
+
+    captured_post_zeroize: list[bytes] = []
+    real_zeroize = envelope_signer_module._zeroize
+
+    def spy_zeroize(buf: bytearray) -> None:
+        real_zeroize(buf)
+        captured_post_zeroize.append(bytes(buf))
+
+    privkey_buf = bytearray(privkey_bytes)
+    with patch.object(envelope_signer_module, "_zeroize", spy_zeroize):
+        signer = EnvelopeSigner(vault, repo)
+        with pytest.raises(WalletAddressMismatch):
+            await signer.import_wallet(
+                name="iw",
+                privkey_buf=privkey_buf,
+                policy_path="p",
+                expected_address=wrong_address,
+            )
+
+    assert len(captured_post_zeroize) == 1, "_zeroize must fire on the raise path"
+    assert captured_post_zeroize[0] == b"\x00" * 32
+
+
+@pytest.mark.asyncio
+async def test_no_32byte_state_after_import_wallet() -> None:
+    """Hazard #1 contract after import_wallet."""
+    from eth_account import Account
+
+    real = Account.create()
+    vault = MagicMock()
+    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    repo = MagicMock()
+
+    async def _create(**kwargs: Any) -> Wallet:
+        return Wallet(
+            name=kwargs["name"],
+            address=kwargs["address"],
+            privkey_ciphertext=kwargs["privkey_ciphertext"],
+            vault_master_key=kwargs["vault_master_key"],
+            policy_path=kwargs["policy_path"],
+            created_at=datetime.now(UTC),
+        )
+
+    repo.create = _create
+
+    signer = EnvelopeSigner(vault, repo)
+    await signer.import_wallet(name="iw", privkey_buf=bytearray(bytes(real.key)), policy_path="p")
+
+    _assert_no_32byte_state(signer)

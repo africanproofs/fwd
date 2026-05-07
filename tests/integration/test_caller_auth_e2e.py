@@ -143,6 +143,11 @@ async def test_caller_create_resolve_and_sign_e2e(
             policy_path="integ-caller-policy",
         )
         await session.commit()
+        # Sanity: the persisted Caller carries the same hash + prefix we just
+        # generated. (Closes audit F6.1: this previously was an unused assignment.)
+        assert caller.name == "integ-caller-test"
+        assert caller.api_key_prefix == generated.key_prefix
+        assert caller.api_key_hash == generated.key_hash
 
         # 3. Resolve the caller from the bearer token via real argon2id verify.
         resolved = await resolve_caller(generated.key, caller_repo)

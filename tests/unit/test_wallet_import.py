@@ -131,3 +131,38 @@ async def test_happy_path_returns_wallet(tmp_path: pytest.TempPathFactory) -> No
     wallet = _dummy_wallet()
     result = await import_wallet(req, _mock_signer(wallet=wallet))
     assert result.name == "w1"
+
+
+# --- F1.2: missing `shred` is a hard failure, NOT a silent unlink fallback ---
+
+
+@pytest.mark.asyncio
+async def test_shred_missing_raises_shred_source_failed(
+    tmp_path: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per architecture.md § Wallet provisioning § Import: missing `shred`
+    must NOT silently fall through to plain `unlink()`. The wallet is
+    provisioned; the source file remains on disk; the CLI surfaces a
+    non-zero exit code via ShredSourceFailed.
+
+    Closes audit F1.2 (v0.4.0a1 audit).
+    """
+    from fwd.app.wallet_import import ShredSourceFailed
+
+    p = _write_privkey(tmp_path)
+    req = WalletImportRequest(
+        name="w-shred",
+        policy_path="policies/w.yaml",
+        privkey_file=p,
+        shred_source=True,
+    )
+    # Simulate `shred` not on PATH.
+    monkeypatch.setattr("fwd.app.wallet_import.shutil.which", lambda _: None)
+
+    with pytest.raises(ShredSourceFailed):
+        await import_wallet(req, _mock_signer())
+
+    # The source file MUST still exist (architecture.md doctrine: "the
+    # wallet is provisioned but the source file remains on disk for the
+    # operator to handle").
+    assert p.exists(), "shred fallback unlinked the file silently — F1.2 regression"

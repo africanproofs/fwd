@@ -185,12 +185,24 @@ async def import_wallet(request: WalletImportRequest, signer: EnvelopeSigner) ->
 def _shred_file(path: Path) -> None:
     """Run `shred -u <path>` (overwrites, then unlinks).
 
-    Falls back to `os.unlink` if shred is not on PATH (with a warning;
-    overwrite is best-effort on filesystems that don't support it).
+    Per architecture.md § Wallet provisioning § Import: "exit non-zero with
+    a warning if shred fails — the wallet is provisioned but the source
+    file remains on disk for the operator to handle." This means a missing
+    `shred` binary is a hard failure, NOT a silent fall-through to plain
+    `path.unlink()`. Plain unlink does NOT overwrite — recoverable on most
+    filesystems (especially copy-on-write) — and would silently violate the
+    operator's `--shred-source` contract.
+
+    Closes audit F1.2 (v0.4.0a1 audit). Caller (`import_wallet` use case)
+    catches the raised exception and translates to `ShredSourceFailed`,
+    which the CLI maps to a non-zero exit code with an explicit message;
+    the wallet is still persisted; the source file remains on disk.
     """
     if shutil.which("shred") is None:
-        path.unlink()
-        return
+        raise RuntimeError(
+            "shred command not found on PATH; source file remains on disk. "
+            "Install GNU coreutils (or comparable) and re-run; or shred manually."
+        )
     result = subprocess.run(
         ["shred", "-u", str(path)],
         capture_output=True,
