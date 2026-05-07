@@ -1,8 +1,8 @@
 """EnvelopeSigner — Vault-Transit envelope-encryption Signer implementation.
 
 Per architecture.md § Signing flow + § The signer interface:
-- Phase 3b ships address() and a generate_and_store() helper for wallet
-  creation; sign_transaction() raises NotImplementedError until Phase 3c.
+- Phase 3b ships address() and create_wallet() for wallet provisioning.
+- Phase 3c implements sign_transaction() (decrypt → sign → zeroize).
 
 The wallet-create flow is:
   1. Account.create() generates a fresh secp256k1 privkey.
@@ -22,8 +22,9 @@ from typing import TYPE_CHECKING, Any
 from eth_account import Account
 from eth_utils import to_checksum_address  # type: ignore[attr-defined]
 
+from fwd.domain.signer import SignedTransaction
+
 if TYPE_CHECKING:
-    from fwd.domain.signer import SignedTransaction
     from fwd.infra.vault_client import VaultClient
     from fwd.infra.wallet_repo import Wallet, WalletRepo
 
@@ -47,9 +48,35 @@ class EnvelopeSigner:
     async def sign_transaction(
         self, wallet_name: str, tx_dict: dict[str, Any]
     ) -> SignedTransaction:
-        # Phase 3c lands the real signing path (decrypt → sign → zeroize).
-        # The placeholder enforces "Phase 3b doesn't sign yet" at call time.
-        raise NotImplementedError("sign_transaction lands in Phase 3c (v0.3.0)")
+        """Sign an EIP-1559 transaction dict with the wallet's privkey.
+
+        Per architecture.md § Signing flow steps 9-12 + § Implementation hazards #2:
+          1. Fetch privkey_ciphertext from wallets table.
+          2. Vault decrypt -> bytes plaintext.
+          3. Wrap as bytearray (mutable -> in-place zeroize possible).
+          4. Account.from_key(bytes(buf)).sign_transaction(tx_dict).
+          5. Zeroize the bytearray in finally.
+
+        Caveat (architecture.md hazards #2): the bytes returned from
+        vault.decrypt() are immutable. Wrapping as bytearray creates a copy;
+        the original immutable bytes are subject to GC, not in-place
+        overwrite. Phase 10 with ctypes is the canonical fix. v1 accepts.
+        """
+        wallet = await self._repo.get_by_name(wallet_name)
+        assert wallet is not None  # raises WalletNotFoundError when missing_ok=False
+        plaintext_bytes = await self._vault.decrypt(wallet.privkey_ciphertext)
+        privkey_buf = bytearray(plaintext_bytes)
+        try:
+            signed = Account.from_key(bytes(privkey_buf)).sign_transaction(tx_dict)
+            return SignedTransaction(
+                raw_transaction=bytes(signed.raw_transaction),
+                hash=bytes(signed.hash),
+                r=int(signed.r),
+                s=int(signed.s),
+                v=int(signed.v),
+            )
+        finally:
+            _zeroize(privkey_buf)
 
     async def create_wallet(
         self,

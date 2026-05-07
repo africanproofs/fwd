@@ -1,15 +1,15 @@
 """FastAPI-style dependencies for the app layer.
 
-Composition lives here so that api/ can depend only on app/ (and domain/).
-The cm shape is a context manager that, when entered, yields a signer
-backed by a freshly-opened Vault session and SQLite session. Both are
-closed on exit.
+Composition lives here so api/ depends only on app/ (and domain/). Each
+dependency yields a context-manager that opens infra resources and
+closes them on exit.
 """
 from __future__ import annotations
 
 from fwd.app.wallet_create import VaultUnavailableError
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
+from fwd.infra.rpc import RpcManager
 from fwd.infra.vault_client import VaultClient, VaultError
 from fwd.infra.wallet_repo import WalletRepo
 
@@ -33,5 +33,20 @@ class SignerCM:
         await self._vault.__aexit__(exc_type, exc, tb)
 
 
+class RpcManagerCM:
+    """Async context manager. Yields an RpcManager; closes httpx pool on exit."""
+
+    async def __aenter__(self) -> RpcManager:
+        self._mgr = RpcManager()
+        return self._mgr
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._mgr.aclose()
+
+
 def get_signer() -> SignerCM:
     return SignerCM()
+
+
+def get_rpc_manager() -> RpcManagerCM:
+    return RpcManagerCM()

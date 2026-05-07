@@ -27,7 +27,13 @@ class Settings(BaseSettings):
     # State
     database_url: str = Field(default="sqlite+aiosqlite:////data/state.db")
 
-    # Admin auth (Phase 3b minimum; Phase 4 lands full caller auth)
+    # RPC URLs (Phase 3c). Defaults match .env.example public Flare endpoints.
+    # In production AP swaps these to ap-ftso-01 / ap-ftso-02 internal RPCs.
+    rpc_url_flare: str = Field(default="https://flare-api.flare.network/ext/C/rpc")
+    rpc_url_songbird: str = Field(default="https://songbird-api.flare.network/ext/C/rpc")
+    rpc_url_coston2: str = Field(default="https://coston2-api.flare.network/ext/C/rpc")
+
+    # Admin auth
     fwd_admin_key: str = Field(default="")
 
     # Logging
