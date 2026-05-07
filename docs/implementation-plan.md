@@ -248,6 +248,7 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 3a-doc | 0.3.0a5 | Shipped 2026-05-02 (Doctrine: enforced hand-off demarcation in canonical prompts — bold marker + fenced block, no exceptions) |
 | 3b | 0.3.0a6 | Shipped 2026-05-02 (Phase 3b — wallet provisioning: VaultClient, EnvelopeSigner, WalletRepo, POST /v1/admin/wallets, clifwd wallets create, admin auth middleware, Alembic 0002) |
 | 3c | 0.3.0 | Shipped 2026-05-07 (Phase 3c — sign-and-send GA: RpcClient, EnvelopeSigner.sign_transaction, POST /v1/sign-and-send, hardcoded chain allowlist) |
+| 3-gate | 0.3.1 | Shipped 2026-05-07 (Reviewer-only — Phase 3 verification gate met live: Coston2 tx 0x8ab03b3d... mined block 30251692, from = 0x33191597... matches wallet — full custody chain proven on-chain) |
 | 3 | 0.3.0 | Signing core |
 | 4 | 0.4.0-alpha | Auth |
 | 5 | 0.4.0 | State + nonces |
