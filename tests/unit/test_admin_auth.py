@@ -7,6 +7,7 @@ Covers:
 - 503 when FWD_ADMIN_KEY is empty.
 - 200 when correct token.
 """
+
 from __future__ import annotations
 
 import pytest  # noqa: TC002

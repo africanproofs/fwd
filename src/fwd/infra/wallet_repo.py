@@ -4,6 +4,7 @@ Schema mirrors architecture.md § SQLite schema:
   wallets(name PK, address, privkey_ciphertext, vault_master_key,
           policy_path, created_at)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

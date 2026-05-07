@@ -10,6 +10,7 @@ The test:
   6. Decrypts the ciphertext via VaultClient.decrypt, asserts result is 32 bytes.
   7. Re-derives the address from the decrypted privkey, asserts it matches step 4.
 """
+
 from __future__ import annotations
 
 import os
@@ -29,9 +30,13 @@ from tests.conftest import needs_vault
 
 @needs_vault
 @pytest.mark.asyncio
-async def test_create_then_decrypt_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_then_decrypt_roundtrip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     if not os.environ.get("FWD_VAULT_ROLE_ID") or not os.environ.get("FWD_VAULT_SECRET_ID"):
-        pytest.skip("FWD_VAULT_ROLE_ID/FWD_VAULT_SECRET_ID not in env (run inside compose or set manually)")
+        pytest.skip(
+            "FWD_VAULT_ROLE_ID/FWD_VAULT_SECRET_ID not in env (run inside compose or set manually)"
+        )
 
     # Vault is on fwd-internal only (not published to host). Running from the
     # host requires VAULT_ADDR pointing at a published port. If unreachable,

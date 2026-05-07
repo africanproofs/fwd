@@ -15,6 +15,7 @@ The wallet-create flow is:
 The cardinal rule: the privkey lives in process memory only between
 steps 1 and 5. No instance attribute holds plaintext past return.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

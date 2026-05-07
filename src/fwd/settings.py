@@ -8,6 +8,7 @@ Per architecture.md § Layer boundaries, settings is infra-layer-adjacent
 layer reads from it. The convention: domain code never imports settings;
 infra/, app/, api/, cli/ may.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache

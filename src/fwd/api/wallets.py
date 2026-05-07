@@ -3,6 +3,7 @@
 Per architecture.md § Wallet provisioning (create flow) + decisions.md D9.
 Phase 3b: create only; list/import/delete are Phase 4+.
 """
+
 from __future__ import annotations
 
 import re

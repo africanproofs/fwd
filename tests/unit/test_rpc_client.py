@@ -1,4 +1,5 @@
 """RpcClient unit tests with httpx.MockTransport."""
+
 from __future__ import annotations
 
 import httpx
@@ -63,10 +64,14 @@ async def test_jsonrpc_error_response(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_rpc_urls(monkeypatch)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={
-            "jsonrpc": "2.0", "id": 1,
-            "error": {"code": -32000, "message": "execution reverted"},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {"code": -32000, "message": "execution reverted"},
+            },
+        )
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = RpcClient(114, "http://coston2", http)
@@ -97,10 +102,14 @@ async def test_send_raw_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
         body = request.read()
         # Sanity: request body should contain the hex of our raw bytes.
         assert b"0x020102" in body
-        return httpx.Response(200, json={
-            "jsonrpc": "2.0", "id": 1,
-            "result": "0x" + "ab" * 32,
-        })
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x" + "ab" * 32,
+            },
+        )
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = RpcClient(114, "http://coston2", http)

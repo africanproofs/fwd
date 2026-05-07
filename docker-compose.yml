@@ -34,6 +34,23 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: fwd
+    cap_add:
+      # Per Core invariant #1 + #16: fwd's process memory must be lockable
+      # against swap so plaintext privkeys (briefly held during signing) are
+      # not paged to disk. fwd's mlockall() at startup requires either
+      # CAP_IPC_LOCK in the effective capability set OR a sufficient
+      # RLIMIT_MEMLOCK. Limits documented honestly in CLAUDE.md Core invariant #1.
+      - IPC_LOCK
+    # The container runs as non-root user `fwd` (uid 1000) per Dockerfile
+    # `USER fwd` — capabilities granted via cap_add land in the bounding set
+    # but NOT in the effective set for non-root processes. The mlockall call
+    # therefore relies on RLIMIT_MEMLOCK = unlimited rather than CAP_IPC_LOCK.
+    # cap_add is kept for defense-in-depth (a future root entrypoint could
+    # use it; ambient-capabilities scenarios benefit).
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     depends_on:
       vault:
         condition: service_started

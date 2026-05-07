@@ -4,6 +4,7 @@ Composition lives here so api/ depends only on app/ (and domain/). Each
 dependency yields a context-manager that opens infra resources and
 closes them on exit.
 """
+
 from __future__ import annotations
 
 from fwd.app.wallet_create import VaultUnavailableError

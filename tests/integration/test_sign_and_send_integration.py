@@ -10,6 +10,7 @@ Verifies:
   the mock RPC.
 - The signed tx recovers to the wallet's address.
 """
+
 from __future__ import annotations
 
 import json as _json
@@ -38,35 +39,47 @@ def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-u
         rpc_call = _json.loads(body)
         method = rpc_call["method"]
         if method == "eth_chainId":
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(chain_id)
-            })
+            return httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(chain_id)}
+            )
         if method == "eth_getTransactionCount":
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(nonce)
-            })
+            return httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(nonce)}
+            )
         if method == "eth_feeHistory":
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": rpc_call["id"],
-                "result": {
-                    "baseFeePerGas": [hex(1_000_000_000)] * 6,
-                    "gasUsedRatio": [0.5] * 5,
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": rpc_call["id"],
+                    "result": {
+                        "baseFeePerGas": [hex(1_000_000_000)] * 6,
+                        "gasUsedRatio": [0.5] * 5,
+                    },
                 },
-            })
+            )
         if method == "eth_estimateGas":
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(21000)
-            })
+            return httpx.Response(
+                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(21000)}
+            )
         if method == "eth_sendRawTransaction":
             captured["raw_tx_hex"] = rpc_call["params"][0]
-            return httpx.Response(200, json={
-                "jsonrpc": "2.0", "id": rpc_call["id"],
-                "result": "0x" + "ab" * 32,
-            })
-        return httpx.Response(500, json={
-            "jsonrpc": "2.0", "id": rpc_call["id"],
-            "error": {"code": -32601, "message": "not handled"},
-        })
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": rpc_call["id"],
+                    "result": "0x" + "ab" * 32,
+                },
+            )
+        return httpx.Response(
+            500,
+            json={
+                "jsonrpc": "2.0",
+                "id": rpc_call["id"],
+                "error": {"code": -32601, "message": "not handled"},
+            },
+        )
 
     return handler, captured
 

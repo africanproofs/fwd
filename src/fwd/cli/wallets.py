@@ -7,6 +7,7 @@ The CLI is an HTTP client (mirrors the `clifwd health` pattern). It does
 NOT instantiate Vault/SQLite directly — that would mean the daemon isn't
 the single owner of state.
 """
+
 from __future__ import annotations
 
 import os
@@ -19,8 +20,12 @@ app = typer.Typer(name="wallets", help="Manage fwd-custodied wallets.")
 
 @app.command()
 def create(
-    name: str = typer.Option(..., "--name", help="Unique wallet name (e.g. 'register-coston2-test')."),
-    policy: str = typer.Option(..., "--policy", help="policy_path that maps to permissions in policy.yaml."),
+    name: str = typer.Option(
+        ..., "--name", help="Unique wallet name (e.g. 'register-coston2-test')."
+    ),
+    policy: str = typer.Option(
+        ..., "--policy", help="policy_path that maps to permissions in policy.yaml."
+    ),
 ) -> None:
     """Create a fresh wallet by calling POST /v1/admin/wallets."""
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")

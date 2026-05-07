@@ -8,6 +8,7 @@ Phase 4 will replace this with the full caller-auth machinery from
 architecture.md § Caller authentication. The dependency name stays
 require_admin so consumers don't churn.
 """
+
 from __future__ import annotations
 
 import hmac
@@ -29,7 +30,7 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "unauthorized", "message": "missing bearer token"},
         )
-    presented = authorization[len("bearer "):].strip()
+    presented = authorization[len("bearer ") :].strip()
     if not hmac.compare_digest(presented, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -123,19 +123,25 @@ This is the cost of collapsing the Vault/fwd process boundary that v0.1.0 origin
 
 ---
 
-### A5. Vault is compromised directly
+### A5. Vault is compromised directly (or AppRole credentials leak)
 
-**How.** Vulnerability in Vault itself, or compromise of the AppRole credentials `fwd` uses to authenticate to Vault.
+**How.** Vulnerability in Vault itself, or compromise of the AppRole credentials (`FWD_VAULT_ROLE_ID` + `FWD_VAULT_SECRET_ID`) `fwd` uses to authenticate to Vault.
 
-**What the attacker gets.** Same as A4 — they can sign with the keys (within `fwd`'s Vault policy), but cannot extract them. With Vault root token they could rotate or delete keys, but the root token is revoked after init (Phase 3 gate).
+**What the attacker gets.** **Under v0.1.2's envelope-encryption design, this is materially as severe as A4.** The `fwd-app` Vault policy grants `transit/decrypt/fwd-master` (see `config/vault/policies/fwd-app.hcl`). An attacker with `fwd`'s AppRole credentials AND access to the SQLite `wallets.privkey_ciphertext` rows can:
+- Authenticate to Vault as `fwd` (legitimately, via AppRole login).
+- Issue arbitrary `transit/decrypt/fwd-master` calls, recovering ALL wallet plaintext keys.
+- Exfiltrate plaintext privkeys offline.
+
+This was incorrectly described in v0.1.0 as "can sign but cannot extract" — that was true under the originally-intended Vault Transit signing design (Path 1), where Vault held opaque keys and `fwd` only had `transit/sign/*`. Under the v0.1.2 pivot to envelope encryption (Path 2), the attacker has the same decrypt capability `fwd` itself has. With Vault root token they could additionally rotate the master key (which would invalidate every wallet ciphertext) or delete keys; the root token is revoked after init (Phase 3 gate).
 
 **Mitigations in place.**
 - Root token revoked after Vault init; ongoing access via scoped policies only.
-- Vault listens only on `fwd-internal` Docker network; not reachable from host or external.
-- Vault's audit device logs every operation.
+- Vault listens only on `fwd-internal` Docker network (`internal: true`); not reachable from host or external.
+- AppRole credentials live in `.env` (mode 0600, gitignored, populated only on the host running `fwd`).
+- Vault's audit device logs every operation; sustained `transit/decrypt` abuse becomes visible in Vault audit independently of `fwd`'s audit log.
 - Pinned Vault version; security advisory subscription for HashiCorp Vault.
 
-**Residual risk.** Bounded — extraction blocked, abuse possible, abuse visible.
+**Residual risk.** Equivalent to A4 in attacker capability (key extraction possible). Distinct in detection surface: AppRole credential leak without `fwd` process compromise leaves `fwd`'s own audit log unwritten — Vault audit is the only forensic trail. AppRole secret_id rotation runbook lands at Phase 8 (per `decisions.md` D10). Phase 10 YubiHSM 2 closes the extraction path by moving signing into the chip; AppRole compromise then degrades to "abuse signing during access window" rather than "exfiltrate keys."
 
 ---
 
@@ -252,11 +258,12 @@ This is the cost of collapsing the Vault/fwd process boundary that v0.1.0 origin
 | Threat | Today (`.env`) | After `fwd` v1 | After `fwd` + YubiHSM 2 |
 |---|---|---|---|
 | Caller compromise | **Total loss** | Bounded by per-caller policy | Bounded by per-caller policy |
-| Host root compromise | Total loss | Keys recoverable from Vault memory | Keys cannot be extracted; signing can be abused while attacker has access |
+| Host root compromise | Total loss | Plaintext recoverable from `fwd` process memory during signing operation; ciphertexts decryptable via running `fwd`'s AppRole token | Keys cannot be extracted; signing can be abused while attacker has access |
 | Disk theft (sealed) | Total loss | Encrypted, useless | Encrypted, useless |
 | Backup theft | Total loss | Encrypted, useless | Encrypted, useless |
 | Single share or location stolen | Total loss | Below threshold, useless | Below threshold, useless |
-| `fwd` process compromise | N/A | Keys cannot be extracted; signing can be abused until detected | Same |
+| `fwd` process compromise | N/A | **All wallet keys decryptable via `transit/decrypt/fwd-master` (per A4); attacker can exfiltrate plaintext** — Vault audit makes bulk decryption visible | Keys cannot be extracted; signing can be abused while compromise persists |
+| AppRole credential leak (`FWD_VAULT_ROLE_ID` + `FWD_VAULT_SECRET_ID`) + SQLite ciphertext access | N/A | **Equivalent to fwd process compromise — all wallet keys decryptable** (per A5) | Keys cannot be extracted; signing can be abused during access window |
 | Supply-chain | Total loss | Bounded by Vault-side audit | Same |
 | Physical | Total loss | Encrypted at rest; in-memory if running | Keys never in host memory |
 

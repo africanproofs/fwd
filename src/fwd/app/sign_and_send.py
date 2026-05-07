@@ -18,6 +18,7 @@ Phase 3c does NOT include:
 - Receipt watcher / replacement-on-stuck (Phase 5)
 - Idempotency-Key handling (Phase 5)
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,9 +42,9 @@ logger = structlog.get_logger(__name__)
 class SignAndSendRequest:
     wallet: str
     chain: int
-    to: str           # 0x-prefixed 20-byte hex
-    value_wei: str    # decimal string (no SQLite uint256 in 3c, but stay consistent)
-    data: str         # 0x-prefixed even-length hex (or "0x" for empty)
+    to: str  # 0x-prefixed 20-byte hex
+    value_wei: str  # decimal string (no SQLite uint256 in 3c, but stay consistent)
+    data: str  # 0x-prefixed even-length hex (or "0x" for empty)
     gas: int | None = None  # optional override; otherwise estimate_gas + 25% buffer
 
 

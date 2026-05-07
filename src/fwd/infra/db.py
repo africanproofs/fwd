@@ -5,6 +5,7 @@ Per architecture.md § SQLite schema, fwd applies these PRAGMAs at startup:
 
 Phase 3b applies them via the connection-event handler below.
 """
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager

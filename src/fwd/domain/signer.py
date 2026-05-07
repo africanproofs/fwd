@@ -8,6 +8,7 @@ plugs in via the same protocol.
 Phase 3b ships address() and a placeholder sign_transaction() that raises
 NotImplementedError. Phase 3c implements sign_transaction.
 """
+
 from __future__ import annotations
 
 from typing import Any, NamedTuple, Protocol

@@ -4,6 +4,7 @@ Coordinates between the EnvelopeSigner (which holds the create_wallet
 flow) and the structlog audit. Phase 7 will add the hash-chained
 audit-log row here; for Phase 3b, just structlog.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,18 +41,14 @@ class VaultUnavailableError(Exception):
     """503-equivalent. Wraps infra VaultError for the api layer."""
 
 
-async def create_wallet(
-    request: WalletCreateRequest, signer: EnvelopeSigner
-) -> WalletCreateResult:
+async def create_wallet(request: WalletCreateRequest, signer: EnvelopeSigner) -> WalletCreateResult:
     """Run the wallet-create use case.
 
     Translates infra exceptions into app-layer exceptions. The api/ layer
     catches WalletNameTaken (→ 409) and VaultUnavailableError (→ 503).
     """
     try:
-        wallet = await signer.create_wallet(
-            name=request.name, policy_path=request.policy_path
-        )
+        wallet = await signer.create_wallet(name=request.name, policy_path=request.policy_path)
     except WalletExistsError as exc:
         logger.info("wallet.create.exists", name=request.name)
         raise WalletNameTaken(request.name) from exc

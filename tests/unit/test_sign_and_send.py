@@ -1,4 +1,5 @@
 """sign_and_send use case unit tests with mocked signer + rpc."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -36,16 +37,25 @@ def _request(**kwargs: Any) -> SignAndSendRequest:
 def _signer(address: str = "0xabc", signed_raw: bytes = b"\x02\x00\x01") -> MagicMock:
     s = MagicMock()
     s.address = AsyncMock(return_value=address)
-    s.sign_transaction = AsyncMock(return_value=SignedTransaction(
-        raw_transaction=signed_raw,
-        hash=b"\x00" * 32,
-        r=1, s=2, v=27,
-    ))
+    s.sign_transaction = AsyncMock(
+        return_value=SignedTransaction(
+            raw_transaction=signed_raw,
+            hash=b"\x00" * 32,
+            r=1,
+            s=2,
+            v=27,
+        )
+    )
     return s
 
 
-def _rpc(chain_id: int = 114, nonce: int = 0, base_fee: int = 1_000_000_000,
-         gas_estimate: int = 21000, tx_hash: str = "0x" + "de" * 32) -> MagicMock:
+def _rpc(
+    chain_id: int = 114,
+    nonce: int = 0,
+    base_fee: int = 1_000_000_000,
+    gas_estimate: int = 21000,
+    tx_hash: str = "0x" + "de" * 32,
+) -> MagicMock:
     r = MagicMock()
     r.chain_id = chain_id
     r.verify_chain_id = AsyncMock(return_value=chain_id)

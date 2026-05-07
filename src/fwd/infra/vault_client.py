@@ -12,6 +12,7 @@ Public surface used by EnvelopeSigner:
 
 Both wrap httpx errors and Vault errors into VaultError.
 """
+
 from __future__ import annotations
 
 import base64
@@ -101,9 +102,7 @@ class VaultClient:
         except httpx.HTTPError as exc:
             raise VaultError(f"vault unreachable: {exc}") from exc
         if r.status_code != 200:
-            raise VaultError(
-                f"approle login failed: {r.status_code} {r.text[:200]}"
-            )
+            raise VaultError(f"approle login failed: {r.status_code} {r.text[:200]}")
         try:
             self._token = r.json()["auth"]["client_token"]
         except (KeyError, ValueError) as exc:
@@ -144,7 +143,5 @@ class VaultClient:
                 raise VaultError(f"vault {method} {path}: 403 after reauth")
 
         if r.status_code >= 400:
-            raise VaultError(
-                f"vault {method} {path}: {r.status_code} {r.text[:200]}"
-            )
+            raise VaultError(f"vault {method} {path}: {r.status_code} {r.text[:200]}")
         return r

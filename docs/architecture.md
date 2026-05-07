@@ -646,22 +646,22 @@ Phase 2's scaffold pins this layout in `pyproject.toml` and adds `tests/unit/tes
 
 ## Implementation hazards (v0.1.2 envelope encryption)
 
-Three implementation patterns specific to the v0.1.2 envelope-encryption signing flow. Each is enforced by code or test in Phase 3+; this section documents them so the patterns are visible during Phase 2's scaffold and Phase 3's signing-core development.
+Three implementation patterns specific to the v0.1.2 envelope-encryption signing flow. Each is enforced by code or test as of v0.3.2 (Phase 3 GA + audit corrections); this section documents the invariants and points to the enforcing code/test.
 
 ### 1. No plaintext caching between requests
 
 Core invariant #16 (decrypt-on-demand, zeroize-on-completion) forbids caching plaintext private keys in process-wide state between signing operations. Every `/v1/sign-and-send` decrypts → signs → zeroizes, even if the same wallet was used 10 milliseconds ago.
 
-**Enforcement in Phase 3+:** a unit test asserts `EnvelopeSigner` has no instance-level state holding plaintext bytes. Specifically: after each `sign_transaction` call, an introspection check confirms no attribute on the signer instance is a `bytes` or `bytearray` of length 32.
+**Enforced by:** `tests/unit/test_envelope_signer.py::test_no_32byte_state_after_create_wallet` and `::test_no_32byte_state_after_sign_transaction` (added in v0.3.2). Each test runs the relevant operation, then walks `signer.__dict__` and fails on any attribute that is a `bytes`/`bytearray` of length 32.
 
 **Why this matters:** an attacker who compromises `fwd` with a cache present can dump every cached privkey in one shot; without a cache, they must wait for and intercept a signing event per wallet — an attack that is detectable in Vault's audit log as a burst of `transit/decrypt` calls.
 
 ### 2. `bytearray`, not `bytes`, for privkey buffers
 
-Python's `bytes` is immutable: you cannot zeroize it. The signing flow must use `bytearray` from the moment the privkey enters the process to the moment it's overwritten:
+Python's `bytes` is immutable: you cannot zeroize it. The signing flow uses `bytearray` from the moment the privkey enters the process to the moment it's overwritten:
 
 ```python
-# CORRECT
+# CORRECT (the pattern used in src/fwd/infra/envelope_signer.py)
 privkey = bytearray(base64.b64decode(plaintext))   # mutable
 ... sign with bytes(privkey) ...                   # cast for the API call only
 for i in range(len(privkey)):
@@ -673,17 +673,21 @@ privkey = base64.b64decode(plaintext)              # immutable bytes; cannot be 
 del privkey                                        # garbage; the underlying buffer may persist
 ```
 
-The v0.2.0 spike's `zeroize()` helper (preserved verbatim in `docs/history/0.2.0-spike-coston2.md`) is the canonical pattern. Phase 3's `EnvelopeSigner` must copy this discipline.
+The v0.2.0 spike's `zeroize()` helper (preserved verbatim in `docs/history/0.2.0-spike-coston2.md`) is the canonical pattern; `src/fwd/infra/envelope_signer.py::_zeroize` is its production form.
 
-**Enforcement in Phase 3+:** a unit test confirms the post-zeroize buffer contains only zeros AND that `type(buf) is bytearray` (not `bytes`).
+**Enforced by:** `tests/unit/test_envelope_signer.py::test_zeroize_overwrites_bytearray_in_place` (direct test of `_zeroize`), `::test_create_wallet_buffer_is_all_zero_after_zeroize`, and `::test_sign_transaction_buffer_is_all_zero_after_zeroize` (spy-patched `_zeroize` snapshots the buffer state after the in-place overwrite; assertion is `bytes(buf) == b"\x00" * 32` AND `isinstance(buf, bytearray)`). Added in v0.3.2.
 
-**Caveat:** Python's GC may have already copied the bytes object internally before it was wrapped in `bytearray()`. This is a best-effort mitigation, not a hard guarantee. True zero-copy privkey handling requires a C extension or `ctypes`-based memory pinning; that complexity is acceptable in Phase 10 hardening, not Phase 3.
+**Caveat:** Python's GC may have already copied the bytes object internally before it was wrapped in `bytearray()`. This is a best-effort mitigation, not a hard guarantee. True zero-copy privkey handling requires a C extension or `ctypes`-based memory pinning; that complexity is acceptable in Phase 10 hardening, not v1.
 
 ### 3. Structlog scrubber redacts hex-shaped 32-byte values
 
 The most severe disclosure path under v0.1.2 is a logged privkey — accidental `logger.exception()` inside the signing critical section, or a `repr()` on a stack frame containing the privkey buffer, leaks forever (log files get backed up, shipped to centralized stores, indexed by misconfigured log collectors).
 
-**Enforcement in Phase 3+:** the structlog configuration must include a custom processor that filters any string value matching `^(0x)?[0-9a-fA-F]{64}$` regardless of field name, replacing it with `<redacted-32-byte-hex>`. Plus a test that constructs a synthetic privkey, runs a synthetic signing flow that intentionally raises an exception inside the signing critical section, and grep's the captured log output for any 32-byte hex pattern matching the privkey. The grep must return zero matches.
+**Enforced by:** `src/fwd/main.py::_scrub_hex_secrets` (a structlog processor inserted before `JSONRenderer` in the processor chain) plus `tests/unit/test_log_scrubber.py` (10 tests: redacts unknown fields, passes whitelisted public fields, handles uppercase/mixed case, rejects shorter/longer hex). Added in v0.3.2.
+
+The scrubber is **field-aware**: a 32-byte hex string in a known-public field (`tx_hash`, `block_hash`, `transactionHash`, `blockHash`, `stateRoot`, `transactionsRoot`, `receiptsRoot`, `parentHash`, `mixHash`) passes through; in any other field, it is replaced with `<redacted-32-byte-hex>`. The whitelist is in `src/fwd/main.py::_PUBLIC_HEX_FIELDS`. Phase 7 may extend the whitelist for ABI-decoded values; the scrubber's contract (field-aware redaction) does not change.
+
+**Why field-aware:** naïvely redacting every 32-byte hex string would also redact transaction hashes, breaking operational debugging (operators rely on tx hashes to follow request chains). The whitelist preserves the operational signal while still catching the catastrophic leak class.
 
 **Why this matters:** every other anti-pattern leaves recoverable state. A logged privkey is a permanent leak.
 

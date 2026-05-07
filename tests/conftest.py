@@ -4,6 +4,7 @@ The integration test (test_wallet_create_integration.py) consumes Vault
 + SQLite fixtures from here. Unit tests (everything else under tests/)
 do not touch this file.
 """
+
 from __future__ import annotations
 
 import os
@@ -36,6 +37,7 @@ def tmp_state_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # Reset the lru_cache'd settings + engine so the new DATABASE_URL takes effect.
     from fwd import settings as settings_mod
     from fwd.infra import db as db_mod
+
     settings_mod.get_settings.cache_clear()
     db_mod.get_engine.cache_clear()
     db_mod._session_factory.cache_clear()

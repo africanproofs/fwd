@@ -12,6 +12,7 @@ Public surface:
 - RpcClient — per-chain RPC handle. Constructed via RpcManager.for_chain().
 - RpcManager — owns the httpx pool, lazily caches RpcClient per chain_id.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -101,8 +102,7 @@ class RpcClient:
         if "error" in data:
             err = data["error"]
             raise RpcError(
-                f"rpc {self._chain_id} {method}: "
-                f"{err.get('code')} {err.get('message', '')}"
+                f"rpc {self._chain_id} {method}: " f"{err.get('code')} {err.get('message', '')}"
             )
         if "result" not in data:
             raise RpcError(f"rpc {self._chain_id} {method}: no 'result' field")
@@ -127,9 +127,7 @@ class RpcClient:
         return int(result, 16)
 
     async def fee_history(self, blocks: int = 5) -> dict[str, Any]:
-        result = await self.call(
-            "eth_feeHistory", [hex(blocks), "pending", []]
-        )
+        result = await self.call("eth_feeHistory", [hex(blocks), "pending", []])
         return dict(result)
 
     async def estimate_gas(self, tx: dict[str, Any]) -> int:

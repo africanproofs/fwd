@@ -8,6 +8,7 @@ Verifies:
 - VaultError when role_id/secret_id are empty
 - httpx.HTTPError mapping to VaultError
 """
+
 from __future__ import annotations
 
 import base64
@@ -34,7 +35,9 @@ async def test_login_then_encrypt(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(f"{request.method} {request.url.path}")
         if request.url.path == "/v1/auth/approle/login":
-            return httpx.Response(200, json={"auth": {"client_token": "tok-1", "lease_duration": 3600}})
+            return httpx.Response(
+                200, json={"auth": {"client_token": "tok-1", "lease_duration": 3600}}
+            )
         if request.url.path == "/v1/transit/encrypt/fwd-master":
             return httpx.Response(200, json={"data": {"ciphertext": "vault:v1:abc"}})
         return httpx.Response(500)
@@ -58,7 +61,9 @@ async def test_403_triggers_reauth_and_retry(monkeypatch: pytest.MonkeyPatch) ->
         nonlocal encrypt_count, login_count
         if request.url.path == "/v1/auth/approle/login":
             login_count += 1
-            return httpx.Response(200, json={"auth": {"client_token": f"tok-{login_count}", "lease_duration": 3600}})
+            return httpx.Response(
+                200, json={"auth": {"client_token": f"tok-{login_count}", "lease_duration": 3600}}
+            )
         if request.url.path == "/v1/transit/encrypt/fwd-master":
             encrypt_count += 1
             if encrypt_count == 1:
@@ -81,7 +86,9 @@ async def test_second_403_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/auth/approle/login":
-            return httpx.Response(200, json={"auth": {"client_token": "tok", "lease_duration": 3600}})
+            return httpx.Response(
+                200, json={"auth": {"client_token": "tok", "lease_duration": 3600}}
+            )
         return httpx.Response(403, json={"errors": ["permission denied"]})
 
     transport = httpx.MockTransport(handler)
@@ -98,7 +105,9 @@ async def test_decrypt_happy(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/auth/approle/login":
-            return httpx.Response(200, json={"auth": {"client_token": "tok", "lease_duration": 3600}})
+            return httpx.Response(
+                200, json={"auth": {"client_token": "tok", "lease_duration": 3600}}
+            )
         if request.url.path == "/v1/transit/decrypt/fwd-master":
             return httpx.Response(200, json={"data": {"plaintext": plaintext_b64}})
         return httpx.Response(500)

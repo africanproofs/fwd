@@ -4,6 +4,7 @@ Per architecture.md § API surface + § Signing flow.
 v0.3.0 hardcoded allowlist: Coston2 (chain_id=114) only. Phase 7 lifts
 with policy.yaml.
 """
+
 from __future__ import annotations
 
 import re

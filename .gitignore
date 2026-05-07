@@ -38,3 +38,7 @@ secrets/
 scratch/
 config/policy.yaml
 config/callers.yaml
+# Dev Vault unseal output (Core invariant #17 dev shortcut).
+# These hold all 5 unseal shares + root token. NEVER commit.
+vault-init-output.json
+.fwd-dev/

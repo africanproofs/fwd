@@ -1,6 +1,7 @@
 """WalletRepo unit tests against an in-memory SQLite (file-based via tmp dir
 for the foreign-keys PRAGMA + WAL journal_mode to take effect).
 """
+
 from __future__ import annotations
 
 import pytest
