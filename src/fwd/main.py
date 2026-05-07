@@ -5,8 +5,8 @@ The uvicorn entry is `fwd.main:app`. Lives at the top level of the package
 correctly skips it — the FastAPI app instance composes routers from the
 api/ layer but is itself an ASGI runtime artifact, not a layer member.
 
-Phase 2 wires only the /healthz endpoint. Phase 3 adds /v1/sign-and-send
-and re-enables /docs and /redoc once there is a meaningful API surface.
+Phase 2 wires only the /healthz endpoint. Phase 3b adds /v1/admin/wallets.
+Phase 3c adds /v1/sign-and-send.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import structlog
 from fastapi import FastAPI
 
 from fwd.api.health import router as health_router
+from fwd.api.wallets import router as wallets_router
 from fwd.version import __version__
 
 
@@ -60,3 +61,4 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(wallets_router)

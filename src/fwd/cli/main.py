@@ -1,7 +1,7 @@
 """clifwd — Flare Wallet Daemon CLI.
 
-Phase 2: only `version` and `health`. Phase 4 adds `callers` and `wallets`
-subcommands per decisions.md D9.
+Phase 2: only `version` and `health`. Phase 3b adds `wallets create`;
+Phase 4 adds `callers` and `wallets import/list` per decisions.md D9.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import os
 import httpx
 import typer
 
+from fwd.cli.wallets import app as wallets_app
 from fwd.version import __version__
 
 app = typer.Typer(
@@ -18,6 +19,8 @@ app = typer.Typer(
     help="fwd — Flare Wallet Daemon CLI (pronounced 'Clifford').",
     no_args_is_help=True,
 )
+
+app.add_typer(wallets_app, name="wallets")
 
 
 @app.command()

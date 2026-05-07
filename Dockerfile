@@ -42,8 +42,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=build /usr/local/bin /usr/local/bin
 COPY --from=build /build/src /app/src
+COPY alembic.ini /app/alembic.ini
+COPY alembic/ /app/alembic/
 
 ENV PYTHONPATH=/app/src
+
+RUN mkdir -p /data && chown fwd:fwd /data
 
 WORKDIR /app
 USER fwd
@@ -53,4 +57,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
-CMD ["uvicorn", "fwd.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn fwd.main:app --host 0.0.0.0 --port 8080"]
