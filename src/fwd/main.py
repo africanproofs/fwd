@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 from fwd.api.callers import router as callers_router
 from fwd.api.health import router as health_router
 from fwd.api.sign import router as sign_router
+from fwd.api.transactions import router as transactions_router
 from fwd.api.wallets import router as wallets_router
 from fwd.version import __version__
 
@@ -190,3 +191,4 @@ app.include_router(health_router)
 app.include_router(wallets_router)
 app.include_router(sign_router)
 app.include_router(callers_router)
+app.include_router(transactions_router)

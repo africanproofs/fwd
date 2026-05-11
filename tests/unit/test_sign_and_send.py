@@ -1,7 +1,8 @@
-"""sign_and_send use case unit tests with mocked signer + rpc."""
+"""sign_and_send use case unit tests with mocked signer + rpc + tx_repo."""
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -24,6 +25,7 @@ from fwd.infra.wallet_repo import WalletNotFoundError
 def _request(**kwargs: Any) -> SignAndSendRequest:
     defaults = {
         "wallet": "test-wallet",
+        "caller": "test-caller",
         "chain": 114,
         "to": "0x" + "11" * 20,
         "value_wei": "0",
@@ -66,12 +68,19 @@ def _rpc(
     return r
 
 
+def _tx_repo() -> MagicMock:
+    r = MagicMock()
+    r.create = AsyncMock(return_value=MagicMock())
+    r.add_hash = AsyncMock(return_value=MagicMock())
+    return r
+
+
 @pytest.mark.asyncio
 async def test_happy_path() -> None:
     request = _request()
     signer = _signer()
     rpc = _rpc(nonce=42, tx_hash="0x" + "ab" * 32)
-    result = await sign_and_send(request, signer, rpc)
+    result = await sign_and_send(request, signer, rpc, _tx_repo())
     assert result.hash == "0x" + "ab" * 32
     assert result.nonce == 42
     signer.address.assert_awaited_once_with("test-wallet")
@@ -83,7 +92,7 @@ async def test_happy_path() -> None:
 async def test_chain_not_allowed_in_v030() -> None:
     request = _request(chain=14)  # Flare
     with pytest.raises(ChainNotAllowed):
-        await sign_and_send(request, _signer(), _rpc())
+        await sign_and_send(request, _signer(), _rpc(), _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -91,7 +100,7 @@ async def test_wallet_not_found() -> None:
     signer = _signer()
     signer.address = AsyncMock(side_effect=WalletNotFoundError("no-such"))
     with pytest.raises(WalletNotFound):
-        await sign_and_send(_request(), signer, _rpc())
+        await sign_and_send(_request(), signer, _rpc(), _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -99,7 +108,7 @@ async def test_rpc_unreachable_on_chain_id() -> None:
     rpc = _rpc()
     rpc.verify_chain_id = AsyncMock(side_effect=RpcUnavailable("conn refused"))
     with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc)
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -107,7 +116,7 @@ async def test_rpc_unreachable_on_broadcast() -> None:
     rpc = _rpc()
     rpc.send_raw_transaction = AsyncMock(side_effect=RpcUnavailable("timeout"))
     with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc)
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -115,7 +124,7 @@ async def test_vault_failure_during_sign() -> None:
     signer = _signer()
     signer.sign_transaction = AsyncMock(side_effect=VaultError("decrypt failed"))
     with pytest.raises(VaultUnavailableError):
-        await sign_and_send(_request(), signer, _rpc())
+        await sign_and_send(_request(), signer, _rpc(), _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -123,7 +132,7 @@ async def test_estimate_gas_when_not_provided() -> None:
     request = _request(gas=None)
     rpc = _rpc(gas_estimate=50_000)
     signer = _signer()
-    await sign_and_send(request, signer, rpc)
+    await sign_and_send(request, signer, rpc, _tx_repo())
     rpc.estimate_gas.assert_awaited_once()
     # tx_dict passed to sign_transaction had gas = int(50_000 * 1.25) = 62_500
     args, _ = signer.sign_transaction.await_args
@@ -136,7 +145,7 @@ async def test_explicit_gas_skips_estimate() -> None:
     request = _request(gas=200_000)
     rpc = _rpc()
     signer = _signer()
-    await sign_and_send(request, signer, rpc)
+    await sign_and_send(request, signer, rpc, _tx_repo())
     rpc.estimate_gas.assert_not_awaited()
     args, _ = signer.sign_transaction.await_args
     _, tx_dict = args
@@ -148,7 +157,7 @@ async def test_malformed_fee_history() -> None:
     rpc = _rpc()
     rpc.fee_history = AsyncMock(return_value={"baseFeePerGas": []})  # empty list
     with pytest.raises(RpcUnreachable, match="unexpected eth_feeHistory"):
-        await sign_and_send(_request(), _signer(), rpc)
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo())
 
 
 @pytest.mark.asyncio
@@ -157,7 +166,7 @@ async def test_tx_dict_shape() -> None:
     request = _request(value_wei="100", data="0xabcd")
     rpc = _rpc(nonce=7, base_fee=2_000_000_000)
     signer = _signer()
-    await sign_and_send(request, signer, rpc)
+    await sign_and_send(request, signer, rpc, _tx_repo())
     args, _ = signer.sign_transaction.await_args
     _, tx_dict = args
     assert tx_dict["type"] == 2
@@ -169,3 +178,33 @@ async def test_tx_dict_shape() -> None:
     # max_fee = 2e9 * 2 + 1e9 (tip) = 5e9
     assert tx_dict["maxFeePerGas"] == 5_000_000_000
     assert tx_dict["maxPriorityFeePerGas"] == 1_000_000_000
+
+
+@pytest.mark.asyncio
+async def test_sign_and_send_persists_transaction_row() -> None:
+    """tx_repo.create is called once after broadcast with the right shape."""
+    tx_repo = _tx_repo()
+    request = _request(data="0xabcdef01aabbccdd")  # 8-byte data → method_name = "0xabcdef01"
+    await sign_and_send(request, _signer(), _rpc(), tx_repo)
+
+    tx_repo.create.assert_awaited_once()
+    _, kwargs = tx_repo.create.call_args
+    assert kwargs["status"] == "submitted"
+    assert kwargs["caller"] == "test-caller"
+    assert kwargs["method_name"] == "0xabcdef01"
+    assert kwargs["signed_raw"] is not None
+    assert kwargs["wallet"] == "test-wallet"
+    assert kwargs["chain"] == 114
+
+    tx_repo.add_hash.assert_awaited_once()
+    _, hash_kwargs = tx_repo.add_hash.call_args
+    assert hash_kwargs["sequence_num"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sign_and_send_returns_tx_id_in_result() -> None:
+    """result.tx_id is a valid UUIDv7 string."""
+    result = await sign_and_send(_request(), _signer(), _rpc(), _tx_repo())
+    assert len(result.tx_id) == 36
+    parsed = uuid.UUID(result.tx_id)
+    assert parsed.version == 7

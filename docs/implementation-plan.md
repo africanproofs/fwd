@@ -253,8 +253,11 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 3-pre4-doc | 0.3.3 | Shipped 2026-05-07 (Reviewer-only — pre-Phase-4 doctrine: D11 admin/caller auth bright line, D12 CLI in-process import pattern, D13 caller-keyed policy with wallet-level Phase-7 hooks; closes audit F2.4, F3.2, F7.4) |
 | 4 | 0.4.0a1 | Shipped 2026-05-07 (Phase 4 — caller authentication: argon2id API keys, callers table + Alembic 0003, api/caller_auth.py D11-isolated, POST/DELETE/GET /v1/admin/callers, clifwd callers create/list/revoke, clifwd wallets import + list stub, /v1/sign-and-send → caller_required, 115 unit tests) |
 | 4-corrections | 0.4.0a2 | Shipped 2026-05-07 (Reviewer-only — v0.4.0a1 audit corrections: F6.1 ruff F841 lint fix, F1.2 shred-missing fail-loud, F1.1 import_wallet hazard #1/#2 tests, F5.2 stale comments in api_key.py + admin_auth.py, F5.1 v0.4.0a1 history doc addendum; 12 findings deferred per Core invariant #18) |
-| 5 | 0.4.0 | State + nonces |
-| 5 | 0.4.0 | State + nonces |
+| 5a3 | 0.4.0a3 | Shipped 2026-05-11 (Phase 5 alpha 1 — state schema + transaction persistence: Alembic 0004 (wallet_chains + nonces + transactions + transaction_args + transaction_hashes + audit_log + 5 indexes), TransactionRepo, UUIDv7 helper, F8.1 caller as explicit input to sign-and-send, GET /v1/transactions/{tx_id} (caller-gated, 404 cross-caller), 18 new tests) |
+| 5a4 | 0.4.0a4 | Phase 5 alpha 2 — nonce manager: infra/nonce_repo.py with BEGIN IMMEDIATE reservation, sign-and-send refactored to reserve-then-broadcast, 10-concurrent verification gate |
+| 5a5 | 0.4.0a5 | Phase 5 alpha 3 — receipt watcher + replacement-on-stuck: app/receipt_watcher.py asyncio task, status transitions submitted→mined/failed, replacement with tip × 1.125 capped at 5 retries |
+| 5a6 | 0.4.0a6 | Phase 5 alpha 4 — admin wallet inventory + CLI tests: GET /v1/admin/wallets (closes F7.2 + clifwd wallets list stub), F6.3 CLI test coverage |
+| 5 | 0.4.0 | Phase 5 GA — live Coston2 verification gate (10-concurrent + low-gas replacement) |
 | 6 | 0.4.x | Backup + restore |
 | 7 | 0.5.0 | Policy + audit |
 | 8 | 1.0.0 | First production migration |

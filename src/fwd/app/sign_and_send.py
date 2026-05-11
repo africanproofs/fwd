@@ -9,31 +9,42 @@ Per architecture.md § Signing flow:
   6. Build EIP-1559 tx_dict.
   7. Sign in-process (signer.sign_transaction).
   8. Broadcast (rpc.send_raw_transaction).
-  9. Return tx hash + nonce.
+  9. Persist transaction row + hash (tx_repo.create + add_hash).
+  10. Return tx_id + tx hash + nonce.
 
 Phase 3c does NOT include:
 - Policy evaluation (Phase 7)
 - Hash-chained audit row (Phase 7; we structlog only)
-- BEGIN IMMEDIATE nonce serialization (Phase 5; race condition exists)
-- Receipt watcher / replacement-on-stuck (Phase 5)
-- Idempotency-Key handling (Phase 5)
+- BEGIN IMMEDIATE nonce serialization (Phase 5a4; race condition exists)
+- Receipt watcher / replacement-on-stuck (Phase 5a5)
+- Idempotency-Key handling (Phase 5a5 or Phase 7)
+
+v0.4.0a3 adds:
+- caller: str field on SignAndSendRequest (F8.1 — explicit, not via request.state).
+- tx_id: str field on SignAndSendResult.
+- tx_repo: TransactionRepo as 4th positional arg.
+- Transaction row + hash persisted after successful broadcast.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
 
 from fwd.infra.rpc import ALLOWED_CHAINS as ALLOWED_CHAINS
 from fwd.infra.rpc import RpcError, RpcUnavailable
+from fwd.infra.uuidv7 import uuid7_str
 from fwd.infra.vault_client import VaultError
 from fwd.infra.wallet_repo import WalletNotFoundError
 
 if TYPE_CHECKING:
     from fwd.infra.envelope_signer import EnvelopeSigner
     from fwd.infra.rpc import RpcClient
+    from fwd.infra.transaction_repo import TransactionRepo
 
 logger = structlog.get_logger(__name__)
 
@@ -41,6 +52,7 @@ logger = structlog.get_logger(__name__)
 @dataclass(frozen=True)
 class SignAndSendRequest:
     wallet: str
+    caller: str  # F8.1: explicit caller identity, not from request.state
     chain: int
     to: str  # 0x-prefixed 20-byte hex
     value_wei: str  # decimal string (no SQLite uint256 in 3c, but stay consistent)
@@ -50,6 +62,7 @@ class SignAndSendRequest:
 
 @dataclass(frozen=True)
 class SignAndSendResult:
+    tx_id: str
     hash: str
     nonce: int
 
@@ -88,7 +101,12 @@ async def sign_and_send(
     request: SignAndSendRequest,
     signer: EnvelopeSigner,
     rpc: RpcClient,
+    tx_repo: TransactionRepo,
 ) -> SignAndSendResult:
+    # Defense-in-depth: caller must be a non-empty string <= 64 chars.
+    if not request.caller or len(request.caller) > 64:
+        raise ValueError("caller must be a non-empty string with len <= 64")
+
     if request.chain not in ALLOWED_CHAINS:
         raise ChainNotAllowed(
             f"chain_id={request.chain} not in v0.3.0 allowlist; "
@@ -159,6 +177,42 @@ async def sign_and_send(
     except (RpcUnavailable, RpcError) as exc:
         raise RpcUnreachable(str(exc)) from exc
 
+    # 9. Persist transaction row + hash.
+    # DB write is after broadcast: if broadcast succeeds but DB write fails,
+    # we have an on-chain tx with no DB row. Accepted in a3; a4 rearranges
+    # to nonce-reserve-then-broadcast to eliminate this window.
+    tx_id = uuid7_str()
+    contract_address = request.to
+    method_name = request.data[:10] if len(request.data) >= 10 else request.data
+    request_json = json.dumps(
+        {
+            "wallet": request.wallet,
+            "chain": request.chain,
+            "to": request.to,
+            "value_wei": request.value_wei,
+            "data": request.data,
+            "gas": request.gas,
+        },
+        sort_keys=True,
+    )
+    signed_raw_hex = "0x" + signed.raw_transaction.hex()
+
+    await tx_repo.create(
+        tx_id=tx_id,
+        wallet=request.wallet,
+        chain=request.chain,
+        caller=request.caller,
+        nonce=nonce,
+        contract_address=contract_address,
+        method_name=method_name,
+        value_wei=request.value_wei,
+        request_json=request_json,
+        signed_raw=signed_raw_hex,
+        status="submitted",
+        submitted_at=datetime.now(UTC),
+    )
+    await tx_repo.add_hash(tx_id, tx_hash, sequence_num=1)
+
     # Per architecture.md hazards #3: log only non-secret fields.
     # NEVER log signed.raw_transaction, plaintext privkeys, or wallet
     # ciphertexts. tx_hash, nonce, addresses, and gas params are public.
@@ -172,6 +226,8 @@ async def sign_and_send(
         gas=gas,
         max_fee_per_gas=max_fee,
         tx_hash=tx_hash,
+        tx_id=tx_id,
+        caller=request.caller,
     )
 
-    return SignAndSendResult(hash=tx_hash, nonce=nonce)
+    return SignAndSendResult(tx_id=tx_id, hash=tx_hash, nonce=nonce)

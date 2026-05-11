@@ -13,6 +13,7 @@ from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.rpc import RpcManager
+from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.vault_client import VaultClient, VaultError
 from fwd.infra.wallet_repo import WalletRepo
 
@@ -69,3 +70,19 @@ class CallerRepoCM:
 
 def get_caller_repo() -> CallerRepoCM:
     return CallerRepoCM()
+
+
+class TransactionRepoCM:
+    """Async context manager. Yields a TransactionRepo backed by a session."""
+
+    async def __aenter__(self) -> TransactionRepo:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return TransactionRepo(self._session)
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_transaction_repo() -> TransactionRepoCM:
+    return TransactionRepoCM()

@@ -8,16 +8,20 @@ with policy.yaml.
 from __future__ import annotations
 
 import re
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
-from fwd.api.caller_auth import caller_required
+from fwd.api.caller_auth import require_caller
 from fwd.app.dependencies import (
+    Caller,
     RpcManagerCM,
     SignerCM,
+    TransactionRepoCM,
     get_rpc_manager,
     get_signer,
+    get_transaction_repo,
 )
 from fwd.app.sign_and_send import (
     ALLOWED_CHAINS,
@@ -70,6 +74,7 @@ class SignAndSendBody(BaseModel):
 
 
 class SignAndSendResponse(BaseModel):
+    tx_id: str
     hash: str
     nonce: int
 
@@ -78,12 +83,13 @@ class SignAndSendResponse(BaseModel):
     "/v1/sign-and-send",
     response_model=SignAndSendResponse,
     status_code=status.HTTP_200_OK,
-    dependencies=[caller_required],
 )
 async def post_sign_and_send(
     body: SignAndSendBody,
+    caller: Annotated[Caller, Depends(require_caller)],
     signer_cm: SignerCM = Depends(get_signer),  # noqa: B008
     rpc_cm: RpcManagerCM = Depends(get_rpc_manager),  # noqa: B008
+    tx_repo_cm: TransactionRepoCM = Depends(get_transaction_repo),  # noqa: B008
 ) -> SignAndSendResponse:
     if body.chain not in ALLOWED_CHAINS:
         raise HTTPException(
@@ -95,6 +101,7 @@ async def post_sign_and_send(
         )
     request = SignAndSendRequest(
         wallet=body.wallet,
+        caller=caller.name,
         chain=body.chain,
         to=body.to,
         value_wei=body.value_wei,
@@ -102,9 +109,9 @@ async def post_sign_and_send(
         gas=body.gas,
     )
     try:
-        async with signer_cm as signer, rpc_cm as rpc_mgr:
+        async with signer_cm as signer, rpc_cm as rpc_mgr, tx_repo_cm as tx_repo:
             rpc = rpc_mgr.for_chain(body.chain)
-            result = await sign_and_send(request, signer, rpc)
+            result = await sign_and_send(request, signer, rpc, tx_repo)
     except ChainNotAllowed as exc:
         raise HTTPException(
             status_code=400,
@@ -126,4 +133,4 @@ async def post_sign_and_send(
             detail={"error": "rpc_unreachable", "message": str(exc)},
         ) from exc
 
-    return SignAndSendResponse(hash=result.hash, nonce=result.nonce)
+    return SignAndSendResponse(tx_id=result.tx_id, hash=result.hash, nonce=result.nonce)
