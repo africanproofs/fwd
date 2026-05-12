@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # Logging
     fwd_log_level: str = Field(default="INFO")
 
+    # Receipt watcher (v0.4.0a6). Gated by fwd_watcher_disabled so tests can
+    # exercise the rest of the app without the background task running.
+    fwd_watcher_disabled: bool = Field(default=False)
+    fwd_watcher_poll_interval_sec: float = Field(default=2.0, ge=0.1)
+    fwd_watcher_stuck_threshold_sec: float = Field(default=30.0, ge=1.0)
+    fwd_watcher_max_retries: int = Field(default=5, ge=1, le=20)
+    fwd_watcher_tip_multiplier: float = Field(default=1.125, gt=1.0, le=2.0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -220,6 +220,40 @@ class TransactionRepo:
             for row in result
         ]
 
+    async def list_by_status(self, status: str) -> list[Transaction]:
+        """Return all transactions with the given status, ordered by created_at.
+
+        Used by the receipt watcher (v0.4.0a6) to enumerate pending
+        ('submitted') txs each tick.
+        """
+        assert status in _VALID_STATUSES, f"invalid status: {status}"
+        result = await self._session.execute(
+            select(transactions)
+            .where(transactions.c.status == status)
+            .order_by(transactions.c.created_at)
+        )
+        return [
+            Transaction(
+                tx_id=row.tx_id,
+                wallet=row.wallet,
+                chain=row.chain,
+                caller=row.caller,
+                nonce=row.nonce,
+                contract_address=row.contract_address,
+                method_name=row.method_name,
+                value_wei=row.value_wei,
+                idempotency_key=row.idempotency_key,
+                request_json=row.request_json,
+                signed_raw=row.signed_raw,
+                status=row.status,
+                submitted_at=row.submitted_at,
+                confirmed_at=row.confirmed_at,
+                receipt_json=row.receipt_json,
+                created_at=row.created_at,
+            )
+            for row in result
+        ]
+
     async def update_status(
         self,
         tx_id: str,
@@ -227,6 +261,8 @@ class TransactionRepo:
         *,
         confirmed_at: datetime | None = None,
         receipt_json: str | None = None,
+        signed_raw: str | None = None,
+        submitted_at: datetime | None = None,
     ) -> None:
         assert status in _VALID_STATUSES, f"invalid status: {status}"
         values: dict[str, object] = {"status": status}
@@ -234,6 +270,10 @@ class TransactionRepo:
             values["confirmed_at"] = confirmed_at
         if receipt_json is not None:
             values["receipt_json"] = receipt_json
+        if signed_raw is not None:
+            values["signed_raw"] = signed_raw
+        if submitted_at is not None:
+            values["submitted_at"] = submitted_at
         await self._session.execute(
             update(transactions).where(transactions.c.tx_id == tx_id).values(**values)
         )

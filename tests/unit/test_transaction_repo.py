@@ -151,3 +151,61 @@ async def test_update_status_changes_status_and_confirmed_at(session: AsyncSessi
     assert tx.status == "mined"
     assert tx.confirmed_at is not None
     assert tx.receipt_json == '{"status":"0x1"}'
+
+
+@pytest.mark.asyncio
+async def test_list_by_status_returns_only_matching(session: AsyncSession) -> None:
+    """Three txs with statuses [submitted, mined, submitted]; list_by_status
+    returns the two submitted, ordered by created_at."""
+    repo = TransactionRepo(session)
+    await repo.create(**_tx_kwargs("uuid-status-01", status="submitted"))
+    await session.commit()
+    await repo.create(**_tx_kwargs("uuid-status-02", status="submitted"))
+    await session.commit()
+    await repo.create(**_tx_kwargs("uuid-status-03", status="submitted"))
+    await session.commit()
+    # Demote one to mined to confirm filter.
+    await repo.update_status("uuid-status-02", "mined", confirmed_at=datetime.now(UTC))
+    await session.commit()
+
+    submitted = await repo.list_by_status("submitted")
+    ids = [t.tx_id for t in submitted]
+    assert set(ids) == {"uuid-status-01", "uuid-status-03"}
+
+    mined = await repo.list_by_status("mined")
+    assert [t.tx_id for t in mined] == ["uuid-status-02"]
+
+
+@pytest.mark.asyncio
+async def test_update_status_with_signed_raw_persists(session: AsyncSession) -> None:
+    repo = TransactionRepo(session)
+    await repo.create(**_tx_kwargs("uuid-signed-01"))
+    await session.commit()
+    await repo.update_status(
+        "uuid-signed-01",
+        "submitted",
+        signed_raw="0x" + "ab" * 4,
+    )
+    await session.commit()
+    tx = await repo.get_by_id("uuid-signed-01")
+    assert tx.signed_raw == "0x" + "ab" * 4
+    assert tx.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_update_status_with_submitted_at_persists(session: AsyncSession) -> None:
+    repo = TransactionRepo(session)
+    await repo.create(**_tx_kwargs("uuid-resubmit-01"))
+    await session.commit()
+    new_submitted = datetime(2026, 5, 12, 10, 30, 45, tzinfo=UTC)
+    await repo.update_status(
+        "uuid-resubmit-01",
+        "submitted",
+        submitted_at=new_submitted,
+    )
+    await session.commit()
+    tx = await repo.get_by_id("uuid-resubmit-01")
+    # SQLite's DateTime column drops tzinfo on round-trip; compare naive.
+    assert tx.submitted_at is not None
+    assert tx.submitted_at.replace(tzinfo=None) == new_submitted.replace(tzinfo=None)
+    assert tx.status == "submitted"

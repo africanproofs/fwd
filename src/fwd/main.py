@@ -14,6 +14,8 @@ v0.3.2 adds:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import ctypes
 import ctypes.util
 import logging
@@ -33,6 +35,8 @@ from fwd.api.health import router as health_router
 from fwd.api.sign import router as sign_router
 from fwd.api.transactions import router as transactions_router
 from fwd.api.wallets import router as wallets_router
+from fwd.app.receipt_watcher import WatcherConfig, watch_receipts
+from fwd.settings import get_settings
 from fwd.version import __version__
 
 # --- structlog scrubber (architecture.md § Implementation hazards #3) -----
@@ -184,7 +188,7 @@ async def _startup_reconcile() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """ASGI lifespan: lock process memory and reconcile nonces at startup.
+    """ASGI lifespan: lock process memory, reconcile nonces, run receipt watcher.
 
     Runs when uvicorn boots the app, NOT when pytest imports `fwd.main`
     without context-managing TestClient. This means tests that do
@@ -194,12 +198,38 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     CAP_IPC_LOCK; gate via env when needed.
 
     Production: docker-compose.yml grants CAP_IPC_LOCK; FWD_DISABLE_MLOCK
-    is unset; mlockall + reconcile fire.
+    is unset; mlockall + reconcile + receipt watcher fire.
+
+    The receipt watcher is gated independently by FWD_WATCHER_DISABLED so
+    integration tests can exercise the rest of the app without the
+    background task polling. On shutdown the watcher task is cancelled
+    and awaited; CancelledError is absorbed here.
     """
     if os.environ.get("FWD_DISABLE_MLOCK") != "1":
         _mlockall()
         await _startup_reconcile()
+
+    watcher_task: asyncio.Task[None] | None = None
+    s = get_settings()
+    if not s.fwd_watcher_disabled:
+        watcher_task = asyncio.create_task(
+            watch_receipts(
+                WatcherConfig(
+                    poll_interval_sec=s.fwd_watcher_poll_interval_sec,
+                    stuck_threshold_sec=s.fwd_watcher_stuck_threshold_sec,
+                    max_retries=s.fwd_watcher_max_retries,
+                    tip_multiplier=s.fwd_watcher_tip_multiplier,
+                    enabled=True,
+                )
+            )
+        )
+
     yield
+
+    if watcher_task is not None:
+        watcher_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher_task
 
 
 app = FastAPI(

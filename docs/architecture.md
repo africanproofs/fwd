@@ -181,7 +181,7 @@ The `/v1/sign-and-send` happy path:
 
 16. Receipt watcher (asyncio task, runs every block):
     - Poll eth_getTransactionReceipt for each pending tx
-    - On confirmation: status='confirmed', release nonce
+    - On confirmation: status='mined', call nonce_repo.mark_confirmed(wallet, chain, nonce)
     - On stuck (N blocks elapsed): replace with bumped tip,
       append a new row to transaction_hashes (tx_id, sequence_num=N+1, hash_hex), audit row
     - On final failure (5 retries): status='failed', surface alert
