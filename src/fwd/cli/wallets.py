@@ -70,19 +70,40 @@ def create(
 
 @app.command(name="list")
 def list_command() -> None:
-    """List wallets (admin-only HTTP).
+    """List all wallets fwd custodies (admin-only HTTP).
 
-    NOTE: the caller-facing GET /v1/wallets endpoint is Phase 7+; this
-    is the admin-side equivalent. Phase 4 does NOT add a caller-facing
-    list endpoint because it requires policy.yaml's wallet_allowlist.
-    GET /v1/admin/wallets is not yet implemented in the API; this command
-    is a placeholder that informs the operator.
+    NOTE: the caller-facing GET /v1/wallets endpoint is Phase 7+ (needs
+    policy.yaml's wallet_allowlist). This is the admin-side equivalent;
+    requires FWD_ADMIN_KEY in env.
     """
-    typer.echo(
-        "clifwd wallets list: GET /v1/admin/wallets not yet implemented (Phase 5+).",
-        err=True,
-    )
-    raise typer.Exit(code=1)
+    url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
+    admin = os.environ.get("FWD_ADMIN_KEY", "")
+    if not admin:
+        typer.echo("FWD_ADMIN_KEY env var not set", err=True)
+        raise typer.Exit(code=2)
+    try:
+        r = httpx.get(
+            f"{url}/v1/admin/wallets",
+            headers={"Authorization": f"Bearer {admin}"},
+            timeout=10.0,
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        typer.echo(f"unreachable: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if r.status_code != 200:
+        typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
+        raise typer.Exit(code=1)
+
+    body = r.json()
+    if not body["wallets"]:
+        typer.echo("(no wallets)", err=True)
+        return
+
+    typer.echo(f"{'name':<32}  {'address':<44}  policy_path")
+    typer.echo(f"{'-' * 32}  {'-' * 44}  {'-' * 32}")
+    for w in body["wallets"]:
+        typer.echo(f"{w['name']:<32}  {w['address']:<44}  {w['policy_path']}")
 
 
 @app.command(name="import")

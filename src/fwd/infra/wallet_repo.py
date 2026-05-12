@@ -99,3 +99,22 @@ class WalletRepo:
             policy_path=row.policy_path,
             created_at=row.created_at,
         )
+
+    async def list_all(self) -> list[Wallet]:
+        """Return every wallet ordered by created_at (oldest first).
+
+        Admin-only consumer (GET /v1/admin/wallets). Caller-facing
+        endpoints (Phase 7) will filter by policy.yaml's wallet_allowlist.
+        """
+        result = await self._session.execute(select(wallets).order_by(wallets.c.created_at))
+        return [
+            Wallet(
+                name=row.name,
+                address=row.address,
+                privkey_ciphertext=row.privkey_ciphertext,
+                vault_master_key=row.vault_master_key,
+                policy_path=row.policy_path,
+                created_at=row.created_at,
+            )
+            for row in result
+        ]

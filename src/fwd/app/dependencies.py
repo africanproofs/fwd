@@ -103,3 +103,24 @@ class NonceRepoCM:
 
 def get_nonce_repo() -> NonceRepoCM:
     return NonceRepoCM()
+
+
+class WalletRepoCM:
+    """Async context manager. Yields a WalletRepo backed by a session.
+
+    Used by the admin GET /v1/admin/wallets endpoint. SignerCM still owns
+    its own WalletRepo for the signing path; this CM is dedicated to
+    read-only admin listing.
+    """
+
+    async def __aenter__(self) -> WalletRepo:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return WalletRepo(self._session)
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_wallet_repo() -> WalletRepoCM:
+    return WalletRepoCM()

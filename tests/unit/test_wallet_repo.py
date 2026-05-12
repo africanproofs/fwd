@@ -78,3 +78,58 @@ async def test_get_missing_ok(session: AsyncSession) -> None:
     repo = WalletRepo(session)
     got = await repo.get_by_name("none", missing_ok=True)
     assert got is None
+
+
+@pytest.mark.asyncio
+async def test_list_all_returns_all_wallets_ordered_by_created_at(
+    session: AsyncSession,
+) -> None:
+    """Insert 3 wallets at distinct times; list_all returns all 3 in
+    creation order (oldest first)."""
+    import asyncio
+
+    repo = WalletRepo(session)
+    await repo.create(
+        name="w-alpha",
+        address="0x" + "0a" * 20,
+        privkey_ciphertext="vault:v1:alpha",
+        vault_master_key="fwd-master",
+        policy_path="p1",
+    )
+    await session.commit()
+    # Tiny sleep ensures distinct created_at timestamps (datetime.now(UTC)
+    # has microsecond resolution; sqlite truncates).
+    await asyncio.sleep(0.01)
+    await repo.create(
+        name="w-beta",
+        address="0x" + "0b" * 20,
+        privkey_ciphertext="vault:v1:beta",
+        vault_master_key="fwd-master",
+        policy_path="p2",
+    )
+    await session.commit()
+    await asyncio.sleep(0.01)
+    await repo.create(
+        name="w-gamma",
+        address="0x" + "0c" * 20,
+        privkey_ciphertext="vault:v1:gamma",
+        vault_master_key="fwd-master",
+        policy_path="p3",
+    )
+    await session.commit()
+
+    rows = await repo.list_all()
+    assert [w.name for w in rows] == ["w-alpha", "w-beta", "w-gamma"]
+    # All summary fields present and full ciphertext returned at repo layer
+    # (the API layer is responsible for stripping ciphertext + vault_master_key
+    # from the public response).
+    for w in rows:
+        assert w.privkey_ciphertext.startswith("vault:v1:")
+        assert w.vault_master_key == "fwd-master"
+
+
+@pytest.mark.asyncio
+async def test_list_all_empty(session: AsyncSession) -> None:
+    repo = WalletRepo(session)
+    rows = await repo.list_all()
+    assert rows == []

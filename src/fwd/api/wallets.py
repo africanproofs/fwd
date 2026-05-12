@@ -1,24 +1,31 @@
-"""POST /v1/admin/wallets — admin-only wallet provisioning.
+"""POST / GET /v1/admin/wallets -- admin-only wallet provisioning + inventory.
 
 Per architecture.md § Wallet provisioning (create flow) + decisions.md D9.
-Phase 3b: create only; list/import/delete are Phase 4+.
+Phase 3b shipped POST. v0.4.0a7 (this ship) adds GET to close audit
+deferral F7.2: admin operators must be able to enumerate every wallet
+fwd custodies.
+
+GET response is public-safe -- NEVER includes privkey_ciphertext or
+vault_master_key. Only name, address, policy_path, created_at.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from fwd.api.admin_auth import admin_required
-from fwd.app.dependencies import SignerCM, get_signer
+from fwd.app.dependencies import SignerCM, WalletRepoCM, get_signer, get_wallet_repo
 from fwd.app.wallet_create import (
     VaultUnavailableError,
     WalletCreateRequest,
     WalletNameTaken,
     create_wallet,
 )
+from fwd.app.wallet_list import list_wallets
 
 router = APIRouter()
 
@@ -33,6 +40,21 @@ class CreateWalletBody(BaseModel):
 class CreateWalletResponse(BaseModel):
     name: str
     address: str
+
+
+class WalletSummary(BaseModel):
+    """Listing model. Public-safe -- NEVER includes privkey_ciphertext or
+    vault_master_key. Those are internal-only; leaking them defeats the
+    Vault Transit envelope-encryption custody property (Core invariant #1)."""
+
+    name: str
+    address: str
+    policy_path: str
+    created_at: str  # ISO-8601
+
+
+class ListWalletsResponse(BaseModel):
+    wallets: list[WalletSummary]
 
 
 @router.post(
@@ -72,3 +94,26 @@ async def post_wallets(
         ) from exc
 
     return CreateWalletResponse(name=result.name, address=result.address)
+
+
+@router.get(
+    "/v1/admin/wallets",
+    response_model=ListWalletsResponse,
+    dependencies=[admin_required],
+)
+async def list_wallets_endpoint(
+    wallet_repo_cm: Annotated[WalletRepoCM, Depends(get_wallet_repo)],
+) -> ListWalletsResponse:
+    async with wallet_repo_cm as repo:
+        items = await list_wallets(repo)
+    return ListWalletsResponse(
+        wallets=[
+            WalletSummary(
+                name=w.name,
+                address=w.address,
+                policy_path=w.policy_path,
+                created_at=w.created_at.isoformat(),
+            )
+            for w in items
+        ]
+    )
