@@ -12,6 +12,7 @@ from fwd.infra.caller_repo import Caller as Caller  # re-export for api/caller_a
 from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
+from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.rpc import RpcManager
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.vault_client import VaultClient, VaultError
@@ -86,3 +87,19 @@ class TransactionRepoCM:
 
 def get_transaction_repo() -> TransactionRepoCM:
     return TransactionRepoCM()
+
+
+class NonceRepoCM:
+    """Async context manager. Yields a NonceRepo backed by a session."""
+
+    async def __aenter__(self) -> NonceRepo:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return NonceRepo(self._session)
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_nonce_repo() -> NonceRepoCM:
+    return NonceRepoCM()

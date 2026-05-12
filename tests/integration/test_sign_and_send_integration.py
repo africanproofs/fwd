@@ -28,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from fwd import settings as settings_mod
 from fwd.app.sign_and_send import SignAndSendRequest, sign_and_send
 from fwd.infra.envelope_signer import EnvelopeSigner
+from fwd.infra.nonce_repo import NonceRepo
+from fwd.infra.nonce_repo import metadata as nonces_metadata
 from fwd.infra.rpc import RpcClient
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as tx_metadata
@@ -105,6 +107,7 @@ async def test_sign_and_send_real_vault_mock_rpc(
     engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
     async with engine.begin() as conn:
         await conn.run_sync(wallets_metadata.create_all)
+        await conn.run_sync(nonces_metadata.create_all)
         await conn.run_sync(tx_metadata.create_all)
 
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
@@ -114,6 +117,7 @@ async def test_sign_and_send_real_vault_mock_rpc(
         repo = WalletRepo(session)
         signer = EnvelopeSigner(vault, repo)
         tx_repo = TransactionRepo(session)
+        nonce_repo = NonceRepo(session)
 
         # 1. Create a wallet against real Vault.
         wallet = await signer.create_wallet(name="integ-sign-test", policy_path="integ-sign")
@@ -132,7 +136,7 @@ async def test_sign_and_send_real_vault_mock_rpc(
             data="0x",
             gas=21000,
         )
-        result = await sign_and_send(request, signer, rpc, tx_repo)
+        result = await sign_and_send(request, signer, rpc, tx_repo, nonce_repo)
 
         assert result.hash == "0x" + "ab" * 32
         assert result.nonce == 0

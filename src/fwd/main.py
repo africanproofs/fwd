@@ -159,9 +159,32 @@ def _mlockall() -> None:
         )
 
 
+async def _startup_reconcile() -> None:
+    """Best-effort startup nonce reconciliation.
+
+    Compares DB next_nonce to chain transaction count for each (wallet, chain)
+    and logs drift. Never raises — fwd boots even if RPC is degraded.
+    The receipt watcher (v0.4.0a6) will retry continuously.
+    """
+    from fwd.app.dependencies import RpcManagerCM
+    from fwd.app.nonce_reconcile import reconcile_all
+    from fwd.infra.db import session_scope
+    from fwd.infra.nonce_repo import NonceRepo
+    from fwd.infra.wallet_repo import WalletRepo
+
+    try:
+        async with session_scope() as session, RpcManagerCM() as rpc_mgr:
+            await reconcile_all(NonceRepo(session), WalletRepo(session), rpc_mgr)
+    except Exception as exc:
+        structlog.get_logger(__name__).warning(
+            "lifespan.reconcile_failed",
+            error=str(exc),
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """ASGI lifespan: lock process memory at startup.
+    """ASGI lifespan: lock process memory and reconcile nonces at startup.
 
     Runs when uvicorn boots the app, NOT when pytest imports `fwd.main`
     without context-managing TestClient. This means tests that do
@@ -171,10 +194,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     CAP_IPC_LOCK; gate via env when needed.
 
     Production: docker-compose.yml grants CAP_IPC_LOCK; FWD_DISABLE_MLOCK
-    is unset; mlockall fires.
+    is unset; mlockall + reconcile fire.
     """
     if os.environ.get("FWD_DISABLE_MLOCK") != "1":
         _mlockall()
+        await _startup_reconcile()
     yield
 
 

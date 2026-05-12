@@ -121,10 +121,20 @@ The `/v1/sign-and-send` happy path:
 
 6.  fwd reserves nonce
     BEGIN IMMEDIATE;
+    SELECT next_nonce FROM nonces
+      WHERE wallet = :w AND chain = :c;
+    -- returns current N
     UPDATE nonces SET next_nonce = next_nonce + 1
-      WHERE wallet = :w AND chain = :c
-      RETURNING next_nonce;
+      WHERE wallet = :w AND chain = :c;
     COMMIT;
+    -- caller uses N (the pre-update value)
+
+    (The SELECT-then-UPDATE form is atomic under BEGIN IMMEDIATE; equivalent
+    to `UPDATE ... RETURNING next_nonce` on SQLite 3.35+, but the two-step
+    form ships as doctrine because the dev-host glibc-2.31 Python ships
+    SQLite 3.31 which lacks RETURNING — the Docker runtime has SQLite 3.40+
+    but tests run on the host. Cross-environment portability wins; the
+    BEGIN IMMEDIATE wrapper provides the atomicity either way.)
 
 7.  fwd queries fee oracle
     - eth_feeHistory for last 5 blocks

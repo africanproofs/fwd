@@ -16,9 +16,11 @@ from pydantic import BaseModel, Field, field_validator
 from fwd.api.caller_auth import require_caller
 from fwd.app.dependencies import (
     Caller,
+    NonceRepoCM,
     RpcManagerCM,
     SignerCM,
     TransactionRepoCM,
+    get_nonce_repo,
     get_rpc_manager,
     get_signer,
     get_transaction_repo,
@@ -90,6 +92,7 @@ async def post_sign_and_send(
     signer_cm: SignerCM = Depends(get_signer),  # noqa: B008
     rpc_cm: RpcManagerCM = Depends(get_rpc_manager),  # noqa: B008
     tx_repo_cm: TransactionRepoCM = Depends(get_transaction_repo),  # noqa: B008
+    nonce_repo_cm: NonceRepoCM = Depends(get_nonce_repo),  # noqa: B008
 ) -> SignAndSendResponse:
     if body.chain not in ALLOWED_CHAINS:
         raise HTTPException(
@@ -109,9 +112,14 @@ async def post_sign_and_send(
         gas=body.gas,
     )
     try:
-        async with signer_cm as signer, rpc_cm as rpc_mgr, tx_repo_cm as tx_repo:
+        async with (
+            signer_cm as signer,
+            rpc_cm as rpc_mgr,
+            tx_repo_cm as tx_repo,
+            nonce_repo_cm as nonce_repo,
+        ):
             rpc = rpc_mgr.for_chain(body.chain)
-            result = await sign_and_send(request, signer, rpc, tx_repo)
+            result = await sign_and_send(request, signer, rpc, tx_repo, nonce_repo)
     except ChainNotAllowed as exc:
         raise HTTPException(
             status_code=400,

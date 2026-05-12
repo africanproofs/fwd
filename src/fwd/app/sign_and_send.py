@@ -3,7 +3,8 @@
 Per architecture.md § Signing flow:
   1. Resolve wallet -> from_address (signer.address).
   2. Verify chain_id against the RPC node (rpc.verify_chain_id).
-  3. Fetch nonce (rpc.transaction_count, "pending").
+  3. Reserve nonce from DB (nonce_repo.reserve_next; lazy init via RPC on
+     NonceNotInitializedError per architecture.md step 6).
   4. Fetch fee suggestion (rpc.fee_history).
   5. Estimate gas if not provided.
   6. Build EIP-1559 tx_dict.
@@ -15,15 +16,20 @@ Per architecture.md § Signing flow:
 Phase 3c does NOT include:
 - Policy evaluation (Phase 7)
 - Hash-chained audit row (Phase 7; we structlog only)
-- BEGIN IMMEDIATE nonce serialization (Phase 5a4; race condition exists)
-- Receipt watcher / replacement-on-stuck (Phase 5a5)
-- Idempotency-Key handling (Phase 5a5 or Phase 7)
+- Receipt watcher / replacement-on-stuck (Phase 5a6)
+- Idempotency-Key handling (Phase 5a6 or Phase 7)
 
 v0.4.0a3 adds:
 - caller: str field on SignAndSendRequest (F8.1 — explicit, not via request.state).
 - tx_id: str field on SignAndSendResult.
 - tx_repo: TransactionRepo as 4th positional arg.
 - Transaction row + hash persisted after successful broadcast.
+
+v0.4.0a5 adds:
+- nonce_repo: NonceRepo as 5th positional arg (BEGIN IMMEDIATE reservation).
+- Reserve nonce from DB; lazy-init from RPC on first use per arch step 6.
+- Pre-broadcast failure (steps 7, 10, 11) releases the reserved nonce.
+- Broadcast failure (step 13) does NOT release — receipt watcher decides.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from fwd.infra.nonce_repo import NonceNotInitializedError
 from fwd.infra.rpc import ALLOWED_CHAINS as ALLOWED_CHAINS
 from fwd.infra.rpc import RpcError, RpcUnavailable
 from fwd.infra.uuidv7 import uuid7_str
@@ -43,6 +50,7 @@ from fwd.infra.wallet_repo import WalletNotFoundError
 
 if TYPE_CHECKING:
     from fwd.infra.envelope_signer import EnvelopeSigner
+    from fwd.infra.nonce_repo import NonceRepo
     from fwd.infra.rpc import RpcClient
     from fwd.infra.transaction_repo import TransactionRepo
 
@@ -102,6 +110,7 @@ async def sign_and_send(
     signer: EnvelopeSigner,
     rpc: RpcClient,
     tx_repo: TransactionRepo,
+    nonce_repo: NonceRepo,
 ) -> SignAndSendResult:
     # Defense-in-depth: caller must be a non-empty string <= 64 chars.
     if not request.caller or len(request.caller) > 64:
@@ -119,68 +128,99 @@ async def sign_and_send(
     except WalletNotFoundError as exc:
         raise WalletNotFound(request.wallet) from exc
 
-    # 2. Verify chain_id against RPC. 3. Fetch nonce. 4. Fetch fee suggestion.
+    # 2. Verify chain_id against RPC.
     try:
         await rpc.verify_chain_id()
-        nonce = await rpc.transaction_count(from_address, block="pending")
-        fee = await rpc.fee_history(blocks=5)
     except (RpcUnavailable, RpcError) as exc:
         raise RpcUnreachable(str(exc)) from exc
 
+    # 3. Reserve nonce — DB is the source of truth (architecture.md step 6).
     try:
-        # baseFeePerGas[-1] is the projected next-block base fee.
-        base_fee = int(fee["baseFeePerGas"][-1], 16)
-    except (KeyError, ValueError, IndexError, TypeError) as exc:
-        raise RpcUnreachable(f"unexpected eth_feeHistory shape: {exc}") from exc
-
-    tip = _DEFAULT_TIP_WEI
-    max_fee = base_fee * 2 + tip
-
-    # 5. Estimate gas if caller didn't provide.
-    if request.gas is None:
-        call_obj = {
-            "from": from_address,
-            "to": request.to,
-            "value": hex(int(request.value_wei)),
-            "data": request.data,
-        }
+        nonce = await nonce_repo.reserve_next(request.wallet, request.chain)
+    except NonceNotInitializedError:
+        # First time signing for this (wallet, chain). Seed from chain.
         try:
-            estimated = await rpc.estimate_gas(call_obj)
+            chain_count = await rpc.transaction_count(from_address, block="pending")
         except (RpcUnavailable, RpcError) as exc:
             raise RpcUnreachable(str(exc)) from exc
-        gas = int(estimated * _GAS_ESTIMATE_BUFFER)
-    else:
-        gas = request.gas
+        await nonce_repo.init_for_wallet(request.wallet, request.chain, chain_count)
+        nonce = await nonce_repo.reserve_next(request.wallet, request.chain)
 
-    # 6. Build EIP-1559 tx_dict.
-    tx_dict = {
-        "type": 2,
-        "chainId": request.chain,
-        "nonce": nonce,
-        "to": request.to,
-        "value": int(request.value_wei),
-        "data": request.data,
-        "gas": gas,
-        "maxFeePerGas": max_fee,
-        "maxPriorityFeePerGas": tip,
-    }
-
-    # 7. Sign in-process.
+    # 4-7. Pre-broadcast operations. On any failure here, release the reserved
+    # nonce per architecture.md § Failure modes (steps 7, 10, 11).
     try:
-        signed = await signer.sign_transaction(request.wallet, tx_dict)
-    except VaultError as exc:
-        raise VaultUnavailableError(str(exc)) from exc
+        # 4. Fetch fee suggestion.
+        try:
+            fee = await rpc.fee_history(blocks=5)
+        except (RpcUnavailable, RpcError) as exc:
+            raise RpcUnreachable(str(exc)) from exc
 
-    # 8. Broadcast.
+        try:
+            # baseFeePerGas[-1] is the projected next-block base fee.
+            base_fee = int(fee["baseFeePerGas"][-1], 16)
+        except (KeyError, ValueError, IndexError, TypeError) as exc:
+            raise RpcUnreachable(f"unexpected eth_feeHistory shape: {exc}") from exc
+
+        tip = _DEFAULT_TIP_WEI
+        max_fee = base_fee * 2 + tip
+
+        # 5. Estimate gas if caller didn't provide.
+        if request.gas is None:
+            call_obj = {
+                "from": from_address,
+                "to": request.to,
+                "value": hex(int(request.value_wei)),
+                "data": request.data,
+            }
+            try:
+                estimated = await rpc.estimate_gas(call_obj)
+            except (RpcUnavailable, RpcError) as exc:
+                raise RpcUnreachable(str(exc)) from exc
+            gas = int(estimated * _GAS_ESTIMATE_BUFFER)
+        else:
+            gas = request.gas
+
+        # 6. Build EIP-1559 tx_dict.
+        tx_dict = {
+            "type": 2,
+            "chainId": request.chain,
+            "nonce": nonce,
+            "to": request.to,
+            "value": int(request.value_wei),
+            "data": request.data,
+            "gas": gas,
+            "maxFeePerGas": max_fee,
+            "maxPriorityFeePerGas": tip,
+        }
+
+        # 7. Sign in-process.
+        try:
+            signed = await signer.sign_transaction(request.wallet, tx_dict)
+        except VaultError as exc:
+            raise VaultUnavailableError(str(exc)) from exc
+
+    except (RpcUnreachable, VaultUnavailableError, ValueError):
+        # Pre-broadcast failure: release the reservation per architecture.md
+        # § Failure modes (steps 7, 10, 11). Safe-conditional decrement;
+        # may leave a gap if a concurrent reserver has advanced past us.
+        released = await nonce_repo.release_if_unused(request.wallet, request.chain, nonce)
+        logger.warning(
+            "sign_and_send.pre_broadcast_failure",
+            wallet=request.wallet,
+            chain=request.chain,
+            reserved_nonce=nonce,
+            released=released,
+        )
+        raise
+
+    # 8. Broadcast (separate try; failure here does NOT release the nonce —
+    # the tx may have been seen by other nodes; receipt watcher decides).
     try:
         tx_hash = await rpc.send_raw_transaction(signed.raw_transaction)
     except (RpcUnavailable, RpcError) as exc:
         raise RpcUnreachable(str(exc)) from exc
 
     # 9. Persist transaction row + hash.
-    # DB write is after broadcast: if broadcast succeeds but DB write fails,
-    # we have an on-chain tx with no DB row. Accepted in a3; a4 rearranges
-    # to nonce-reserve-then-broadcast to eliminate this window.
     tx_id = uuid7_str()
     contract_address = request.to
     method_name = request.data[:10] if len(request.data) >= 10 else request.data
