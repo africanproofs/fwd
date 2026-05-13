@@ -73,6 +73,31 @@ if [ -z "$ROLE_ID" ] || [ -z "$SECRET_ID" ]; then
     exit 2
 fi
 
+# 9. Write the fwd-snapshot policy.
+vault policy write fwd-snapshot /vault/config/policies/fwd-snapshot.hcl
+echo "[OK]   fwd-snapshot policy written"
+
+# 10. Create or update the fwd-snapshot role bound to the fwd-snapshot policy.
+vault write auth/approle/role/fwd-snapshot \
+    token_policies=fwd-snapshot \
+    token_ttl=10m \
+    token_max_ttl=30m \
+    secret_id_ttl=0 \
+    secret_id_num_uses=0 \
+    >/dev/null
+echo "[OK]   auth/approle/role/fwd-snapshot configured (token_ttl=10m, secret_id non-expiring)"
+
+# 11. Read snapshot role_id.
+SNAPSHOT_ROLE_ID=$(vault read -format=json auth/approle/role/fwd-snapshot/role-id | sed -n 's/.*"role_id" *: *"\([^"]*\)".*/\1/p')
+
+# 12. Generate snapshot secret_id.
+SNAPSHOT_SECRET_ID=$(vault write -f -format=json auth/approle/role/fwd-snapshot/secret-id | sed -n 's/.*"secret_id" *: *"\([^"]*\)".*/\1/p')
+
+if [ -z "$SNAPSHOT_ROLE_ID" ] || [ -z "$SNAPSHOT_SECRET_ID" ]; then
+    echo "ERROR: failed to read fwd-snapshot role_id or secret_id" >&2
+    exit 3
+fi
+
 # 8. Print results for operator capture.
 cat <<EOF
 
@@ -83,8 +108,10 @@ cat <<EOF
 
     FWD_VAULT_ROLE_ID=$ROLE_ID
     FWD_VAULT_SECRET_ID=$SECRET_ID
+    FWD_VAULT_SNAPSHOT_ROLE_ID=$SNAPSHOT_ROLE_ID
+    FWD_VAULT_SNAPSHOT_SECRET_ID=$SNAPSHOT_SECRET_ID
 
-  Then: docker compose restart fwd
+  Then: docker compose restart fwd vault-snapshot
 
   Phase 3.5: revoke the root token after confirming fwd authenticates.
     docker exec fwd-vault vault token revoke <root-token>

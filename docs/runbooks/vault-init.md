@@ -94,12 +94,26 @@ The script is idempotent. Output ends with:
 ==================================================================
 ```
 
+The extended script (v0.4.2+) creates BOTH the `fwd` AppRole (for the
+daemon's encrypt/decrypt operations) AND the `fwd-snapshot` AppRole (for
+the periodic vault-snapshot sidecar). Both `role_id` + `secret_id` pairs
+are printed at the end for `.env` capture.
+
 ### 6. Update `.env` and restart fwd
 
-Add the role_id and secret_id to `.env` (which is gitignored). Then:
+Add the role_id and secret_id pairs to `.env` (which is gitignored):
+
+```
+FWD_VAULT_ROLE_ID=<from script output>
+FWD_VAULT_SECRET_ID=<from script output>
+FWD_VAULT_SNAPSHOT_ROLE_ID=<from script output>
+FWD_VAULT_SNAPSHOT_SECRET_ID=<from script output>
+```
+
+Then:
 
 ```sh
-docker compose restart fwd
+docker compose restart fwd vault-snapshot
 ```
 
 ### 7. Verify fwd authenticates against Vault

@@ -78,13 +78,37 @@ services:
     env_file:
       - .env
     networks:
+      - fwd-egress
+    restart: unless-stopped
+
+  vault-snapshot:
+    build:
+      context: .
+      dockerfile: config/vault-snapshot/Dockerfile
+    container_name: fwd-vault-snapshot
+    depends_on:
+      vault:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      VAULT_ADDR: http://vault:8200
+    networks:
       - fwd-internal
+      - fwd-egress
     restart: unless-stopped
 
 networks:
   fwd-internal:
     internal: true
   fwd-callers:
+    driver: bridge
+  fwd-egress:
+    # Bridge with default external connectivity. Used by sidecars that need
+    # to reach Scaleway Object Storage (Litestream, vault-snapshot).
+    # `internal: true` on fwd-internal blocks public egress — verified
+    # empirically at v0.4.2 Phase 0 (Reviewer). Litestream and vault-snapshot
+    # must be on this network to reach S3.
     driver: bridge
 
 volumes:

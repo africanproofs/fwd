@@ -4,13 +4,14 @@
 > `state.db` from the Litestream S3 replica, reseal/unseal Vault, and
 > confirm a working signing path against the restored state.
 >
-> **Where this fits in Phase 6 (Phase 6 ship 1):**
+> **Where this fits in Phase 6 (ship 2 — v0.4.2):**
 >
 > - **SQLite restore (Steps 1–3, 6–8):** complete — Litestream continuously
 >   replicates `state.db` to Scaleway Object Storage; these steps work today.
-> - **Vault restore (Step 4):** TODO — Vault Raft snapshot backup is the
->   next Phase 6 ship. For now the operator must re-initialize Vault from
->   scratch using the existing D6-distributed unseal shares. Details below.
+> - **Vault restore (Step 4):** complete — vault-snapshot sidecar (v0.4.2)
+>   ships nightly Raft snapshots to the same bucket. Restore preserves the
+>   original `fwd-master` Transit key and the original AppRole credentials,
+>   so wallet ciphertexts in SQLite remain decryptable post-restore.
 >
 > **RTO target:** ≤ 30 minutes from a clean host (per `architecture.md:598`).
 > Actual wall-clock measurement happens at Phase 6 GA (drill execution).
@@ -175,58 +176,154 @@ echo $?  # 0 = pass
 
 ---
 
-## Step 4 — Restore Vault state
+## Step 4 — Restore Vault state from S3 Raft snapshot
 
-> **TODO — Vault Raft snapshot restore is the next Phase 6 ship's deliverable.**
->
-> The full automated path (`vault operator raft snapshot save` nightly cron
-> + S3 upload + `vault operator raft snapshot restore`) is not yet
-> implemented. It lands in the next Phase 6 sub-ship.
->
-> **For this drill (fresh-host, no prior Vault Raft dump available):**
->
-> Re-initialize Vault from scratch using the OLD D6-distributed unseal
-> shares. This works because the D6 unseal shares are tied to the Vault
-> Shamir initialization, NOT to the Vault Raft data. After re-init with
-> the same D6 shares, you will receive a NEW set of unseal shares for the
-> new Vault instance — update your D6 distribution accordingly.
->
-> ```sh
-> docker exec fwd-vault vault status
-> # Expected: Initialized: false, Sealed: true
->
-> # Then follow docs/runbooks/vault-init.md from Step 1.
-> # The OLD D6 shares do NOT unseal the NEW Vault — they were for the
-> # previous instance. The fresh vault-init.sh run outputs NEW role_id +
-> # secret_id; update .env with these.
-> ```
->
-> **If your disaster scenario requires preserving Vault's existing Raft
-> history** (e.g., audit-log replay across the disaster boundary, or
-> rotating to a Vault instance that previously held production keys): wait
-> for the next Phase 6 ship, which delivers a Vault Raft snapshot/restore
-> procedure backed by S3. Running the restore without Vault history means
-> all wallet ciphertexts become inaccessible until the Vault is re-keyed
-> (the fwd-master Transit key in the old Vault is gone; the ciphertexts in
-> SQLite are now unreadable). This is the reason Vault state backup is a
-> first-order Phase 6 deliverable, not an afterthought.
->
-> **Bottom line for Phase 6 ship 1:** a complete restore drill requires the
-> next Phase 6 ship (Vault Raft snapshot). This runbook documents the
-> SQLite half today and will be amended in-place once the Vault half lands.
+The vault-snapshot sidecar (Phase 6 ship 2, v0.4.2) uploads a Vault Raft
+snapshot to `s3://${LITESTREAM_S3_BUCKET}/${VAULT_SNAPSHOT_S3_PATH:-vault-snapshots}/vault-<ts>.snap`
+on a configurable interval (default 24h). The restore procedure:
+
+**(a) Locate and download the latest snapshot.**
+
+```sh
+BUCKET=$(grep -E '^LITESTREAM_S3_BUCKET=' .env | cut -d= -f2-)
+PREFIX=$(grep -E '^VAULT_SNAPSHOT_S3_PATH=' .env | cut -d= -f2- || echo "vault-snapshots")
+ENDPOINT=$(grep -E '^LITESTREAM_S3_ENDPOINT=' .env | cut -d= -f2-)
+
+export AWS_ACCESS_KEY_ID=$(grep -E '^LITESTREAM_S3_ACCESS_KEY_ID=' .env | cut -d= -f2-)
+export AWS_SECRET_ACCESS_KEY=$(grep -E '^LITESTREAM_S3_SECRET_ACCESS_KEY=' .env | cut -d= -f2-)
+export AWS_DEFAULT_REGION=$(grep -E '^LITESTREAM_S3_REGION=' .env | cut -d= -f2-)
+
+# Find the most recent snapshot (filenames are vault-<UTC-timestamp>.snap)
+LATEST=$(aws --endpoint-url "${ENDPOINT}" \
+    s3 ls "s3://${BUCKET}/${PREFIX}/" \
+    | awk '{print $4}' \
+    | grep -E '^vault-[0-9]{8}T[0-9]{6}Z\.snap$' \
+    | sort | tail -1)
+
+[ -z "${LATEST}" ] && { echo "ERROR: no snapshots in s3://${BUCKET}/${PREFIX}/"; exit 1; }
+
+aws --endpoint-url "${ENDPOINT}" \
+    s3 cp "s3://${BUCKET}/${PREFIX}/${LATEST}" /tmp/vault.snap
+docker cp /tmp/vault.snap fwd-vault:/tmp/vault.snap
+```
+
+**(b) Initialize the fresh Vault with throwaway Shamir.**
+
+Vault snapshot restore requires the target Vault to be initialized AND
+unsealed AND authenticated. We init with throwaway shares; the snapshot
+restore overwrites the seal config with the ORIGINAL D6 shares' seal.
+
+```sh
+docker exec fwd-vault vault operator init \
+    -key-shares=3 -key-threshold=2 -format=json \
+    > /tmp/init-dummy.json
+
+# Parse dummy shares + root token (these will be discarded after restore).
+DUMMY_KEY_1=$(jq -r '.unseal_keys_b64[0]' /tmp/init-dummy.json)
+DUMMY_KEY_2=$(jq -r '.unseal_keys_b64[1]' /tmp/init-dummy.json)
+DUMMY_ROOT=$(jq -r '.root_token' /tmp/init-dummy.json)
+```
+
+**(c) Unseal with the dummy shares and authenticate.**
+
+```sh
+docker exec fwd-vault vault operator unseal "${DUMMY_KEY_1}"
+docker exec fwd-vault vault operator unseal "${DUMMY_KEY_2}"
+docker exec -e VAULT_TOKEN="${DUMMY_ROOT}" fwd-vault vault status
+```
+
+**(d) Restore the snapshot.**
+
+This OVERWRITES the dummy Vault state with the snapshot's state, including
+the original Shamir seal configuration.
+
+```sh
+docker exec -e VAULT_TOKEN="${DUMMY_ROOT}" fwd-vault \
+    vault operator raft snapshot restore -force /tmp/vault.snap
+```
+
+The Vault becomes sealed after restore. The dummy unseal keys and the
+dummy root token are now invalid — they unsealed the throwaway state, not
+the restored state.
+
+**(e) Unseal with the ORIGINAL D6 shares.**
+
+Retrieve 3 of the 5 D6-distributed unseal shares (per `decisions.md` D6 +
+Core invariant #17). Apply each:
+
+```sh
+docker exec fwd-vault vault operator unseal <D6_SHARE_1>
+docker exec fwd-vault vault operator unseal <D6_SHARE_2>
+docker exec fwd-vault vault operator unseal <D6_SHARE_3>
+docker exec fwd-vault vault status
+# Expected: Sealed: false, Initialized: true
+```
+
+**(f) Verify the restored state.**
+
+```sh
+# The Transit master key must be present — this is what makes wallet
+# ciphertexts decryptable.
+docker exec -e VAULT_TOKEN=<old-root-token-from-D6> fwd-vault \
+    vault list transit/keys
+# Expected: fwd-master
+
+# The fwd and fwd-snapshot AppRoles must still exist.
+docker exec -e VAULT_TOKEN=<old-root-token-from-D6> fwd-vault \
+    vault list auth/approle/role
+# Expected: fwd, fwd-snapshot
+```
+
+**Pass criterion:**
+
+```sh
+# Sealed: false AND fwd-master present
+docker exec fwd-vault vault status -format=json \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if not d['sealed'] and d['initialized'] else 1)"
+echo $?  # 0 = pass
+
+docker exec -e VAULT_TOKEN=<old-root-token> fwd-vault \
+    vault list -format=json transit/keys \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if 'fwd-master' in d else 1)"
+echo $?  # 0 = pass
+```
+
+**If your `.env` AppRole `secret_id` values have been rotated since the
+snapshot was taken** (rare in v1; `secret_id_ttl=0` means non-expiring): the
+fwd container will fail to authenticate with the restored Vault's older
+credentials. Generate fresh secret_ids:
+
+```sh
+docker exec -e VAULT_TOKEN=<old-root-token> fwd-vault \
+    vault write -f auth/approle/role/fwd/secret-id
+docker exec -e VAULT_TOKEN=<old-root-token> fwd-vault \
+    vault write -f auth/approle/role/fwd-snapshot/secret-id
+# Capture both secret_ids, update .env, then `docker compose restart fwd vault-snapshot`
+```
+
+**On the v0.4.2 honest doctrine:** The pre-v0.4.2 fallback (fresh
+`vault-init.sh` run with OLD D6 shares) is no longer needed and would NOT
+work — running a fresh `vault operator init` produces a NEW seal config,
+which makes the OLD D6 shares useless and the existing wallet ciphertexts
+unreadable (the fwd-master Transit key is regenerated under the new seal).
+Always restore from snapshot.
 
 ---
 
-## Step 5 — Unseal Vault
+## Step 5 — Restart fwd against the restored Vault
 
-After vault-init.md Step 5 (the `vault-init.sh` post-unseal script) completes,
-update `.env` with the new AppRole credentials, then restart fwd:
+Step 4 left the Vault unsealed with the ORIGINAL AppRole credentials
+intact in the restored state. The `.env` values from before the disaster
+should still authenticate. Restart the fwd daemon (and the vault-snapshot
+sidecar) so they pick up the restored Vault:
 
 ```sh
-# Update .env with the new FWD_VAULT_ROLE_ID and FWD_VAULT_SECRET_ID
-# printed by vault-init.sh, then:
-docker compose restart fwd
+docker compose restart fwd vault-snapshot
 ```
+
+If your pre-disaster `.env` is lost, regenerate fresh `secret_id`s per
+Step 4's "If your `.env` AppRole `secret_id` values have been rotated"
+block and update `.env` before this restart.
 
 Confirm fwd comes up and authenticates against Vault:
 
