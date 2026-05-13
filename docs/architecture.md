@@ -678,11 +678,21 @@ config/abis/
   erc20.json                 # canonical ERC-20 (transfer, approve)
 ```
 
-**v0.5.0 type support.** `address` (lowercased), `uint*` (Python int),
-`bool`, `bytes32`. Dynamic types (`bytes`, `string`, arrays, structs,
-tuples) NOT supported in v0.5.0 — decoder returns `None`. Adding
-support is a Phase 7 follow-up when a real consumer needs it (no
-speculative scope).
+**v0.5.0 type support** (expanded at v0.5.0a2 self-review to cover
+ParticipantRegister's `string` fields):
+
+- `address` — lowercased 0x-hex
+- `uint*` / `int*` — Python int (eth_abi handles two-complement)
+- `bool` — Python bool
+- `bytesN` (N ≤ 32) — 0x-hex string
+- `bytes` (dynamic) — 0x-hex string of raw bytes
+- `string` (dynamic) — Python `str` (UTF-8)
+
+NOT supported at v0.5.0 — decoder returns `None`: dynamic arrays,
+fixed-size arrays, tuples, structs, function pointers. Adding support
+is a Phase 7 follow-up when a real consumer needs it (no speculative
+scope). The v0.5.0 ABI registry (RewardManager + ParticipantRegister +
+ERC-20) does not use any of the unsupported types.
 
 ## Audit log
 
@@ -700,7 +710,7 @@ been waiting for. Authoritative hash-chain mechanics per
 - `decision_reason TEXT` — human-readable, e.g. `"policy_denied step=5: max_value_wei exceeded"`
 - `outcome TEXT` — canonical sorted-key compact JSON of outcome payload
 - `prev_hash TEXT NOT NULL` — hex SHA-256 of preceding row's `row_hash`; genesis = `'0' * 64`
-- `row_hash TEXT NOT NULL` — `sha256(prev_hash || NUL || ts || NUL || caller || NUL || action || NUL || request_json || NUL || decision || NUL || decision_reason || NUL || outcome).hexdigest()`
+- `row_hash TEXT NOT NULL` — `sha256(canonical_json_dump({prev_hash, ts, caller, action, request_json, decision, decision_reason, outcome}).encode('utf-8')).hexdigest()` where canonical_json_dump uses `sort_keys=True, separators=(',',':'), ensure_ascii=False`. Revised at v0.5.0a2 self-review from the original NUL-joined concatenation, which was collision-fragile for fields that may contain literal NUL bytes (caller name, decision_reason).
 
 **Concurrency.** Audit writes happen INSIDE the request's RequestScope
 session (v0.4.5 single-session-per-request invariant). One writer-lock
@@ -710,10 +720,11 @@ from audit + rate: ~5–10 ms on top of the existing ~1 s Vault decrypt
 + RPC. Within 30 s busy_timeout headroom; no lock-split refactor in
 v1.
 
-**Walker CLI** ships at v0.5.0a4 — `clifwd audit verify | show | tail`.
-`verify` walks the chain, recomputes `row_hash`, compares to stored
-value AND to next row's `prev_hash`. Exits 0 on intact chain; 2 with
-first-break details on failure.
+**Walker CLI** ships at v0.5.0a5 — `clifwd audit verify | show | tail`,
+canonical invocation `docker exec fwd clifwd audit verify` (D16 walker
+access pattern). `verify` walks the chain, recomputes `row_hash`,
+compares to stored value AND to next row's `prev_hash`. Exits 0 on
+intact chain; 2 with first-break details on failure.
 
 **Backfill.** None. The audit log records forward from v0.5.0 only.
 Pre-Phase-7 wallets, callers, and transactions have no audit history.

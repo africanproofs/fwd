@@ -54,7 +54,7 @@ When a new AP backend needs to sign against a new contract:
 
 No code changes. The decoder is type-driven by the loaded ABI.
 
-## v0.5.0 type-support scope (per D15)
+## v0.5.0 type-support scope (per D15, revised at v0.5.0a2)
 
 Supported (decoder returns typed value):
 
@@ -62,18 +62,26 @@ Supported (decoder returns typed value):
 - `uint8`/`uint16`/`uint32`/`uint64`/`uint128`/`uint256` — Python `int`
 - `int8`...`int256` — Python `int`
 - `bool` — Python `bool`
-- `bytes32` — 0x-hex string
+- `bytesN` (N ≤ 32) — 0x-hex string
+- `bytes` (dynamic) — 0x-hex string of the raw bytes
+- `string` (dynamic) — Python `str` (UTF-8 decoded)
 
 NOT supported in v0.5.0 (decoder returns `None`, policy denies):
 
-- Dynamic `bytes` and `string`
-- Arrays (fixed or dynamic)
-- Tuples (structs)
-- Function selectors as arguments
+- Dynamic arrays of any element type
+- Fixed-size arrays (`address[3]`, `uint256[N]`, etc.)
+- Tuples (Solidity structs encoded as tuples)
+- Function-selector arguments (`function` type)
 
-Adding dynamic type support is a Phase 7 follow-up scoped to whatever
-real consumer demands it (per "What FWD Deliberately IS NOT" — no
-speculative scope).
+`string` and `bytes` were added at v0.5.0a2 self-review to support
+ParticipantRegister's registration metadata fields (which use
+`string` for name / URL / description / etc.). Without these, the
+participant_register ABI could not be policy-evaluated, contradicting
+its inclusion in the v0.5.0 ABI registry.
+
+Adding the remaining unsupported type support is a Phase 7 follow-up
+scoped to whatever real consumer demands it (per "What FWD Deliberately
+IS NOT" — no speculative scope).
 
 ## Why these three at v0.5.0
 
