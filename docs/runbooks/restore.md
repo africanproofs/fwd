@@ -1,19 +1,29 @@
-# Restore runbook — fwd state from Litestream S3 replica (Phase 6)
+# Restore runbook — fwd state from the local `backup` volume (Phase 6)
 
 > This runbook documents the disaster-recovery procedure for fwd: restore
-> `state.db` from the Litestream S3 replica, reseal/unseal Vault, and
-> confirm a working signing path against the restored state.
+> `state.db` from the Litestream file replica, restore Vault from its Raft
+> snapshot, and confirm a working signing path against the restored state.
 >
-> **Where this fits in Phase 6 (ship 2 — v0.4.2):**
+> **Where this fits in Phase 6 (after v0.4.3 reversion):**
 >
-> - **SQLite restore (Steps 1–3, 6–8):** complete — Litestream continuously
->   replicates `state.db` to Scaleway Object Storage; these steps work today.
-> - **Vault restore (Step 4):** complete — vault-snapshot sidecar (v0.4.2)
->   ships nightly Raft snapshots to the same bucket. Restore preserves the
+> - **SQLite restore (Steps 1–3, 5–8):** complete — Litestream continuously
+>   replicates `state.db` into the shared `backup` Docker volume.
+> - **Vault restore (Step 4):** complete — vault-snapshot sidecar writes
+>   nightly Raft snapshots to the same volume. Restore preserves the
 >   original `fwd-master` Transit key and the original AppRole credentials,
 >   so wallet ciphertexts in SQLite remain decryptable post-restore.
 >
-> **RTO target:** ≤ 30 minutes from a clean host (per `architecture.md:598`).
+> **Operator-driven off-host transport.** fwd produces backup artifacts at
+> a known local path (`/backup` inside the sidecar containers; the `backup`
+> Docker volume on the host). It does NOT transport them off-host. To
+> survive host destruction the operator MUST arrange off-host copy of the
+> `backup` volume contents (rsync over SSH / restic / borg / NAS / USB —
+> whatever fits the deployment), run out-of-band. **This runbook assumes
+> the operator has already copied the `backup` volume contents to the new
+> host using their preferred tool** before starting at Step 1 below.
+>
+> **RTO target:** ≤ 30 minutes from "backup contents available on the new
+> host" to "first successful `/v1/sign-and-send`" (per `architecture.md:598`).
 > Actual wall-clock measurement happens at Phase 6 GA (drill execution).
 >
 > **Related runbooks:**
@@ -26,23 +36,29 @@
 
 Before starting:
 
-1. **Scaleway bucket provisioned.** The S3 bucket referenced by
-   `LITESTREAM_S3_BUCKET` in `.env` exists and has at least one Litestream
-   snapshot. Confirm from the Scaleway console or via Step 1 below.
+1. **`backup` volume contents copied to the new host.** Off-host transport
+   is operator-driven and out-of-band. By Step 1 below, the new host has a
+   `backup` Docker volume (or bind-mounted host path) populated with the
+   pre-disaster contents — at minimum:
 
-2. **Environment populated.** Your `.env` has all five required Litestream
-   S3 vars set with real credentials:
+   - `/backup/state.db.litestream/...` (Litestream WAL + snapshots)
+   - `/backup/vault-snapshots/vault-<UTC-timestamp>.snap` (at least one)
+
+   The exact mechanism — rsync over SSH, restic, borg, NAS replay, USB
+   carry-out — is the operator's choice and is NOT part of this runbook.
+   fwd does not transport backups off-host.
+
+2. **`.env` populated with the FWD-relevant vars** (no cloud creds needed):
 
    ```
-   LITESTREAM_S3_ENDPOINT=https://s3.fr-par.scw.cloud
-   LITESTREAM_S3_BUCKET=ap-fwd-backups
-   LITESTREAM_S3_REGION=fr-par
-   LITESTREAM_S3_ACCESS_KEY_ID=<real-key>
-   LITESTREAM_S3_SECRET_ACCESS_KEY=<real-secret>
+   FWD_VAULT_ROLE_ID=<from vault-init.sh>
+   FWD_VAULT_SECRET_ID=<from vault-init.sh>
+   FWD_VAULT_SNAPSHOT_ROLE_ID=<from vault-init.sh>
+   FWD_VAULT_SNAPSHOT_SECRET_ID=<from vault-init.sh>
+   FWD_ADMIN_KEY=<admin bearer>
    ```
 
-   Also set `FWD_VAULT_ROLE_ID`, `FWD_VAULT_SECRET_ID`, `FWD_ADMIN_KEY`,
-   and the caller API key(s) for any callers you need to smoke-test.
+   Plus the caller API key(s) for any callers you need to smoke-test.
 
 3. **fwd stack is DOWN** (this is a restore — running `litestream restore`
    against a live, open SQLite WAL is unsafe).
@@ -53,69 +69,65 @@ Before starting:
    ```
 
 4. **D6 unseal shares accessible.** You will need 3 of the 5 shares from
-   the `decisions.md` D6 distribution to unseal Vault in Step 5. Retrieve
-   them before starting the restore clock.
+   the `decisions.md` D6 distribution to unseal Vault after the snapshot
+   restore in Step 4. Retrieve them before starting the restore clock.
 
-5. **Host has `docker`, `docker compose`, and optionally `litestream`
-   installed.** The primary restore path uses `docker exec` and requires
-   only Docker.
+5. **Host has `docker` and `docker compose` installed.** No external CLI
+   tools needed — restore runs entirely via `docker exec`.
 
 ---
 
-## Step 1 — Confirm S3 has snapshots
+## Step 1 — Confirm the `backup` volume has restorable contents
 
-Before destroying volumes, verify the S3 replica has usable data:
+Before destroying anything, verify the local backup volume on the new
+host has both halves of the restore artifact set: Litestream's file
+replica AND at least one Vault Raft snapshot.
 
 ```sh
-# Source your env vars so the litestream binary can reach the bucket.
-export LITESTREAM_S3_ENDPOINT LITESTREAM_S3_BUCKET LITESTREAM_S3_REGION \
-       LITESTREAM_S3_ACCESS_KEY_ID LITESTREAM_S3_SECRET_ACCESS_KEY \
-       LITESTREAM_S3_PATH
-
-BUCKET=$(grep -E '^LITESTREAM_S3_BUCKET=' .env | cut -d= -f2-)
-PATH_=$(grep -E '^LITESTREAM_S3_PATH=' .env | cut -d= -f2- || echo "state.db")
-
-# If you have litestream installed locally:
-litestream snapshots \
-    -config ./config/litestream/litestream.yml \
-    /data/state.db
-
-# OR, start a temporary litestream container against the same config
-# (no fwd-state volume needed for a read-only snapshots query):
-docker run --rm \
-    --env-file .env \
-    -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
-    litestream/litestream:0.3.13 \
-    snapshots -config /etc/litestream.yml /data/state.db
+# Inspect the volume via a throwaway container.
+docker run --rm -v fwd_backup:/b alpine:3.19 sh -c '
+    echo "--- /b ---"
+    ls -la /b
+    echo "--- /b/state.db.litestream ---"
+    ls -la /b/state.db.litestream 2>/dev/null | head -10
+    echo "--- /b/vault-snapshots ---"
+    ls -la /b/vault-snapshots 2>/dev/null
+'
 ```
+
+Expected:
+- `/b/state.db.litestream/` contains generation directories with WAL +
+  snapshot subfolders (Litestream's on-disk format).
+- `/b/vault-snapshots/` contains at least one `vault-<UTC-ts>.snap` file.
 
 **Pass criterion:**
 
 ```sh
-# At least one snapshot line in output (column 1 = replica name, column 3 = size)
-[ "$(docker run --rm \
-    --env-file .env \
-    -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
-    litestream/litestream:0.3.13 \
-    snapshots -config /etc/litestream.yml /data/state.db 2>/dev/null | wc -l)" -gt 1 ]
+docker run --rm -v fwd_backup:/b alpine:3.19 sh -c '
+    test -d /b/state.db.litestream \
+        && ls /b/vault-snapshots 2>/dev/null | grep -qE "^vault-[0-9]{8}T[0-9]{6}Z\.snap$"
+'
 echo $?  # 0 = pass
 ```
 
-If no snapshots are returned: the bucket is empty or credentials are wrong.
-Do NOT proceed — there is no restorable state.
+If either half is missing: the off-host transport step (operator's
+responsibility, pre-runbook) was incomplete. Do NOT proceed — go back
+and re-copy. There is no restorable state on this host yet.
 
 ---
 
-## Step 2 — Spin up a fresh fwd stack with clean volumes
+## Step 2 — Spin up a fresh fwd stack with clean state volumes
 
-Destroy existing volumes so the restore lands into a clean state:
+Destroy the state volumes (vault-data, fwd-state) so the restore lands
+into a clean state. **DO NOT** destroy the `backup` volume — that holds
+the restore source you copied in.
 
 ```sh
-docker compose down --volumes
-# Removes: fwd_vault-data, fwd_fwd-state, fwd_litestream-replica
+docker volume rm fwd_vault-data fwd_fwd-state || true
+# Leaves fwd_backup intact.
 ```
 
-Start the stack (all three services: vault, fwd, litestream):
+Start the stack (all four services: vault, fwd, litestream, vault-snapshot):
 
 ```sh
 docker compose up -d
@@ -125,86 +137,91 @@ At this point:
 - `fwd-vault` is running but uninitialized (its volume is empty).
 - `fwd` has started (it will fail to contact Vault — that's expected; it
   restarts until unsealed).
-- `fwd-litestream` is running and will begin replicating to S3 once fwd's
-  `state.db` is in place. It does NOT yet restore automatically.
+- `fwd-litestream` is running and will idle until `state.db` exists.
+- `fwd-vault-snapshot` is running and will idle/fail-login until Vault is
+  restored (Step 4) and unsealed (the loop continues across failures).
 
 ```sh
 docker compose ps
-# Expected: vault (healthy), fwd (restarting is OK), litestream (running)
+# Expected: vault (healthy), fwd (restarting OK), litestream (running),
+#           vault-snapshot (running).
 ```
 
 ---
 
-## Step 3 — Restore `state.db` from S3
+## Step 3 — Restore `state.db` from the local file replica
 
-The SQLite restore writes directly into the `fwd-state` volume at `/data/state.db`.
+The Litestream replica lives at `/backup/state.db` (and its sibling
+`.litestream` directory) inside the `backup` Docker volume. Restore
+writes the recovered SQLite into the `fwd-state` volume mounted at
+`/data` inside the fwd container.
 
-**Primary method (docker exec into the running litestream container):**
-
-```sh
-BUCKET=$(grep -E '^LITESTREAM_S3_BUCKET=' .env | cut -d= -f2-)
-S3PATH=$(grep -E '^LITESTREAM_S3_PATH=' .env | cut -d= -f2- || echo "state.db")
-
-docker exec fwd-litestream litestream restore \
-    -o /data/state.db \
-    "s3://${BUCKET}/${S3PATH}"
-```
-
-Expected: Litestream prints progress lines ending with `restore complete`.
-`/data/state.db` now exists in the `fwd-state` volume.
-
-**Fallback method (host-side litestream binary + docker cp):**
-
-Use this if the `fwd-litestream` container is unavailable or unhealthy:
+Because Litestream's source-aware restore reads its replica from a
+filesystem path it needs to traverse, the cleanest path is to run a
+throwaway `litestream` container with BOTH volumes mounted, then `docker
+cp` the recovered file into the fwd container:
 
 ```sh
-litestream restore \
-    -config ./config/litestream/litestream.yml \
-    -o /tmp/fwd-state-restored.db \
-    /data/state.db
-docker cp /tmp/fwd-state-restored.db fwd:/data/state.db
-docker exec fwd chown fwd:fwd /data/state.db
+docker run --rm \
+    -v fwd_backup:/backup:ro \
+    -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
+    litestream/litestream:0.3.13 \
+    restore -config /etc/litestream.yml -o /tmp/state.db /data/state.db
+# litestream prints progress; "restore complete" on success.
 ```
+
+Litestream's `-o` writes to `/tmp/state.db` inside the throwaway
+container. Capture and inject into fwd's volume:
+
+```sh
+docker run --rm \
+    -v fwd_backup:/backup:ro \
+    -v fwd_fwd-state:/state \
+    -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
+    litestream/litestream:0.3.13 \
+    sh -c '
+        litestream restore -config /etc/litestream.yml -o /state/state.db /data/state.db
+        chown 1000:1000 /state/state.db
+    '
+```
+
+The `chown 1000:1000` matches fwd's non-root user inside the fwd image
+(see `Dockerfile`).
 
 **Pass criterion:**
 
 ```sh
-# state.db exists and is non-empty in the volume
-docker exec fwd-litestream test -s /data/state.db
+docker run --rm -v fwd_fwd-state:/state alpine:3.19 test -s /state/state.db
 echo $?  # 0 = pass
 ```
 
 ---
 
-## Step 4 — Restore Vault state from S3 Raft snapshot
+## Step 4 — Restore Vault state from the local Raft snapshot
 
-The vault-snapshot sidecar (Phase 6 ship 2, v0.4.2) uploads a Vault Raft
-snapshot to `s3://${LITESTREAM_S3_BUCKET}/${VAULT_SNAPSHOT_S3_PATH:-vault-snapshots}/vault-<ts>.snap`
-on a configurable interval (default 24h). The restore procedure:
+The vault-snapshot sidecar writes a Vault Raft snapshot to
+`/backup/vault-snapshots/vault-<UTC-ts>.snap` on a configurable interval
+(default 24h). After off-host transport (operator's responsibility), the
+restore procedure on the new host is:
 
-**(a) Locate and download the latest snapshot.**
+**(a) Locate the latest snapshot in the `backup` volume and place it
+where the vault container can read it.**
 
 ```sh
-BUCKET=$(grep -E '^LITESTREAM_S3_BUCKET=' .env | cut -d= -f2-)
-PREFIX=$(grep -E '^VAULT_SNAPSHOT_S3_PATH=' .env | cut -d= -f2- || echo "vault-snapshots")
-ENDPOINT=$(grep -E '^LITESTREAM_S3_ENDPOINT=' .env | cut -d= -f2-)
+# Pick the newest snapshot from the backup volume.
+LATEST=$(docker run --rm -v fwd_backup:/b alpine:3.19 sh -c '
+    ls /b/vault-snapshots 2>/dev/null \
+        | grep -E "^vault-[0-9]{8}T[0-9]{6}Z\.snap$" \
+        | sort \
+        | tail -1
+')
 
-export AWS_ACCESS_KEY_ID=$(grep -E '^LITESTREAM_S3_ACCESS_KEY_ID=' .env | cut -d= -f2-)
-export AWS_SECRET_ACCESS_KEY=$(grep -E '^LITESTREAM_S3_SECRET_ACCESS_KEY=' .env | cut -d= -f2-)
-export AWS_DEFAULT_REGION=$(grep -E '^LITESTREAM_S3_REGION=' .env | cut -d= -f2-)
+[ -z "${LATEST}" ] && { echo "ERROR: no snapshots in /backup/vault-snapshots/"; exit 1; }
 
-# Find the most recent snapshot (filenames are vault-<UTC-timestamp>.snap)
-LATEST=$(aws --endpoint-url "${ENDPOINT}" \
-    s3 ls "s3://${BUCKET}/${PREFIX}/" \
-    | awk '{print $4}' \
-    | grep -E '^vault-[0-9]{8}T[0-9]{6}Z\.snap$' \
-    | sort | tail -1)
-
-[ -z "${LATEST}" ] && { echo "ERROR: no snapshots in s3://${BUCKET}/${PREFIX}/"; exit 1; }
-
-aws --endpoint-url "${ENDPOINT}" \
-    s3 cp "s3://${BUCKET}/${PREFIX}/${LATEST}" /tmp/vault.snap
+# Copy into a host-side tmp file, then docker cp into fwd-vault.
+docker run --rm -v fwd_backup:/b alpine:3.19 cat "/b/vault-snapshots/${LATEST}" > /tmp/vault.snap
 docker cp /tmp/vault.snap fwd-vault:/tmp/vault.snap
+rm -f /tmp/vault.snap
 ```
 
 **(b) Initialize the fresh Vault with throwaway Shamir.**
@@ -301,12 +318,12 @@ docker exec -e VAULT_TOKEN=<old-root-token> fwd-vault \
 # Capture both secret_ids, update .env, then `docker compose restart fwd vault-snapshot`
 ```
 
-**On the v0.4.2 honest doctrine:** The pre-v0.4.2 fallback (fresh
-`vault-init.sh` run with OLD D6 shares) is no longer needed and would NOT
-work — running a fresh `vault operator init` produces a NEW seal config,
-which makes the OLD D6 shares useless and the existing wallet ciphertexts
-unreadable (the fwd-master Transit key is regenerated under the new seal).
-Always restore from snapshot.
+**On the honest doctrine (v0.4.2 onwards):** The pre-v0.4.2 fallback (fresh
+`vault-init.sh` run with OLD D6 shares) does NOT work — running a fresh
+`vault operator init` produces a NEW seal config, which makes the OLD D6
+shares useless and the existing wallet ciphertexts unreadable (the
+fwd-master Transit key is regenerated under the new seal). Always restore
+from snapshot.
 
 ---
 
@@ -498,8 +515,8 @@ hold:
 
 | # | Check | Shell snippet | Expected |
 |---|---|---|---|
-| 1 | S3 has at least one snapshot | `docker run --rm --env-file .env -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" litestream/litestream:0.3.13 snapshots -config /etc/litestream.yml /data/state.db 2>/dev/null \| wc -l \| xargs -I {} test {} -gt 1; echo $?` | `0` |
-| 2 | `state.db` restored into the volume | `docker exec fwd-litestream test -s /data/state.db; echo $?` | `0` |
+| 1 | `backup` volume has Litestream replica + ≥1 vault snapshot | `docker run --rm -v fwd_backup:/b alpine:3.19 sh -c 'test -d /b/state.db.litestream && ls /b/vault-snapshots 2>/dev/null \| grep -qE "^vault-[0-9]{8}T[0-9]{6}Z\.snap$"'; echo $?` | `0` |
+| 2 | `state.db` restored into the volume | `docker run --rm -v fwd_fwd-state:/state alpine:3.19 test -s /state/state.db; echo $?` | `0` |
 | 3 | `clifwd health` returns vault+fwd ok | `clifwd health \| python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('vault')=='ok' else 1)"; echo $?` | `0` |
 | 4 | Wallet inventory matches pre-disaster count | `curl -sf -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/v1/admin/wallets \| python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('wallets') else 1)"; echo $?` | `0` |
 | 5 | Caller inventory matches pre-disaster count | `curl -sf -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/v1/admin/callers \| python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('callers') else 1)"; echo $?` | `0` |
@@ -529,13 +546,17 @@ mismatch after re-init). Re-run `vault-init.sh` and update `.env`.
 
 | Step | Activity | Estimated time |
 |---|---|---|
-| Prerequisites | Retrieve D6 shares, confirm bucket | 3–5 min |
-| Steps 1–2 | Confirm snapshots, spin up clean stack | 1–2 min |
-| Step 3 | Litestream restore (depends on DB size) | 1–3 min |
-| Step 4 | Vault re-init (vault-init.md steps 1–5) | 5–10 min |
-| Step 5 | Unseal + fwd restart | 1–2 min |
+| Prerequisites | Off-host copy of `backup` volume to new host (operator-driven, out of band) | varies |
+| Steps 1–2 | Confirm backup contents, spin up clean stack | 1–2 min |
+| Step 3 | Litestream restore from local replica | 1–3 min |
+| Step 4 | Vault Raft snapshot restore + dummy-init/unseal-with-D6 dance | 4–8 min |
+| Step 5 | fwd + vault-snapshot restart against restored Vault | 1–2 min |
 | Steps 6–8 | Smoke test + reconcile + signing verify | 3–5 min |
-| **Total** | | **14–27 min** |
+| **Total (post-transport)** | | **10–20 min** |
+
+The off-host transport (prerequisite) is excluded from the RTO budget — it
+varies wildly by tool and bandwidth. The 30-min target applies to the
+"backup is available on the new host → signing again" window.
 
 RTO measurement (actual wall-clock) is deferred to Phase 6 GA, when the
 drill is executed end-to-end against a fresh Docker host. At GA, the
@@ -543,23 +564,27 @@ measured RTO is recorded as an addendum to this runbook.
 
 ---
 
-## What this runbook deliberately does NOT yet cover
+## What this runbook deliberately does NOT cover
 
-- **Vault Raft snapshot restore** — next Phase 6 ship. Until that lands,
-  Step 4 requires a fresh `vault-init.md` run with the OLD D6 shares.
-- **`clifwd reconcile` CLI command** — currently only lifespan-startup
-  reconcile exists. A dedicated `clifwd reconcile` command is Phase 7 or a
-  Phase 6 follow-up.
-- **Automated RTO measurement** — Phase 6 GA drill.
-- **Multi-host restore** (two fwd instances sharing one bucket via
-  `LITESTREAM_S3_PATH=<host>/state.db`) — same procedure, run once per host.
+- **Off-host transport of the `backup` volume.** Operator-driven and
+  out-of-band per the v0.4.3 reversion (CLAUDE.md). The operator picks
+  rsync over SSH / restic / borg / NAS / USB / whatever; fwd does not
+  ship a transport tool and does not script the schedule.
+- **Cloud-S3 backup.** Reverted at v0.4.3. If a future deployment wants
+  cloud backup, the path forward is a separate sidecar or an operator-side
+  `restic`/`rclone` against the `backup` volume — NOT modifying fwd.
+- **`clifwd reconcile` CLI command.** Currently only lifespan-startup
+  reconcile exists. A dedicated `clifwd reconcile` command is Phase 7 or
+  a Phase 6 follow-up.
+- **Automated RTO measurement.** Phase 6 GA drill.
+- **Multi-host restore.** Each host has its own `backup` volume and is
+  restored independently using this same procedure.
 
 ## When this runbook is wrong
 
-- Litestream `snapshots` subcommand syntax changes — update Step 1.
-- The restore command gains a `-config` flag variant preferred over the
-  direct S3 path — update Step 3.
-- Vault snapshot/restore lands (next Phase 6 ship) — amend Step 4 in-place
-  with the Vault Raft snapshot restore procedure.
-- The `GET /v1/admin/wallets` response shape changes — update Steps 6 pass
-  criteria accordingly.
+- Litestream's `restore` subcommand syntax changes — update Step 3.
+- Vault's `operator raft snapshot restore` API changes — update Step 4(d).
+- The `GET /v1/admin/wallets` response shape changes — update Step 6 pass
+  criteria.
+- The `backup` volume name or mount path changes in `docker-compose.yml` —
+  update Steps 1, 3, 4(a) accordingly.

@@ -74,11 +74,10 @@ services:
     volumes:
       - fwd-state:/data:ro
       - ./config/litestream/litestream.yml:/etc/litestream.yml:ro
-      - litestream-replica:/var/lib/litestream
-    env_file:
-      - .env
-    networks:
-      - fwd-egress
+      - backup:/backup
+    # No network membership: Litestream now writes the replica to the local
+    # `backup` Docker volume (Litestream type: file). It needs no network
+    # access — no internal Vault traffic, no public S3 egress.
     restart: unless-stopped
 
   vault-snapshot:
@@ -93,9 +92,10 @@ services:
       - .env
     environment:
       VAULT_ADDR: http://vault:8200
+    volumes:
+      - backup:/backup
     networks:
       - fwd-internal
-      - fwd-egress
     restart: unless-stopped
 
 networks:
@@ -103,15 +103,15 @@ networks:
     internal: true
   fwd-callers:
     driver: bridge
-  fwd-egress:
-    # Bridge with default external connectivity. Used by sidecars that need
-    # to reach Scaleway Object Storage (Litestream, vault-snapshot).
-    # `internal: true` on fwd-internal blocks public egress — verified
-    # empirically at v0.4.2 Phase 0 (Reviewer). Litestream and vault-snapshot
-    # must be on this network to reach S3.
-    driver: bridge
 
 volumes:
   vault-data:
   fwd-state:
-  litestream-replica:
+  backup:
+    # Shared backup target for Litestream (/backup/state.db…) and
+    # vault-snapshot (/backup/vault-snapshots/…). Off-host transport is the
+    # operator's responsibility (rsync / restic / borg / NAS / USB — out of
+    # band, against this volume). fwd does not transport backups off-host.
+    # The volume is created as a Docker-managed named volume by default; for
+    # production deployments operators are encouraged to bind-mount a
+    # host-path here via an override compose file.

@@ -130,22 +130,36 @@ Deliverables:
 
 ## Phase 6 — Litestream backup + restore drill (v0.4.0+)
 
-**Goal: documented restore path passes a real drill.**
+**Goal: documented restore path passes a real drill against a local backup volume.**
+
+**Revised at v0.4.3** (reversion ship). Per the operator's "no outside
+dependencies" directive, the cloud-backup destination shipped at v0.4.1 +
+v0.4.2 was reverted; fwd now produces backup artifacts at a known local
+path (`/backup` inside the sidecars, the `backup` Docker volume on the
+host). Off-host transport is the operator's responsibility, run out of
+band against that volume with the operator's preferred tool (rsync /
+restic / borg / NAS / USB — fwd does not ship a transport tool).
 
 Deliverables:
-- `litestream` container in compose, replicating `state.db` → Scaleway Object Storage every 10s.
-- `config/litestream/litestream.yml` reading credentials from `.env`.
-- `runbooks/restore.md` documenting the restore procedure.
-- Vault snapshot cron: `vault operator raft snapshot save` nightly, uploaded to the same bucket.
+- `litestream` container in compose, replicating `state.db` → `/backup/state.db` continuously (~10s RPO).
+- `config/litestream/litestream.yml` configured with `type: file` (no cloud credentials).
+- `vault-snapshot` sidecar saving Vault Raft snapshots to `/backup/vault-snapshots/vault-<UTC-ts>.snap` on a configurable interval (default 24h) with rotation.
+- `runbooks/restore.md` documenting the local-volume restore procedure.
+- `runbooks/vault-init.md` extended with the `fwd-snapshot` AppRole creation (v0.4.2).
 
-**Verification gate:** Restore drill — run on a clean Docker host:
-1. `docker compose up -d` against a fresh volume set.
-2. `litestream restore` from S3.
-3. Vault snapshot restore.
-4. Unseal Vault.
-5. `clifwd reconcile` against on-chain state passes.
-6. Submit a `/v1/sign-and-send` request; confirm it works against the restored state.
-7. Document RTO; target ≤ 30 minutes.
+**Verification gate:** Restore drill — run on a clean Docker host, with
+the `backup` volume contents pre-populated by the operator (simulating
+off-host transport):
+1. Confirm `backup` volume has the Litestream replica + ≥1 vault snapshot.
+2. `docker compose up -d` against a fresh `vault-data` + `fwd-state` volume set; `backup` preserved.
+3. `litestream restore` from `/backup/state.db` into `fwd-state`.
+4. `vault operator raft snapshot restore` from `/backup/vault-snapshots/<latest>.snap`; unseal with the original D6 shares.
+5. fwd authenticates against the restored Vault (existing AppRole credentials still valid).
+6. Submit a `/v1/sign-and-send` request; confirm it mines against the restored state.
+7. Document RTO; target ≤ 30 minutes (excluding off-host transport).
+
+**Out of scope** (per v0.4.3 reversion): off-host transport automation,
+cloud-S3 backup. Both belong to operator-side tooling outside fwd.
 
 ---
 
@@ -261,7 +275,8 @@ Per `CLAUDE.md` Core invariant #13 (linear-forward versioning), every ship bumps
 | 5 | 0.4.0 | Shipped 2026-05-12 (Phase 5 GA — runbook + close summary: docs/runbooks/phase-5-verification.md publishes the operator-runnable 10-concurrent monotonic-nonce verification gate; substrate complete; live execution by operator pending → Phase 5 verification-met addendum to follow at the next available patch) |
 | 6s1 | 0.4.1 | Shipped 2026-05-13 (Phase 6 ship 1 — Litestream S3 replica + restore runbook skeleton: config/litestream/litestream.yml activated with Scaleway env-var interpolation (5 required + 2 optional vars), .env.example documents the bucket provisioning ritual, docs/runbooks/restore.md (469 lines) ships the 8-step procedure with explicit Step 4 Vault TODO including the catastrophic consequence that re-init breaks OLD ciphertexts — Vault Raft snapshot/restore is the next Phase 6 ship; no code or test changes) |
 | 6s2 | 0.4.2 | Shipped 2026-05-13 (Phase 6 ship 2 — Vault Raft snapshot save + restore + network egress fix: vault-snapshot sidecar (alpine + vault CLI + aws-cli) loops AppRole-login → raft snapshot save → S3 upload → rotate with configurable interval (default 24h) + retention (default 7); new fwd-snapshot AppRole bound to minimum-capability policy (read on sys/storage/raft/snapshot, no transit/* per D11-style isolation); scripts/vault-init.sh extended with steps 9-12 to create the new role; restore.md Step 4 replaced in-place with the real `vault operator raft snapshot restore` procedure that preserves the original fwd-master Transit key and AppRole credentials; folded-in fix: fwd-egress bridge network added because fwd-internal is internal:true and could not reach S3 (Litestream moved onto fwd-egress, vault-snapshot on both fwd-internal and fwd-egress); no Python code or test changes; 213+3 unchanged) |
-| 6 | 0.4.x | Backup + restore (continued — Phase 6 GA drill RTO measurement + F6.2 CI integration runner) |
+| 6s3 | 0.4.3 | Shipped 2026-05-13 (Phase 6 ship 3 — REVERSION of cloud-backup substrate per operator directive "no outside dependencies": aws-cli removed entirely from vault-snapshot Dockerfile (~170 MB image shrink); scripts/vault-snapshot.sh rewritten to `cp` into /backup/vault-snapshots/ inside a shared Docker volume; config/litestream/litestream.yml switched from `type: s3` to `type: file` against /backup/state.db; docker-compose.yml deletes fwd-egress network (no service needs public egress), adds `backup` named volume, drops Litestream's network membership entirely; .env.example strips LITESTREAM_S3_* + VAULT_SNAPSHOT_S3_* stanzas; docs/runbooks/restore.md Steps 1/3/4 + pass/fail table + RTO timings + "what does not cover" rewritten for local-volume restore; off-host transport explicitly declared operator's responsibility — fwd does not transport backups off-host; vault-snapshot sidecar pattern kept, fwd-snapshot AppRole + policy kept, Vault Raft snapshot save mechanism kept, restore.md 8-step structure kept; no Python code or test changes; 213+3 unchanged; v0.4.1 + v0.4.2 paragraphs preserved as honest history per Core invariant #18) |
+| 6 | 0.4.x | Backup + restore (continued — Phase 6 GA drill RTO measurement against local volume + F6.2 CI integration runner) |
 | 7 | 0.5.0 | Policy + audit |
 | 8 | 1.0.0 | First production migration |
 | 9 | 1.1.x… | Rolling migrations |

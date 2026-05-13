@@ -1,31 +1,23 @@
-# fwd state replication — Scaleway Object Storage (S3-compatible).
+# fwd state replication — local file replica.
 #
-# All replica credentials live in env vars (LITESTREAM_S3_*) injected via
-# docker-compose env_file. The bucket is operator-provisioned per
-# docs/runbooks/restore.md § Prerequisites; this config only references it.
+# Litestream continuously replicates /data/state.db WAL segments into the
+# shared `backup` Docker volume mounted at /backup. Off-host transport
+# (rsync / restic / borg / NAS / USB — operator's choice) is run out-of-band
+# against the same volume.
 #
 # Replication frequency: WAL segments sync continuously (~10s RPO).
 # Snapshot interval: 24h (compact base for fast restore).
 # Retention: 72h on snapshots (keeps 3 daily snapshots + their WAL chain).
-# Operators can extend retention via LITESTREAM_RETENTION env if needed.
 #
-# Bucket subpath convention (per architecture.md § Backup and restore):
-#   s3://ap-fwd-backups/<host-name>/state.db.litestream/
-# The trailing .litestream segment is constructed by Litestream automatically.
-# LITESTREAM_S3_PATH defaults to "state.db" for single-host deployments; set
-# it to "<host-name>/state.db" (e.g., "ap-ftso-02/state.db") when multiple
-# fwd instances share the same bucket to avoid path collisions.
+# The cloud-S3 replica shipped at v0.4.1 was reverted at v0.4.3 per the
+# operator's "no outside dependencies" directive. fwd produces backup
+# artifacts at a known local path; transport off-host is the operator's job.
 
 dbs:
   - path: /data/state.db
     replicas:
-      - type: s3
-        endpoint: ${LITESTREAM_S3_ENDPOINT}
-        bucket: ${LITESTREAM_S3_BUCKET}
-        path: ${LITESTREAM_S3_PATH:-state.db}
-        region: ${LITESTREAM_S3_REGION}
-        access-key-id: ${LITESTREAM_S3_ACCESS_KEY_ID}
-        secret-access-key: ${LITESTREAM_S3_SECRET_ACCESS_KEY}
-        retention: ${LITESTREAM_RETENTION:-72h}
+      - type: file
+        path: /backup/state.db
+        retention: 72h
         snapshot-interval: 24h
         sync-interval: 10s
