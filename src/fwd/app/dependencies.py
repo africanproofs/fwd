@@ -3,9 +3,19 @@
 Composition lives here so api/ depends only on app/ (and domain/). Each
 dependency yields a context-manager that opens infra resources and
 closes them on exit.
+
+v0.4.5 adds `RequestScopeCM` — the per-request/per-tick scope that shares
+ONE session across signer/tx_repo/nonce_repo. The pre-v0.4.5 multi-CM
+pattern (SignerCM + TransactionRepoCM + NonceRepoCM each opening their
+own session_scope) caused writer-lock contention under our BEGIN IMMEDIATE
+event handler: three concurrent sessions per request, each grabbing the
+SQLite writer lock, manifested as "database is locked" in the Phase 5
+GA drill. RequestScopeCM consolidates them onto a single session.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 from fwd.app.wallet_create import VaultUnavailableError
 from fwd.infra.caller_repo import Caller as Caller  # re-export for api/caller_auth.py
@@ -124,3 +134,57 @@ class WalletRepoCM:
 
 def get_wallet_repo() -> WalletRepoCM:
     return WalletRepoCM()
+
+
+@dataclass(frozen=True)
+class RequestScope:
+    """Bundle of components built atop a single session — see RequestScopeCM."""
+
+    signer: EnvelopeSigner
+    rpc_mgr: RpcManager
+    tx_repo: TransactionRepo
+    nonce_repo: NonceRepo
+
+
+class RequestScopeCM:
+    """Single-session scope for signing-flow operations.
+
+    Opens ONE session_scope and constructs signer + tx_repo + nonce_repo
+    against that shared session. Also opens Vault + RpcManager. Designed
+    for api/sign.py and app/receipt_watcher.py — both flows need all
+    four components, and pre-v0.4.5 each opened its own session_scope,
+    causing SQLite writer-lock contention under our BEGIN IMMEDIATE
+    event handler (each session.execute fires `begin` → BEGIN IMMEDIATE
+    → contends with the other sessions' writer-lock attempts).
+
+    Sharing one session means one BEGIN IMMEDIATE per request/tick.
+    Reads and writes from the three repos cooperate cleanly.
+    """
+
+    async def __aenter__(self) -> RequestScope:
+        try:
+            self._vault = VaultClient()
+            self._vault_entered = await self._vault.__aenter__()
+        except VaultError as exc:
+            raise VaultUnavailableError(str(exc)) from exc
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        self._rpc_mgr = RpcManager()
+        wallet_repo = WalletRepo(self._session)
+        return RequestScope(
+            signer=EnvelopeSigner(self._vault_entered, wallet_repo),
+            rpc_mgr=self._rpc_mgr,
+            tx_repo=TransactionRepo(self._session),
+            nonce_repo=NonceRepo(self._session),
+        )
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        # Close RPC manager first (no DB state); then session (commits/rolls
+        # back the shared transaction); then Vault.
+        await self._rpc_mgr.aclose()
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+        await self._vault.__aexit__(exc_type, exc, tb)
+
+
+def get_request_scope() -> RequestScopeCM:
+    return RequestScopeCM()

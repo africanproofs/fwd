@@ -35,12 +35,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from fwd.app.dependencies import (
-    NonceRepoCM,
-    RpcManagerCM,
-    SignerCM,
-    TransactionRepoCM,
-)
+from fwd.app.dependencies import RequestScopeCM
 from fwd.app.sign_and_send import _DEFAULT_TIP_WEI, _GAS_ESTIMATE_BUFFER
 from fwd.infra.rpc import RpcError, RpcUnavailable
 from fwd.infra.vault_client import VaultError
@@ -90,17 +85,21 @@ async def watch_receipts(config: WatcherConfig) -> None:
 
 
 async def _tick(config: WatcherConfig) -> None:
-    """One pass over pending txs. Opens fresh CMs."""
-    async with (
-        SignerCM() as signer,
-        RpcManagerCM() as rpc_mgr,
-        TransactionRepoCM() as tx_repo,
-        NonceRepoCM() as nonce_repo,
-    ):
-        pending = await tx_repo.list_by_status("submitted")
+    """One pass over pending txs. Opens a single RequestScope per tick.
+
+    v0.4.5: replaces the pre-fix multi-CM pattern (SignerCM + RpcManagerCM +
+    TransactionRepoCM + NonceRepoCM) that opened 4 concurrent session_scopes
+    per tick, each grabbing the SQLite writer lock via our BEGIN IMMEDIATE
+    event handler. RequestScopeCM consolidates the three DB repos onto one
+    shared session — one writer-lock per tick.
+    """
+    async with RequestScopeCM() as scope:
+        pending = await scope.tx_repo.list_by_status("submitted")
         for tx in pending:
             try:
-                await _process_tx(tx, config, signer, rpc_mgr, tx_repo, nonce_repo)
+                await _process_tx(
+                    tx, config, scope.signer, scope.rpc_mgr, scope.tx_repo, scope.nonce_repo
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

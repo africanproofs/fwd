@@ -136,6 +136,27 @@ The `/v1/sign-and-send` happy path:
     but tests run on the host. Cross-environment portability wins; the
     BEGIN IMMEDIATE wrapper provides the atomicity either way.)
 
+    **v0.4.5 doctrine refinement (concurrency-bug fix):** BEGIN IMMEDIATE
+    is issued via the `engine.sync_engine "begin"` event listener in
+    `infra/db.py`. For this to work without raising "cannot start a
+    transaction within a transaction", `dbapi_connection.isolation_level`
+    is set to `None` in the connect-event PRAGMA handler — this disables
+    sqlite3's implicit BEGIN (DEFERRED) wrap so SQLAlchemy's `begin` event
+    is the sole transaction start. AND `busy_timeout` is set to 30000ms
+    to absorb concurrent-writer queueing during sign-and-send bursts
+    (each request holds the writer lock for the duration of its session;
+    Vault decrypt + RPC fee_history + estimate_gas + broadcast + INSERT
+    is ~1s; 10 concurrent at 1s/each = 10s, comfortably within 30s).
+    **Critically:** signing-flow components (signer, tx_repo, nonce_repo)
+    MUST share a single session per request/tick — see `RequestScopeCM`
+    in `app/dependencies.py`. The pre-v0.4.5 multi-CM pattern opened 3+
+    concurrent sessions per request, each grabbing the writer lock,
+    causing in-request self-contention manifest as "database is locked".
+    A future Phase 5 follow-up may split the writer-lock critical section
+    (reserve-then-commit + work-outside-lock + insert-then-commit) to
+    drop writer-lock holding time from ~1s to ~ms; until then, the
+    single-session + 30s busy_timeout combo absorbs the concurrency.
+
 7.  fwd queries fee oracle
     - eth_feeHistory for last 5 blocks
     - base_fee + tip suggestion (chain-specific tip floor)
