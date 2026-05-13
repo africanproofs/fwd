@@ -1,10 +1,31 @@
-# Phase 2 placeholder: replicates state.db to a local volume inside the
-# litestream container. This is NOT a real backup. Phase 6 swaps the replica
-# for Scaleway Object Storage (S3-compatible) using the LITESTREAM_S3_*
-# environment variables in .env.
+# fwd state replication — Scaleway Object Storage (S3-compatible).
+#
+# All replica credentials live in env vars (LITESTREAM_S3_*) injected via
+# docker-compose env_file. The bucket is operator-provisioned per
+# docs/runbooks/restore.md § Prerequisites; this config only references it.
+#
+# Replication frequency: WAL segments sync continuously (~10s RPO).
+# Snapshot interval: 24h (compact base for fast restore).
+# Retention: 72h on snapshots (keeps 3 daily snapshots + their WAL chain).
+# Operators can extend retention via LITESTREAM_RETENTION env if needed.
+#
+# Bucket subpath convention (per architecture.md § Backup and restore):
+#   s3://ap-fwd-backups/<host-name>/state.db.litestream/
+# The trailing .litestream segment is constructed by Litestream automatically.
+# LITESTREAM_S3_PATH defaults to "state.db" for single-host deployments; set
+# it to "<host-name>/state.db" (e.g., "ap-ftso-02/state.db") when multiple
+# fwd instances share the same bucket to avoid path collisions.
 
 dbs:
   - path: /data/state.db
     replicas:
-      - type: file
-        path: /var/lib/litestream/local-replica
+      - type: s3
+        endpoint: ${LITESTREAM_S3_ENDPOINT}
+        bucket: ${LITESTREAM_S3_BUCKET}
+        path: ${LITESTREAM_S3_PATH:-state.db}
+        region: ${LITESTREAM_S3_REGION}
+        access-key-id: ${LITESTREAM_S3_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_S3_SECRET_ACCESS_KEY}
+        retention: ${LITESTREAM_RETENTION:-72h}
+        snapshot-interval: 24h
+        sync-interval: 10s
