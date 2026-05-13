@@ -41,7 +41,10 @@ Before starting:
    `backup` Docker volume (or bind-mounted host path) populated with the
    pre-disaster contents — at minimum:
 
-   - `/backup/state.db.litestream/...` (Litestream WAL + snapshots)
+   - `/backup/state.db/...` (Litestream WAL + snapshots — the replica path
+     from `config/litestream/litestream.yml` becomes a directory tree
+     containing `generations/<gen_id>/{snapshots,wal}/` under Litestream
+     0.3.13 type:file replication).
    - `/backup/vault-snapshots/vault-<UTC-timestamp>.snap` (at least one)
 
    The exact mechanism — rsync over SSH, restic, borg, NAS replay, USB
@@ -88,23 +91,23 @@ replica AND at least one Vault Raft snapshot.
 docker run --rm -v fwd_backup:/b alpine:3.19 sh -c '
     echo "--- /b ---"
     ls -la /b
-    echo "--- /b/state.db.litestream ---"
-    ls -la /b/state.db.litestream 2>/dev/null | head -10
+    echo "--- /b/state.db/generations ---"
+    ls -la /b/state.db/generations 2>/dev/null | head -10
     echo "--- /b/vault-snapshots ---"
     ls -la /b/vault-snapshots 2>/dev/null
 '
 ```
 
 Expected:
-- `/b/state.db.litestream/` contains generation directories with WAL +
-  snapshot subfolders (Litestream's on-disk format).
+- `/b/state.db/` is a directory (Litestream replica root, NOT a file)
+  containing `generations/<gen_id>/{snapshots,wal}/` subtrees.
 - `/b/vault-snapshots/` contains at least one `vault-<UTC-ts>.snap` file.
 
 **Pass criterion:**
 
 ```sh
 docker run --rm -v fwd_backup:/b alpine:3.19 sh -c '
-    test -d /b/state.db.litestream \
+    test -d /b/state.db/generations \
         && ls /b/vault-snapshots 2>/dev/null | grep -qE "^vault-[0-9]{8}T[0-9]{6}Z\.snap$"
 '
 echo $?  # 0 = pass
@@ -116,7 +119,7 @@ and re-copy. There is no restorable state on this host yet.
 
 ---
 
-## Step 2 — Spin up a fresh fwd stack with clean state volumes
+## Step 2 — Spin up Vault only; keep fwd and litestream DOWN until state.db is restored
 
 Destroy the state volumes (vault-data, fwd-state) so the restore lands
 into a clean state. **DO NOT** destroy the `backup` volume — that holds
@@ -127,25 +130,36 @@ docker volume rm fwd_vault-data fwd_fwd-state || true
 # Leaves fwd_backup intact.
 ```
 
-Start the stack (all four services: vault, fwd, litestream, vault-snapshot):
+Bring up **only** Vault (and optionally `vault-snapshot`). The fwd and
+litestream services must stay down until Step 3 has restored `state.db`,
+because:
+
+- `fwd`'s entrypoint runs `alembic upgrade head` before starting uvicorn,
+  which creates a fresh empty `state.db` in the `fwd-state` volume.
+- `litestream` will immediately notice the new `state.db`, treat it as a
+  NEW replication source, create a new generation in `/backup/state.db/`,
+  and clobber the pre-disaster generation you copied in. Step 3's restore
+  would then pick the LATEST (empty) generation, silently wiping the
+  backup.
 
 ```sh
-docker compose up -d
-```
-
-At this point:
-- `fwd-vault` is running but uninitialized (its volume is empty).
-- `fwd` has started (it will fail to contact Vault — that's expected; it
-  restarts until unsealed).
-- `fwd-litestream` is running and will idle until `state.db` exists.
-- `fwd-vault-snapshot` is running and will idle/fail-login until Vault is
-  restored (Step 4) and unsealed (the loop continues across failures).
-
-```sh
+docker compose up -d vault vault-snapshot
 docker compose ps
-# Expected: vault (healthy), fwd (restarting OK), litestream (running),
-#           vault-snapshot (running).
+# Expected: vault (healthy after a few seconds), vault-snapshot (running
+# but failing-login until Step 4 restores the AppRole credentials).
 ```
+
+Verify fwd and litestream are NOT running yet:
+
+```sh
+docker compose ps fwd litestream
+# Expected: (no rows or "Exit") — these must stay down.
+```
+
+This deviates from the naïve "start the whole stack" pattern surfaced at
+the v0.4.6 Phase 6 GA drill — Litestream's first replication tick on an
+empty `state.db` permanently destroys the pre-disaster generation. The
+fix landed at v0.4.6 (this version of the runbook).
 
 ---
 
@@ -163,23 +177,12 @@ cp` the recovered file into the fwd container:
 
 ```sh
 docker run --rm \
-    -v fwd_backup:/backup:ro \
-    -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
-    litestream/litestream:0.3.13 \
-    restore -config /etc/litestream.yml -o /tmp/state.db /data/state.db
-# litestream prints progress; "restore complete" on success.
-```
-
-Litestream's `-o` writes to `/tmp/state.db` inside the throwaway
-container. Capture and inject into fwd's volume:
-
-```sh
-docker run --rm \
+    --entrypoint /bin/sh \
     -v fwd_backup:/backup:ro \
     -v fwd_fwd-state:/state \
     -v "$(pwd)/config/litestream/litestream.yml:/etc/litestream.yml:ro" \
     litestream/litestream:0.3.13 \
-    sh -c '
+    -c '
         litestream restore -config /etc/litestream.yml -o /state/state.db /data/state.db
         chown 1000:1000 /state/state.db
     '
@@ -187,6 +190,13 @@ docker run --rm \
 
 The `chown 1000:1000` matches fwd's non-root user inside the fwd image
 (see `Dockerfile`).
+
+**Note:** The `litestream/litestream:0.3.13` image declares `litestream`
+as its `ENTRYPOINT`. To run a shell pipeline inside the container (so
+that `chown` follows the restore), the entrypoint MUST be overridden
+with `--entrypoint /bin/sh` and the command passed as `-c '...'`. Without
+the override, `sh -c '...'` becomes `litestream sh -c '...'` and fails
+with `litestream sh: unknown command`. Surfaced at v0.4.6 Phase 6 GA drill.
 
 **Pass criterion:**
 
@@ -259,9 +269,23 @@ docker exec -e VAULT_TOKEN="${DUMMY_ROOT}" fwd-vault \
     vault operator raft snapshot restore -force /tmp/vault.snap
 ```
 
+Restart the Vault container so the in-memory seal config refreshes from
+the on-disk restored state:
+
+```sh
+docker compose restart vault
+sleep 5
+docker exec fwd-vault vault status | head -10
+# Expected: Sealed: true, Total Shares: <original-N>, Threshold: <original-K>
+```
+
 The Vault becomes sealed after restore. The dummy unseal keys and the
 dummy root token are now invalid — they unsealed the throwaway state, not
-the restored state.
+the restored state. **Without the container restart, `vault status` will
+show stale in-memory seal config (the dummy N/K), even though the on-disk
+seal config is the restored one — this is misleading and was surfaced at
+the v0.4.6 Phase 6 GA drill.** The restart forces the raft node to reload
+seal config from disk.
 
 **(e) Unseal with the ORIGINAL D6 shares.**
 
@@ -425,9 +449,15 @@ Possible outcomes:
 
 | Log line | Meaning | Action |
 |---|---|---|
-| `nonce_reconcile.complete` with no `drift` lines | DB and chain are in sync | None — proceed to Step 8 |
+| *(no `nonce_reconcile.*` lines at all)* | DB and chain are in sync; reconcile is silent on the happy path | None — proceed to Step 8 |
 | `nonce_reconcile.drift wallet=<name> db_nonce=<N> chain_nonce=<M>` | Chain advanced past DB (lost txs) | See drift decision tree below |
-| `nonce_reconcile.skipped reason=rpc_unreachable` | RPC was down at startup | Confirm `RPC_URL_COSTON2` is reachable; restart fwd |
+| `nonce_reconcile.orphan_nonce wallet=<name>` | `nonces` row references a wallet that no longer exists in `wallets` | Investigate; usually safe to ignore on restore if the wallet was intentionally removed pre-disaster |
+| `nonce_reconcile.rpc_failed reason=...` | RPC was unreachable for this wallet's chain | Confirm `RPC_URL_COSTON2` (or the relevant chain RPC URL) is reachable; restart fwd |
+
+Reconcile is best-effort and emits log lines ONLY on drift, orphan, or
+RPC failure (per `src/fwd/app/nonce_reconcile.py`). Silence is the
+happy-path signal; do not look for a `nonce_reconcile.complete` event
+(no such event exists). Surfaced at v0.4.6 Phase 6 GA drill.
 
 **Drift decision tree** — for each wallet showing `db_nonce < chain_nonce`:
 
@@ -515,7 +545,7 @@ hold:
 
 | # | Check | Shell snippet | Expected |
 |---|---|---|---|
-| 1 | `backup` volume has Litestream replica + ≥1 vault snapshot | `docker run --rm -v fwd_backup:/b alpine:3.19 sh -c 'test -d /b/state.db.litestream && ls /b/vault-snapshots 2>/dev/null \| grep -qE "^vault-[0-9]{8}T[0-9]{6}Z\.snap$"'; echo $?` | `0` |
+| 1 | `backup` volume has Litestream replica + ≥1 vault snapshot | `docker run --rm -v fwd_backup:/b alpine:3.19 sh -c 'test -d /b/state.db/generations && ls /b/vault-snapshots 2>/dev/null \| grep -qE "^vault-[0-9]{8}T[0-9]{6}Z\.snap$"'; echo $?` | `0` |
 | 2 | `state.db` restored into the volume | `docker run --rm -v fwd_fwd-state:/state alpine:3.19 test -s /state/state.db; echo $?` | `0` |
 | 3 | `clifwd health` returns vault+fwd ok | `clifwd health \| python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('vault')=='ok' else 1)"; echo $?` | `0` |
 | 4 | Wallet inventory matches pre-disaster count | `curl -sf -H "Authorization: Bearer $KEY" http://127.0.0.1:8080/v1/admin/wallets \| python3 -c "import sys,json; sys.exit(0 if json.load(sys.stdin).get('wallets') else 1)"; echo $?` | `0` |
@@ -542,25 +572,32 @@ mismatch after re-init). Re-run `vault-init.sh` and update `.env`.
 **Target:** ≤ 30 minutes from "host disaster" to "first successful
 `/v1/sign-and-send`" (per `architecture.md:598`).
 
-**Approximate step timings (estimates — to be measured at Phase 6 GA drill):**
+**Measured step timings (v0.4.6 Phase 6 GA drill, 2026-05-13, single-host):**
 
-| Step | Activity | Estimated time |
+| Step | Activity | Measured |
 |---|---|---|
-| Prerequisites | Off-host copy of `backup` volume to new host (operator-driven, out of band) | varies |
-| Steps 1–2 | Confirm backup contents, spin up clean stack | 1–2 min |
-| Step 3 | Litestream restore from local replica | 1–3 min |
-| Step 4 | Vault Raft snapshot restore + dummy-init/unseal-with-D6 dance | 4–8 min |
-| Step 5 | fwd + vault-snapshot restart against restored Vault | 1–2 min |
-| Steps 6–8 | Smoke test + reconcile + signing verify | 3–5 min |
-| **Total (post-transport)** | | **10–20 min** |
+| Prerequisites | Off-host copy of `backup` volume to new host (operator-driven, out of band) | excluded |
+| Steps 1–2 | Confirm backup contents, spin up Vault-only stack | ~2 min |
+| Step 3 | Litestream restore from local replica (8 small WAL files) | <1 min |
+| Step 4 | Vault Raft snapshot restore + dummy-init/unseal-with-D6 dance + restart | ~3 min |
+| Step 5 | fwd + litestream start against restored Vault | <1 min |
+| Steps 6–8 | Smoke test + reconcile + signing verify (mined in 5s) | ~1 min |
+| **Total (post-transport)** | | **7m 36s** |
+
+The measured RTO above is for a small substrate (7 wallets, 4 callers,
+17 transactions, ~210KB SQLite) on a single Docker host with local
+volumes. Larger production state will scale step 3 (Litestream restore)
+roughly linearly with WAL count and snapshot size.
 
 The off-host transport (prerequisite) is excluded from the RTO budget — it
 varies wildly by tool and bandwidth. The 30-min target applies to the
 "backup is available on the new host → signing again" window.
 
-RTO measurement (actual wall-clock) is deferred to Phase 6 GA, when the
-drill is executed end-to-end against a fresh Docker host. At GA, the
-measured RTO is recorded as an addendum to this runbook.
+**Phase 6 GA verification met at v0.4.6** — drill executed live on
+2026-05-13 against the corrected runbook; RTO measured at 7m 36s
+(window from "backup volume re-populated" to "first `/v1/sign-and-send`
+returns `status=mined`"). Evidence:
+`docs/history/0.4.6-phase-6-drill-drift-fixes.md`.
 
 ---
 

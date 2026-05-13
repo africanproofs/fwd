@@ -72,7 +72,14 @@ services:
       - fwd
     command: ["replicate", "-config", "/etc/litestream.yml"]
     volumes:
-      - fwd-state:/data:ro
+      # Litestream needs write access to the source DB to create the
+      # `_litestream_seq` and `_litestream_lock` tracking tables used for
+      # WAL-replication coherence. A read-only mount surfaces as
+      # `attempt to write a readonly database` on every sync iteration
+      # and no replica artifacts ever appear in /backup. See
+      # https://litestream.io/reference/config/#database — the source DB
+      # MUST be writable by the replicator process.
+      - fwd-state:/data
       - ./config/litestream/litestream.yml:/etc/litestream.yml:ro
       - backup:/backup
     # No network membership: Litestream now writes the replica to the local
