@@ -42,7 +42,11 @@ from fwd.infra.api_key import generate_api_key
 from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.caller_repo import metadata as caller_metadata
 from fwd.infra.envelope_signer import EnvelopeSigner
+from fwd.infra.nonce_repo import NonceRepo
+from fwd.infra.nonce_repo import metadata as nonce_metadata
 from fwd.infra.rpc import RpcClient
+from fwd.infra.transaction_repo import TransactionRepo
+from fwd.infra.transaction_repo import metadata as transaction_metadata
 from fwd.infra.vault_client import VaultClient
 from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallet_metadata
@@ -115,12 +119,14 @@ async def test_caller_create_resolve_and_sign_e2e(
     monkeypatch.setenv("VAULT_ADDR", os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200"))
     settings_mod.get_settings.cache_clear()
 
-    # Build a single tmp DB with both tables (callers + wallets).
+    # Build a single tmp DB with all tables (callers + wallets + nonces + transactions).
     db = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
     async with engine.begin() as conn:
         await conn.run_sync(wallet_metadata.create_all)
         await conn.run_sync(caller_metadata.create_all)
+        await conn.run_sync(nonce_metadata.create_all)
+        await conn.run_sync(transaction_metadata.create_all)
 
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -128,6 +134,8 @@ async def test_caller_create_resolve_and_sign_e2e(
     async with VaultClient() as vault, AsyncSession(engine) as session:
         wallet_repo = WalletRepo(session)
         caller_repo = CallerRepo(session)
+        tx_repo = TransactionRepo(session)
+        nonce_repo = NonceRepo(session)
         signer = EnvelopeSigner(vault, wallet_repo)
 
         # 1. Real argon2id key generation.
@@ -177,15 +185,18 @@ async def test_caller_create_resolve_and_sign_e2e(
         # 8. sign_and_send through the real signer (decrypt via real Vault) and
         #    mock RPC. The resolved caller's policy_path is what would be used
         #    by Phase 7's policy engine; in Phase 4 it's stored, not enforced.
+        #    (v0.4.0a3 added the explicit caller field per F8.1; v0.4.0a3 +
+        #    v0.4.0a5 added the tx_repo + nonce_repo args.)
         request = SignAndSendRequest(
             wallet="integ-caller-wallet",
+            caller=resolved.name,
             chain=114,
             to="0x" + "22" * 20,
             value_wei="0",
             data="0x",
             gas=21000,
         )
-        result = await sign_and_send(request, signer, rpc)
+        result = await sign_and_send(request, signer, rpc, tx_repo, nonce_repo)
 
         assert result.hash == "0x" + "cd" * 32
         assert result.nonce == 0
