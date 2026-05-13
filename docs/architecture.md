@@ -318,7 +318,7 @@ CREATE INDEX idx_tx_method ON transactions (method_name, contract_address);
 CREATE INDEX idx_audit_caller_ts ON audit_log (caller, ts);
 ```
 
-PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `foreign_keys=ON`.
+PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, plus `dbapi_connection.isolation_level=None` set in the `connect` handler (disables sqlite3's implicit `BEGIN (DEFERRED)` so SQLAlchemy's `begin` event handler is the sole transaction start; v0.4.5 fix). The 30 s `busy_timeout` (bumped from 5 s at v0.4.5) absorbs concurrent-writer queueing during sign-and-send bursts.
 
 ## API surface
 
@@ -561,45 +561,167 @@ Trade-off: no automatic credential rotation. Operator-driven `secret_id` rotatio
 
 ## Policy YAML format
 
+Authoritative shape per `decisions.md` D13 (caller-keyed indirection) +
+D14 (Phase 7 implementation refinements). Loaded once at startup from
+`$FWD_POLICY_PATH` (default `/etc/fwd/policy.yaml`); operator mounts via
+docker-compose volume bind. The file is **operator-controlled and
+gitignored** (Core invariant #12).
+
 ```yaml
 version: 1
 
-wallets:
-  ftso-claim-flare-prod:
-    address: "0x..."   # filled in after Phase 8 generation
-    chain: 14          # Flare mainnet
-    permissions:
-      ftso-fee-claimer:
-        contracts:
-          "0xRewardManager...":
-            methods:
-              claim:
-                args_constraints:
-                  beneficiary: "0x7c3579ab3e647395c96a1efc98af9a31c5ecc294"
-                max_value_wei: 0
-        rate:
-          per_hour: 10
-          per_day: 100
-        require_human_approval_above_value_wei: null   # claim sends 0; null disables
+callers:
+  ftso-fee-claimer-prod:
+    policy_path: ftso-claim
 
-  register-coston2-test:
-    address: "0x..."
-    chain: 114         # Coston2
-    permissions:
-      apregister-e2e:
-        contracts:
-          "0xF9fDB222FCa62B50a0d94C1F31650a4034b60B12":
-            methods:
-              register:
-                max_value_wei: 0
-              updateMetadata:
-                max_value_wei: 0
-        rate:
-          per_hour: 50
-          per_day: 200
+wallets:
+  claim-recipient-flare-prod:
+    policy_path: claim-recipient
+
+permissions:
+  ftso-claim:
+    contracts:
+      "0xRewardManager...":              # checksummed; case-insensitive at match
+        abi: reward_manager              # references config/abis/registry.yaml
+        methods:
+          "claim(address,uint256)":      # full ABI signature, not bare name
+            max_value_wei: "0"           # decimal string, parsed to int
+            arg_predicates:
+              recipient: "0x7c3579ab3e647395c96a1efc98af9a31c5ecc294"
+              epochId: any               # sentinel; matches any decoded value
+    wallet_allowlist: ["claim-recipient-flare-prod"]
+    rate:                                # per (caller, wallet, contract, method)
+      per_hour: 100
+      per_day: 1000
+
+wallet_constraints:
+  claim-recipient:
+    max_aggregate_value_wei_per_day: "0"
+    rate:
+      per_hour: 200
+      per_day: 2000
 ```
 
-Policy is hot-reloaded on file mtime change. Reload writes an audit row.
+**Reload.** Startup-only in v1 (D14 operator decision). Policy.yaml
+changes require `docker compose restart fwd`. SIGHUP hot-reload deferred
+to Phase 10.
+
+## Policy engine
+
+The Phase 7 policy engine evaluates each `/v1/sign-and-send` request
+against the loaded `policy.yaml`. Pure-function shape (per D14):
+
+```python
+@dataclass(frozen=True)
+class AllowDecision:
+    decoded: DecodedIntent       # the typed intent that passed
+    matched_permission_path: str # e.g. "ftso-claim"
+    rate_buckets_advanced: list[str]  # for audit_log decision_reason
+
+@dataclass(frozen=True)
+class DenyDecision:
+    reason: str                  # e.g. "policy_denied: max_value_wei exceeded"
+    step: int                    # 1-10 per D14 evaluation order
+
+async def evaluate(
+    caller: Caller,
+    request: SignAndSendRequest,
+    policy: Policy,
+    intent_decoder: IntentDecoder,
+    rate_repo: RateRepo,
+    wallet_repo: WalletRepo,
+) -> AllowDecision | DenyDecision: ...
+```
+
+Evaluation order is the 10 steps in D14. Every `Deny` carries the step
+number for forensics; every `Allow` carries the list of advanced rate
+buckets (for audit log row's `decision_reason` field).
+
+**Rate-limit state** lives in two SQLite tables (Alembic 0005,
+v0.5.0a3): `rate_buckets` (caller × wallet × contract × method × window
+counter) and `wallet_buckets` (wallet × window aggregate value sum +
+counter). Windows are fixed UTC-aligned (D14 operator decision: trade
+boundary bursts for simplicity). Buckets older than the largest
+configured window are deleted at policy-load time (bounded growth).
+
+**Startup fail-fast** runs after policy load: orphan callers (caller
+whose `policy_path` is not in policy.yaml), orphan signatures (method in
+policy.yaml that does not resolve against its ABI), and orphan wallet
+references (`wallet_allowlist` entry not in `wallets` table) all cause
+fwd to refuse to serve.
+
+## Intent decoder
+
+ABI-based calldata decoder. Pure function in `src/fwd/domain/intent.py`
+(no I/O):
+
+```python
+def decode_intent(
+    contract: str,             # checksummed address
+    calldata: bytes,           # 0x-stripped raw bytes
+    abi: ContractAbi,          # loaded from registry
+) -> DecodedIntent | None: ...
+```
+
+Returns `None` (NOT raises) on any failure — unknown selector,
+malformed bytes, type mismatch. Caller treats `None` as default-deny.
+
+**ABI registry.** In-repo `config/abis/` (D15 operator decision: ABIs
+are public; commit them, pin them, no runtime fetch). Loaded once at
+startup; in-process dict keyed by `(contract_address, selector)`.
+
+```
+config/abis/
+  registry.yaml              # name → file mapping
+  reward_manager.json        # FTSO RewardManager (Flare + Coston2)
+  participant_register.json  # apregister (Coston2 + future Flare)
+  erc20.json                 # canonical ERC-20 (transfer, approve)
+```
+
+**v0.5.0 type support.** `address` (lowercased), `uint*` (Python int),
+`bool`, `bytes32`. Dynamic types (`bytes`, `string`, arrays, structs,
+tuples) NOT supported in v0.5.0 — decoder returns `None`. Adding
+support is a Phase 7 follow-up when a real consumer needs it (no
+speculative scope).
+
+## Audit log
+
+Phase 7 wires the audit log writes that v0.4.0a3's empty schema has
+been waiting for. Authoritative hash-chain mechanics per
+`decisions.md` D16.
+
+**Row shape** (Alembic 0004 — already shipped):
+- `seq INTEGER PRIMARY KEY AUTOINCREMENT`
+- `ts TIMESTAMP NOT NULL`
+- `caller TEXT` — NULL for admin-keyed actions
+- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`
+- `request_json TEXT` — canonical sorted-key compact JSON of request payload
+- `decision TEXT NOT NULL` — `approved` | `denied` | `error`
+- `decision_reason TEXT` — human-readable, e.g. `"policy_denied step=5: max_value_wei exceeded"`
+- `outcome TEXT` — canonical sorted-key compact JSON of outcome payload
+- `prev_hash TEXT NOT NULL` — hex SHA-256 of preceding row's `row_hash`; genesis = `'0' * 64`
+- `row_hash TEXT NOT NULL` — `sha256(prev_hash || NUL || ts || NUL || caller || NUL || action || NUL || request_json || NUL || decision || NUL || decision_reason || NUL || outcome).hexdigest()`
+
+**Concurrency.** Audit writes happen INSIDE the request's RequestScope
+session (v0.4.5 single-session-per-request invariant). One writer-lock
+acquisition covers nonce reservation + transaction INSERT + audit_log
+INSERT + rate-bucket increment. Estimated additional lock-holding time
+from audit + rate: ~5–10 ms on top of the existing ~1 s Vault decrypt
++ RPC. Within 30 s busy_timeout headroom; no lock-split refactor in
+v1.
+
+**Walker CLI** ships at v0.5.0a4 — `clifwd audit verify | show | tail`.
+`verify` walks the chain, recomputes `row_hash`, compares to stored
+value AND to next row's `prev_hash`. Exits 0 on intact chain; 2 with
+first-break details on failure.
+
+**Backfill.** None. The audit log records forward from v0.5.0 only.
+Pre-Phase-7 wallets, callers, and transactions have no audit history.
+
+**Tamper evidence vs tamper prevention.** v0.5.0 is tamper-evident —
+the chain is only as anchored as the operator's out-of-band snapshots
+of `clifwd audit verify`. Phase 10 on-chain anchor (weekly Merkle root
+commit to Flare via fwd itself) closes the recursion.
 
 ## Backup and restore
 

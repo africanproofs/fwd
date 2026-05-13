@@ -422,6 +422,260 @@ Permission evaluation order (Phase 7):
 - **A real consumer needs a policy shape outside this model** (e.g., delegated signing with caller-of-caller chains, multi-signature requirements, time-of-day constraints). Re-evaluate at Phase 7 spec time; don't extend the schema speculatively.
 - **`wallet_allowlist` becomes unwieldy** (e.g., a caller permitted on >50 wallets). Phase 7 may add wildcards or pattern matching; that's an extension, not a reversal of D13.
 
+## D14. Policy engine implementation (Phase 7)
+
+**Decision.** Phase 7 implements the policy engine spec'd in D13. Concretely:
+
+- **File location.** `FWD_POLICY_PATH` env var (default `/etc/fwd/policy.yaml`); operator mounts via docker-compose volume bind. The file is **operator-controlled and gitignored** (Core invariant #12 — policy values live outside the repo). The `.env.example` documents the variable; the actual `policy.yaml` is provisioned per-host.
+
+- **Schema validation.** YAML loaded once at process startup; parsed into a Pydantic v2 `Policy` model (strict mode, `extra='forbid'`). Schema versioning is explicit: the file MUST declare `version: 1`; future schema breaks (Phase 10+) bump the version + add a migration path.
+
+- **Schema shape** (refining D13's example with Phase 7 implementation details — D13 had method names; D14 promotes them to full ABI signatures to disambiguate overloads):
+
+  ```yaml
+  version: 1
+
+  callers:
+    ftso-fee-claimer-prod:
+      policy_path: ftso-claim
+
+  wallets:
+    claim-recipient-flare-prod:
+      policy_path: claim-recipient
+
+  permissions:
+    ftso-claim:
+      contracts:
+        "0xRewardManager...":             # checksummed; address-normalized at load
+          abi: reward_manager             # references config/abis/registry.yaml
+          methods:
+            "claim(address,uint256)":     # full ABI signature (NOT bare name); selector computed at load
+              max_value_wei: "0"          # decimal string; parsed to int at load
+              arg_predicates:             # required when args constrain custody outcome
+                recipient: "0x7c3579ab3e647395c96a1efc98af9a31c5ecc294"
+                epochId: any              # sentinel; matches any decoded value
+      wallet_allowlist: ["claim-recipient-flare-prod"]
+      rate:                               # per (caller, wallet, contract, method) tuple
+        per_hour: 100                     # ≤ 100 successful signings per UTC hour
+        per_day: 1000                     # ≤ 1000 per UTC day
+
+  wallet_constraints:
+    claim-recipient:
+      max_aggregate_value_wei_per_day: "0"   # claim-only wallet; never moves value
+      rate:                                  # OPTIONAL wallet-level rate cap
+        per_hour: 200
+        per_day: 2000
+  ```
+
+- **Evaluation order** (refining D13's 8 steps with arg-predicate semantics):
+  1. Resolve `callers.<name>.policy_path` to a `permissions.<path>` block. Missing → 403 default-deny.
+  2. Look up `permissions.<path>.contracts.<request.to>` (address compared case-insensitive). Missing → 403.
+  3. Decode `request.data` against `contracts.<addr>.abi` (D15). Decode failure → 403.
+  4. Look up `methods.<decoded.method_signature>`. Missing → 403.
+  5. Compare `request.value_wei <= method.max_value_wei` (BigInt). Exceeded → 403.
+  6. For each `arg_predicates[name]`: if predicate is `any`, pass; else compare against `decoded.args[name]` (case-insensitive for addresses, exact for ints/bools/bytes). Mismatch → 403.
+  7. Check `wallet_allowlist` includes `request.wallet`. Missing → 403.
+  8. Caller rate check (`scope_caller × scope_wallet × scope_contract × scope_method × window`): atomic increment-and-test under writer lock; cap exceeded → 403.
+  9. Wallet constraints lookup (`wallets.<name>.policy_path` → `wallet_constraints.<path>`): aggregate-value-cap check and wallet-rate check (own bucket). Exceeded → 403.
+  10. Allow. Audit row written by caller (sign-and-send use case), not by the policy engine.
+
+- **Rate-limit state.** Two SQLite tables added at Alembic 0005 (a3 implementation ship):
+
+  ```sql
+  CREATE TABLE rate_buckets (                 -- caller-keyed signing-count buckets
+      caller        TEXT NOT NULL,
+      wallet        TEXT NOT NULL,
+      contract      TEXT NOT NULL,            -- checksummed address
+      method        TEXT NOT NULL,            -- full ABI signature
+      window_kind   TEXT NOT NULL,            -- 'hour' | 'day'
+      window_start  TIMESTAMP NOT NULL,       -- UTC-aligned bucket boundary
+      counter       INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (caller, wallet, contract, method, window_kind, window_start)
+  );
+
+  CREATE TABLE wallet_buckets (               -- wallet-keyed aggregate-value buckets
+      wallet               TEXT NOT NULL,
+      window_kind          TEXT NOT NULL,     -- 'hour' | 'day'
+      window_start         TIMESTAMP NOT NULL,
+      counter              INTEGER NOT NULL DEFAULT 0,
+      aggregate_value_wei  TEXT NOT NULL DEFAULT '0',  -- decimal string
+      PRIMARY KEY (wallet, window_kind, window_start)
+  );
+  ```
+
+  Windows are **fixed UTC-aligned buckets** (operator decision at v0.5.0a1): hour bucket `window_start = TRUNCATE(now, 'hour')`; day bucket `window_start = TRUNCATE(now, 'day')`. Trade-off: a 100/hour caller can issue 100 calls at 23:59 + 100 calls at 00:01 (effective 200 in 2 minutes around UTC midnight). Acceptable for v1; sliding windows deferred to Phase 10. Stale buckets older than the largest configured window are deleted at policy-load time (bounded growth).
+
+- **Concurrency.** Rate check + increment is a single round-trip under the writer lock (`BEGIN IMMEDIATE; SELECT counter; if counter < cap then UPDATE counter = counter + 1; COMMIT`). Audit log write (D16) happens in the same session — one writer-lock acquisition per request, same RequestScope pattern as v0.4.5.
+
+- **Reload semantics.** **Startup-only in v1** (operator decision at v0.5.0a1). Policy.yaml changes require `docker compose restart fwd`. The earlier architecture.md claim "Policy is hot-reloaded on file mtime change" is retired. SIGHUP hot-reload deferred to Phase 10.
+
+- **Startup fail-fast.** On boot, after loading policy.yaml:
+  1. Every active row in `callers` (`revoked_at IS NULL`) MUST reference a `policy_path` that exists in `policies` block. Missing → fwd refuses to serve, logs the orphan caller, exits.
+  2. Every method signature in `policies.*.contracts.*.methods` MUST resolve to a callable in the referenced ABI. Missing → fwd refuses to serve, logs the orphan signature, exits.
+  3. Every `wallets.policy_path` referenced in `permissions.*.wallet_allowlist` MUST exist in the `wallets` table; same for `wallet_constraints`. Missing → fail-fast.
+
+  This is the audit-time consistency check; once it passes, runtime evaluation is dictionary lookups.
+
+- **Default-deny.** Non-negotiable (Core invariant #2). Every code path in the evaluator returns `Deny` unless an explicit `Allow` is reached at step 10. Synthetic-attack test at v0.5.0a5 verifies this against curated malicious inputs (unknown method, value > max, wrong arg_predicate, beyond rate, etc.).
+
+**Why this matters.** D13 fixed the policy SHAPE (caller-keyed indirection); D14 fixes the IMPLEMENTATION (Pydantic schema, evaluation algorithm, rate-bucket state, reload semantics, startup checks). Without D14, the Phase 7 a3 implementation prompt has too many open questions and Sonnet adapts in ways that may drift from operator intent.
+
+**Consequences.**
+
+- **v0.5.0a3 (Phase 7 policy engine ship)** lands `src/fwd/domain/policy.py` (Pydantic schema), `src/fwd/app/policy_engine.py` (evaluator), `src/fwd/infra/rate_repo.py` (rate_buckets + wallet_buckets), Alembic 0005.
+- **v0.5.0a5 (integration ship)** wires the engine into `app/sign_and_send.py`; existing tests that exercise sign-and-send WITHOUT a `policy.yaml` will need a test fixture. Test-fixture cost is a known one-time tax.
+- **Pre-Phase-7 callers** (the four already in the DB) MUST be reconciled before v0.5.0 GA: either revoked or paired with a `policy_path` that exists in the new `policy.yaml`. Operator-driven during Phase 7 GA.
+
+**When to revisit.**
+
+- **Sliding-window rate limit becomes necessary** (a real caller hits the UTC-boundary burst trap and it matters). Phase 10 swap; the `rate_buckets` table can be redesigned independently.
+- **Hot-reload is requested by an operator** (frequent policy churn during a migration). Phase 10 SIGHUP handler; same Pydantic schema; same evaluation algorithm.
+
+## D15. ABI intent decoder shape and ABI registry
+
+**Decision.** Phase 7 ships a pure-function intent decoder: `decode_intent(contract: str, calldata: bytes) -> DecodedIntent | None`. The decoder is foundational — without typed argument extraction, the policy engine can only check 4-byte selectors, which is far weaker than the "sign intent, never opaque bytes" promise of Core invariant #3.
+
+- **Library.** `eth_abi` (pure Python, narrow API surface, already a transitive of `eth-account` via `eth-utils`; no new top-level dep). Used for: (a) computing the 4-byte function selector from a signature, (b) decoding the calldata's argument tuple against the function's argument types.
+
+- **`DecodedIntent` dataclass** (in `src/fwd/domain/intent.py`):
+
+  ```python
+  @dataclass(frozen=True)
+  class DecodedIntent:
+      contract: str               # checksummed address
+      method_signature: str       # "claim(address,uint256)"
+      selector: str               # "0x12345678" (first 4 bytes of keccak256(method_signature))
+      args: dict[str, Any]        # arg_name → decoded Python value (str for address, int for uint, etc.)
+  ```
+
+  Returns `None` (NOT raises) on any decode failure. Caller (the policy engine) treats `None` as default-deny.
+
+- **ABI registry.** **In-repo `config/abis/`** (operator decision at v0.5.0a1: ABIs are public contract metadata, not secrets — committing matches the open-source spirit of the project and is consistent with the FTSO RewardManager and apregister contracts both being public on-chain). Layout:
+
+  ```
+  config/abis/
+    registry.yaml              # name → file mapping
+    reward_manager.json        # Flare FTSO RewardManager (mainnet + Coston2-equivalent)
+    participant_register.json  # apregister Coston2 (0x09f15b14D16BA645661c576348E4d4C201242bF2)
+    erc20.json                 # canonical ERC-20 (transfer, approve)
+  ```
+
+  ```yaml
+  # config/abis/registry.yaml
+  version: 1
+  abis:
+    reward_manager: reward_manager.json
+    participant_register: participant_register.json
+    erc20: erc20.json
+  ```
+
+  Loaded once at startup into an in-process dict: `abis: dict[str, dict[selector, method_fragment]]`. Reload requires fwd restart (same as policy).
+
+- **v0.5.0 scope.** Three ABIs only: FTSO RewardManager (unblocks Phase 8 production migration), ParticipantRegister (unblocks Phase 9 apregister migration), ERC-20 (any future token-holding wallet). Adding a fourth ABI is a one-file PR — not a doctrine change.
+
+- **Type handling at v0.5.0.**
+  - `address`: decoded as bytes, normalized to lowercase 0x-hex; arg_predicate comparison is case-insensitive.
+  - `uint*`: decoded as Python int; arg_predicate string-int parsed at policy-load time to int.
+  - `bool`: decoded as bool.
+  - `bytes32`: decoded as 0x-hex string.
+  - `bytes`/`string`/dynamic arrays/structs: NOT supported in v0.5.0 (no consumer needs them yet). Decoder returns `None`; document the gap; add support when a consumer requires it (matches "What FWD Deliberately IS NOT" — no speculative scope).
+
+- **Selector collision handling.** Two different methods CAN share a 4-byte selector (cryptographic accident). Policy.yaml indexes by FULL signature; the decoder picks the matching signature from the ABI by argument-type compatibility. If a collision occurs WITHIN one ABI (vanishingly rare in practice), startup fail-fast logs the collision and refuses to load.
+
+- **Hazards.** Three documented patterns:
+  1. **Padding-stripping for addresses.** `eth_abi` returns 32-byte left-padded addresses for the `address` type; the decoder strips to 20 bytes and lowercases. Test coverage at a2 ensures the strip-and-lower is consistent.
+  2. **Integer overflow.** Python int has arbitrary precision; uint256 decodes cleanly. No overflow risk at v1.
+  3. **Method-name vs signature mismatch.** Policy.yaml MUST use full signatures (`claim(address,uint256)`), not bare names (`claim`). Startup validation rejects bare names with a clear error.
+
+**Alternatives considered.**
+
+- **`web3.py`** for ABI handling. Rejected: large dep tree (~30 transitive deps), much of which `fwd` doesn't need. `eth_abi` is the focused subset.
+- **Roll our own decoder** using `eth-utils` keccak + manual ABI parsing. Rejected: ABI decoding has well-known edge cases (dynamic types, structs, tuples) and reinventing the wheel is high-bug-density work for a security-critical path.
+- **Operator-mounted ABIs** (env-var path or volume bind). Rejected at operator decision time: ABIs are public; bake-time pinning is an integrity gain; restore is simpler.
+- **On-chain ABI fetch** at startup from a block explorer. Rejected: explorer availability becomes a fwd-startup dependency; an explorer compromise becomes a fwd compromise vector. Not a fit for default-deny custody doctrine.
+
+**Why this matters.** A decoder that returns `None` on any failure is the simplest expression of Core invariant #3 ("Sign intent, never opaque bytes"). If we can't tell the operator-in-policy what's about to be signed in human-readable terms, we refuse. This shape is verified by the v0.5.0a5 synthetic-attack test.
+
+**Consequences.**
+
+- **v0.5.0a2** lands the decoder, ABI registry loader, and three ABI JSONs in `config/abis/`. No integration with sign-and-send yet (a5 wires it in).
+- **The ABI files at `config/abis/*.json` are public** — committed to the repo. Anyone reading the repo learns which contracts fwd is wired to sign for; that's a custody-doctrine win, not a leak.
+- **Adding a new contract to AP's signing surface** is a 4-step PR: add the ABI JSON, add the registry.yaml entry, add the permission block to operator's policy.yaml, restart fwd. No code changes.
+
+**When to revisit.**
+
+- **A signing target uses dynamic types** (structs, dynamic bytes). Extend the decoder type handling; add unit tests; ship as a Phase 7 follow-up.
+- **A signing target's ABI is not publicly published** (rare for the Flare ecosystem). Operator-mounted ABI fallback added as a Phase 10 enhancement.
+
+## D16. Audit log hash-chain scheme
+
+**Decision.** Phase 7 wires the audit log writes into every `sign-and-send`, `admin/wallets/*`, and `admin/callers/*` endpoint. The `audit_log` table already exists (Alembic 0004 at v0.4.0a3); this doctrine locks down the hash-chain mechanics that the writer enforces and the walker verifies.
+
+- **Hash function.** **SHA-256** (`hashlib.sha256`) — NIST standard, no new dependencies, deterministic across platforms. BLAKE3 considered for speed but rejected at v0.5.0a1: adds a binary-wheel dependency, doesn't materially change the workload (audit chain verify on 1M rows is seconds with SHA-256).
+
+- **Row schema** (already in place; no migration needed):
+
+  ```sql
+  CREATE TABLE audit_log (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      caller TEXT,                          -- NULL for admin (FWD_ADMIN_KEY) actions
+      action TEXT NOT NULL,                 -- enum below
+      request_json TEXT,                    -- canonical sorted-key compact JSON
+      decision TEXT NOT NULL,               -- 'approved' | 'denied' | 'error'
+      decision_reason TEXT,                 -- human-readable, e.g. "policy_denied: max_value_wei exceeded"
+      outcome TEXT,                         -- canonical sorted-key compact JSON (tx_id, error code, etc.)
+      prev_hash TEXT NOT NULL,              -- hex SHA-256 of preceding row's row_hash; genesis = '0' * 64
+      row_hash TEXT NOT NULL                -- hex SHA-256 of canonical concatenation (below)
+  );
+  ```
+
+- **`action` enum** (locked at v0.5.0a1; extensions add new values, never repurpose existing):
+  - `sign-and-send` — `/v1/sign-and-send` calls (one row per call; the decoded intent + policy decision details land in `request_json` + `decision_reason`)
+  - `sign-and-send-duplicate` — idempotency replay returning prior tx_id (Phase 7 a5)
+  - `wallet-create`, `wallet-import` — admin wallet provisioning
+  - `caller-create`, `caller-revoke` — admin caller management
+  - `policy-load` — fwd startup; the loaded policy.yaml's hash digest goes in `outcome`
+  - `audit-verify-failure` (reserved; emitted by the chain-walker CLI when it discovers a break, written via a privileged code path)
+
+- **`request_json` canonicalization.** Before insert: `json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)`. Deterministic — same input always produces same bytes — which is what makes the hash-chain meaningful across observers.
+
+- **Hash input.** Concatenation of UTF-8 bytes of the following, joined with `\x00` (NUL) separator (collision-resistant; visually unambiguous in audit traces):
+
+  ```
+  prev_hash || NUL || ts.isoformat(timespec='microseconds') || NUL || (caller or '') || NUL || action || NUL || (request_json or '') || NUL || decision || NUL || (decision_reason or '') || NUL || (outcome or '')
+  ```
+
+  `row_hash = sha256(<above>).hexdigest()`. Length always 64 hex chars.
+
+- **Genesis row.** First row's `prev_hash = '0' * 64`. The first audit-log write of any fwd instance's lifetime uses this sentinel. Subsequent rows reference the prior row's `row_hash`.
+
+- **Concurrency.** Writes happen INSIDE the request's RequestScope session (v0.4.5 pattern). One writer-lock acquisition per request covers: nonce reservation + transaction INSERT + audit_log INSERT + rate-bucket increment. Estimated lock-holding-time delta per request from audit + rate writes: ~5–10 ms on top of the existing ~1 s (Vault decrypt + RPC). Within the 30 s busy_timeout headroom; no lock-split refactor needed for v1. Phase 10 may revisit if production contention surfaces.
+
+- **Walker CLI.** New `clifwd audit` subcommand group, ships at v0.5.0a4:
+  - `clifwd audit verify [--from <seq>] [--to <seq>]` — walks the chain, recomputes `row_hash`, compares to stored value AND to next row's `prev_hash`. Exits 0 if entire chain intact; exits 2 with the first-break seq + diff on failure.
+  - `clifwd audit show <seq>` — pretty-prints one row with decoded JSON.
+  - `clifwd audit tail [-n N]` — last N rows in human form.
+
+  Read-only access to SQLite; no admin auth required (the operator runs the CLI on the host where they already have shell access).
+
+- **Backfill.** **No backfill** of pre-Phase-7 entities. The audit_log table contains zero rows pre-v0.5.0; the first write is `action=policy-load` on fwd's first v0.5.0a5+ startup; subsequent rows are post-startup events only. Pre-existing wallets, callers, and transactions have no audit history; that's an honest limitation, not a bug.
+
+- **Tamper evidence vs tamper prevention.** The hash-chain is tamper-EVIDENT — an attacker with write access to SQLite CAN modify any row and recompute hashes forward, but they cannot do so without leaving evidence in the row_hash of any prior row anchored elsewhere (Phase 10 on-chain anchor closes this). At v0.5.0, the only anchor is `clifwd audit verify` snapshots captured by the operator out-of-band. Phase 10 deliverable: weekly Merkle root commit to Flare via fwd itself, breaking the recursion.
+
+**Why this matters.** Audit is the visible accountability layer. fwd's whole value proposition rests on "every signature is recorded, every record is hashed, every chain is walkable." Without this doctrine, the audit log is just a log file — slightly worse than what `.env PRIVATE_KEY=` already provided (which had its own structured logging at least). Hash-chained audit is the differentiator.
+
+**Consequences.**
+
+- **v0.5.0a4** lands `src/fwd/infra/audit_repo.py` + `src/fwd/cli/audit.py`. Pure-substrate; no integration.
+- **v0.5.0a5** wires audit writes into every endpoint that takes a custody action. `/v1/sign-and-send` writes exactly one audit_log row per call. Admin endpoints write one row per CRUD action.
+- **A `clifwd audit verify` invocation against the live SQLite** is part of the v0.5.0 GA verification gate.
+
+**When to revisit.**
+
+- **A real consumer demands tamper-PROOF audit** (e.g., regulatory). Phase 10 on-chain anchor lands.
+- **Audit log writes become a measurable contention point** (production migration hits a workload mix that surfaces it). Lock-split the audit write out of the request's writer-lock critical section. Phase 10.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

@@ -40,6 +40,11 @@ secrets/
 scratch/
 config/policy.yaml
 config/callers.yaml
+# Phase 7 policy file — operator-controlled per D14; whatever path the
+# operator mounts via FWD_POLICY_PATH (default /etc/fwd/policy.yaml).
+# These patterns catch the common in-repo dev placements.
+policy.yaml
+/policy.yaml
 # Dev Vault unseal output (Core invariant #17 dev shortcut).
 # These hold all 5 unseal shares + root token. NEVER commit.
 vault-init-output.json
