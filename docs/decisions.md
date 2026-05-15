@@ -539,22 +539,22 @@ Permission evaluation order (Phase 7):
 
 ## D15. ABI intent decoder shape and ABI registry
 
-**Decision.** Phase 7 ships a pure-function intent decoder: `decode_intent(contract: str, calldata: bytes) -> DecodedIntent | None`. The decoder is foundational — without typed argument extraction, the policy engine can only check 4-byte selectors, which is far weaker than the "sign intent, never opaque bytes" promise of Core invariant #3.
+**Decision.** Phase 7 ships a pure-function intent decoder: `decode_intent(contract: str, calldata: bytes, abi_fn_entry: dict[str, Any]) -> DecodedIntent | None` (shipped v0.5.0a3; the third parameter is the resolved ABI function entry — the policy engine performs `request.to → abi_name → registry.lookup(abi_name, selector) → abi_fn_entry` and hands the entry in, keeping the decoder pure and registry-agnostic). The decoder is foundational — without typed argument extraction, the policy engine can only check 4-byte selectors, which is far weaker than the "sign intent, never opaque bytes" promise of Core invariant #3.
 
-- **Library.** `eth_abi` (pure Python, narrow API surface, already a transitive of `eth-account` via `eth-utils`; no new top-level dep). Used for: (a) computing the 4-byte function selector from a signature, (b) decoding the calldata's argument tuple against the function's argument types.
+- **Library.** `eth_abi` (pure Python, narrow API surface). At v0.5.0a3 it was promoted from a transitive of `eth-account`/`eth-utils` to an **explicit direct dependency** (`eth-abi = "^5.0"` in `[tool.poetry.dependencies]`): zero lockfile-graph change (5.2.0 was already installed transitively), but a direct import on a transitive-only dep on the custody path is a supply-chain-legibility defect. "No new top-level dep" (the original a1 framing) referred to the lockfile graph, which is unchanged; the explicit edge is correctness, not new surface. Used for: (a) computing the 4-byte function selector from a signature (`eth_utils.function_abi_to_4byte_selector`), (b) decoding the calldata's argument tuple against the function's argument types (`eth_abi.decode` — a complete codec that handles nested tuples/arrays).
 
 - **`DecodedIntent` dataclass** (in `src/fwd/domain/intent.py`):
 
   ```python
   @dataclass(frozen=True)
   class DecodedIntent:
-      contract: str               # checksummed address
-      method_signature: str       # "claim(address,uint256)"
-      selector: str               # "0x12345678" (first 4 bytes of keccak256(method_signature))
-      args: dict[str, Any]        # arg_name → decoded Python value (str for address, int for uint, etc.)
+      contract: str               # lowercased 0x-hex address (NOT checksummed — see Hazard #1)
+      method_signature: str       # canonical, e.g. "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])"
+      selector: str               # "0x" + 8 lowercase hex (first 4 bytes of keccak256(method_signature))
+      args: dict[str, Any]        # ONLY predicatable-scalar top-level args (B1 projection — see Type handling)
   ```
 
-  Returns `None` (NOT raises) on any decode failure. Caller (the policy engine) treats `None` as default-deny.
+  Returns `None` (NOT raises) on any decode **failure** (truncated calldata, selector mismatch, codec error). It does NOT return `None` merely because a non-scalar top-level arg is present — see the B1 projection rule under Type handling. Caller (the policy engine) treats `None` as default-deny.
 
 - **ABI registry.** **In-repo `config/abis/`** (operator decision at v0.5.0a1: ABIs are public contract metadata, not secrets — committing matches the open-source spirit of the project and is consistent with the FTSO RewardManager and apregister contracts both being public on-chain). Layout:
 
@@ -575,7 +575,7 @@ Permission evaluation order (Phase 7):
     erc20: erc20.json
   ```
 
-  Loaded once at startup into an in-process dict: `abis: dict[str, dict[selector, method_fragment]]`. Reload requires fwd restart (same as policy).
+  Loaded once at startup into an in-process index **keyed `(abi_name, selector_hex)`** (`dict[abi_name, dict[selector_hex, AbiMethod]]`). The registry is **address-agnostic** — it has no knowledge of contract addresses, because the same ERC-20 ABI serves arbitrarily many token addresses and `reward_manager` serves both Flare and Coston2 deployments at different addresses. The `request.to → abi_name` binding lives in `policy.yaml` (`permissions.<path>.contracts.<address>.abi`, D14, operator-controlled, gitignored); the policy engine composes `address → abi_name → registry.lookup(abi_name, selector)`. (Corrected at v0.5.0a3 — the a1 phrasing "keyed by (contract_address, selector)" was physically impossible.) Only state-changing functions (`stateMutability in {nonpayable, payable}`) are indexed; `view`/`pure` cannot be the target of `sign-and-send`. Reload requires fwd restart (same as policy).
 
 - **v0.5.0 scope.** Three ABIs only: FTSO RewardManager (unblocks Phase 8 production migration), ParticipantRegister (unblocks Phase 9 apregister migration), ERC-20 (any future token-holding wallet). Adding a fourth ABI is a one-file PR — not a doctrine change.
 
@@ -587,14 +587,14 @@ Permission evaluation order (Phase 7):
   - `bytes32` (and any other fixed-size `bytesN` for N ≤ 32): decoded as 0x-hex string.
   - `bytes` (dynamic): decoded as 0x-hex string of the raw bytes; arg_predicate compares as case-insensitive hex.
   - `string` (dynamic): decoded as Python str (UTF-8 from the codec); arg_predicate compares as exact UTF-8 string equality. Empty string is a valid value (NOT a wildcard); use the `any` sentinel for "match anything".
-  - **NOT supported in v0.5.0** (decoder returns `None` → policy default-deny): dynamic arrays, fixed-size arrays, tuples, structs, function pointers. Adding support is a Phase 7 follow-up scoped to whatever real consumer demands it. RewardManager, ParticipantRegister, and ERC-20 (the v0.5.0 ABI registry) do not use any of these.
+  - **B1 projection rule (corrected at v0.5.0a3 — the a1 "decoder returns None" framing was a doctrine contradiction that would have blocked Phase 8).** Top-level arguments whose ABI type is outside the predicatable-scalar set above — dynamic arrays, fixed-size arrays, tuples, structs, function pointers — are **decoded by `eth_abi` (a complete codec) but OMITTED from `DecodedIntent.args`**. They remain fully visible in `method_signature` (the canonical type tuple, e.g. FTSO `claim`'s `(bytes32[],(uint24,bytes20,uint120,uint8))[]`). The decoder returns `None` ONLY on decode failure, never merely because such an arg is present. Consequence: a policy author cannot write an `arg_predicate` against a non-scalar arg (correct — nobody predicates merkle-proof internals); they allowlist the method by its full signature and bound it with `max_value_wei` + rate. This is exactly what the FTSO `claim`/`autoClaim` proof arrays and `autoClaim`'s `address[]` require — the four custody-relevant scalars (`_rewardOwner`, `_recipient`, `_rewardEpochId`, `_wrap`) ARE projected and predicatable; the proof array is not. The signable methods of the three v0.5.0 ABIs are therefore all decodable; the assertion that these ABIs "do not use unsupported types" was false at the ABI level (their `view` methods and FTSO proof arrays use tuples/arrays) and is replaced by: the **signable** methods are all decodable, with non-scalar args projected out per B1, not cause for `None`.
 
 - **Selector collision handling.** Two different methods CAN share a 4-byte selector (cryptographic accident). Policy.yaml indexes by FULL signature; the decoder picks the matching signature from the ABI by argument-type compatibility. If a collision occurs WITHIN one ABI (vanishingly rare in practice), startup fail-fast logs the collision and refuses to load.
 
 - **Hazards.** Three documented patterns:
-  1. **Padding-stripping for addresses.** `eth_abi` returns 32-byte left-padded addresses for the `address` type; the decoder strips to 20 bytes and lowercases. Test coverage at a2 ensures the strip-and-lower is consistent.
-  2. **Integer overflow.** Python int has arbitrary precision; uint256 decodes cleanly. No overflow risk at v1.
-  3. **Method-name vs signature mismatch.** Policy.yaml MUST use full signatures (`claim(address,uint256)`), not bare names (`claim`). Startup validation rejects bare names with a clear error.
+  1. **Address representation (corrected at v0.5.0a3 — the a1 prescription was factually wrong for the installed library).** The a1 doctrine claimed `eth_abi` returns 32-byte left-padded addresses requiring a strip-to-20-and-lowercase step. **`eth_abi` 5.x returns the `address` type already as a lowercase `0x`-hex `str`** — implementing the prescribed strip would double-process a `str` and break. The decoder passes `address` through unchanged; `_normalize` only converts `bytes`/`bytesN` → `"0x"+hex`. `tests/unit/test_intent.py::test_erc20_transfer_address_already_lowercase_from_eth_abi` asserts the library invariant so a future `eth_abi` major that regresses it is caught.
+  2. **Integer overflow.** Python int has arbitrary precision; uint256/int256 decode cleanly (signed via two-complement). No overflow risk at v1.
+  3. **Method-name vs signature mismatch.** Policy.yaml MUST use full canonical signatures (`claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])`), not bare names (`claim`). Startup validation rejects bare names with a clear error.
 
 **Alternatives considered.**
 

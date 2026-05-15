@@ -657,18 +657,26 @@ ABI-based calldata decoder. Pure function in `src/fwd/domain/intent.py`
 
 ```python
 def decode_intent(
-    contract: str,             # checksummed address
-    calldata: bytes,           # 0x-stripped raw bytes
-    abi: ContractAbi,          # loaded from registry
+    contract: str,             # lowercased 0x-hex (NOT checksummed)
+    calldata: bytes,           # raw calldata incl. 4-byte selector
+    abi_fn_entry: dict,        # the resolved ABI function entry
 ) -> DecodedIntent | None: ...
 ```
 
-Returns `None` (NOT raises) on any failure — unknown selector,
-malformed bytes, type mismatch. Caller treats `None` as default-deny.
+Returns `None` (NOT raises) on any decode **failure** — selector
+mismatch, truncated/malformed bytes, codec error. It does NOT return
+`None` because a non-scalar top-level arg is present (B1 projection —
+see below). Caller treats `None` as default-deny. `address` is passed
+through unchanged: `eth_abi` 5.x already returns it as a lowercase
+`0x`-hex `str` (the older "strip 32→20 and lowercase" doctrine was
+wrong for the installed library; corrected v0.5.0a3).
 
 **ABI registry.** In-repo `config/abis/` (D15 operator decision: ABIs
 are public; commit them, pin them, no runtime fetch). Loaded once at
-startup; in-process dict keyed by `(contract_address, selector)`.
+startup; in-process index keyed by **`(abi_name, selector_hex)`** —
+address-agnostic. `request.to → abi_name` is a `policy.yaml` binding
+(D14); the policy engine composes address→abi_name→registry.lookup.
+Only `nonpayable`/`payable` functions are indexed.
 
 ```
 config/abis/
@@ -688,11 +696,20 @@ ParticipantRegister's `string` fields):
 - `bytes` (dynamic) — 0x-hex string of raw bytes
 - `string` (dynamic) — Python `str` (UTF-8)
 
-NOT supported at v0.5.0 — decoder returns `None`: dynamic arrays,
-fixed-size arrays, tuples, structs, function pointers. Adding support
-is a Phase 7 follow-up when a real consumer needs it (no speculative
-scope). The v0.5.0 ABI registry (RewardManager + ParticipantRegister +
-ERC-20) does not use any of the unsupported types.
+**B1 projection** (corrected v0.5.0a3): top-level args of type dynamic
+array / fixed array / tuple / struct / function are **decoded by
+eth_abi but omitted from `DecodedIntent.args`** — they stay visible in
+`method_signature`. The decoder does NOT return `None` for these (the
+a1 "returns None" framing would have blocked Phase 8's FTSO `claim`,
+whose proof arg is `(bytes32[],(uint24,bytes20,uint120,uint8))[]`). The
+four custody-relevant `claim` scalars are projected and predicatable;
+the proof array is not (nobody predicates merkle internals). The
+**signable** methods of all three v0.5.0 ABIs are decodable this way;
+the prior claim that these ABIs "do not use unsupported types" was
+false at the ABI level (their `view` methods + FTSO proof arrays use
+tuples/arrays) — it holds only for the signable surface, via B1. Deep
+dotted-path predicate projection is a Phase 10 item if a real consumer
+needs it (no speculative scope).
 
 ## Audit log
 

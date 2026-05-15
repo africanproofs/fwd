@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fwd"
-version = "0.5.0a2"
+version = "0.5.0a3"
 description = "Flare Wallet Daemon — policy-gated signing service for AP backend keys"
 authors = ["African Proofs <khosimorafo@yahoo.com>"]
 readme = "README.md"
@@ -16,6 +16,7 @@ pydantic-settings = "^2.6"
 httpx = "^0.27"
 eth-account = "^0.13"
 eth-utils = "^5.0"
+eth-abi = "^5.0"
 coincurve = "^20.0"
 sqlalchemy = "^2.0"
 aiosqlite = "^0.20"
@@ -56,7 +57,7 @@ namespace_packages = true
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
-module = ["coincurve.*", "eth_account.*", "eth_utils.*"]
+module = ["coincurve.*", "eth_abi.*", "eth_account.*", "eth_utils.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

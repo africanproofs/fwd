@@ -1,0 +1,5 @@
+version: 1
+abis:
+  reward_manager: reward_manager.json
+  participant_register: participant_register.json
+  erc20: erc20.json
