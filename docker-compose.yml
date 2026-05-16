@@ -56,10 +56,20 @@ services:
         condition: service_started
     env_file:
       - .env
+    environment:
+      # Phase 7 (D14/D16): explicit so the substrate is host-agnostic
+      # (Core invariant #10) and the lifespan policy-load is unambiguous.
+      # Defaults in src/fwd/settings.py match these; set here for clarity.
+      FWD_POLICY_PATH: /etc/fwd/policy.yaml
+      FWD_ABIS_DIR: /app/config/abis
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - fwd-state:/data
+      # Phase 7: operator-controlled policy.yaml (Core invariant #12 —
+      # gitignored, never in the image/repo). The ABI registry ships in
+      # the image via Dockerfile `COPY config/`; only policy.yaml mounts.
+      - ./config/policy.yaml:/etc/fwd/policy.yaml:ro
     networks:
       - fwd-internal
       - fwd-callers

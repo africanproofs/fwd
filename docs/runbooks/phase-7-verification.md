@@ -24,6 +24,40 @@
 > Reviewer-only follow-up to `docs/history/0.5.0-phase-7-ga.md`, exactly
 > as v0.4.1 recorded the Phase 5 proof and v0.4.6 the Phase 6 proof.
 
+## Drill-surfaced amendments (v0.5.1 — read FIRST)
+
+The first live execution (2026-05-16) surfaced eight doctrine↔substrate
+drifts (see `docs/history/0.5.1-phase-7-ga-substrate-and-partial-evidence.md`).
+The substrate fixes shipped in v0.5.1; these amendments are now binding:
+
+1. **Image must be Phase-7.** The deployed `fwd:dev` must be built from
+   Phase-7 source (`docker compose build fwd` from a tree at ≥ v0.5.0a7).
+   A pre-Phase-7 image has no policy engine and silently "works" by
+   lacking `_startup_policy_load`.
+2. **Substrate must be wired (v0.5.1):** Dockerfile `COPY config/`
+   (ships the ABI registry) + a `/usr/local/bin/clifwd` shim;
+   docker-compose.yml fwd `environment:` `FWD_POLICY_PATH=/etc/fwd/policy.yaml`
+   + `FWD_ABIS_DIR=/app/config/abis` and `volumes:`
+   `./config/policy.yaml:/etc/fwd/policy.yaml:ro`. If `poetry install`
+   aborts on a stale lock, run `poetry lock --no-update` first.
+3. **Step 0.5 — revoke pre-existing active callers.** D14 startup
+   fail-fast checks **every active DB caller** against the loaded
+   policy. Before restarting onto the minimal gate policy, revoke any
+   active callers not in it: `GET /v1/admin/callers` →
+   `DELETE /v1/admin/callers/<name>` for each `revoked_at == null`
+   that the gate policy does not declare. Otherwise fwd refuses to boot.
+4. **`clifwd` invocation.** As of v0.5.1 `docker exec fwd clifwd …`
+   works. On an older image without the shim, use:
+   `docker exec fwd python -c "from fwd.cli.main import app; app()" <args>`.
+5. **No `sqlite3` in the slim image.** Inspect DB state via `clifwd`
+   (`audit tail/show/verify`) or the HTTP admin/transactions API, not
+   `docker exec fwd sqlite3`.
+6. **EOA target is acceptable.** If `$ERC20_TOKEN` has no contract code
+   (an EOA), the gate is still fully valid for its purpose: fwd decodes
+   `transfer()` by selector regardless, so decode→policy→sign→broadcast
+   →custody-recovery is proven. Only "a real ERC-20 ledger entry
+   changed" is not asserted; scope the V10 evidence accordingly.
+
 ## What this runbook does and does NOT verify
 
 **Verified by this runbook:**

@@ -44,6 +44,19 @@ COPY --from=build /usr/local/bin /usr/local/bin
 COPY --from=build /build/src /app/src
 COPY alembic.ini /app/alembic.ini
 COPY alembic/ /app/alembic/
+# Phase 7: the ABI registry (config/abis/) is read at lifespan startup by
+# AbiRegistry.load(FWD_ABIS_DIR, default /app/config/abis). It MUST ship in
+# the image or _startup_policy_load fail-fasts (D14). policy.yaml is NOT
+# copied — it is operator-controlled and bind-mounted (Core invariant #12).
+COPY config/ /app/config/
+
+# D16 promises `docker exec fwd clifwd audit verify` as the canonical
+# walker invocation, but `poetry install --no-root` does not install the
+# fwd package, so the pyproject `clifwd` console-script is never created.
+# Ship a thin shim so the documented command resolves on PATH.
+RUN printf '#!/bin/sh\nexec python -c "from fwd.cli.main import app; app()" "$@"\n' \
+        > /usr/local/bin/clifwd \
+    && chmod 755 /usr/local/bin/clifwd
 
 ENV PYTHONPATH=/app/src
 
