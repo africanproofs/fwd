@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fwd.app.wallet_create import VaultUnavailableError
+from fwd.infra.audit_repo import AuditRepo
 from fwd.infra.caller_repo import Caller as Caller  # re-export for api/caller_auth.py
 from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
@@ -130,6 +131,22 @@ class RateRepoCM:
 
 def get_rate_repo() -> RateRepoCM:
     return RateRepoCM()
+
+
+class AuditRepoCM:
+    """Async context manager. Yields an AuditRepo backed by a session."""
+
+    async def __aenter__(self) -> AuditRepo:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return AuditRepo(self._session)
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_audit_repo() -> AuditRepoCM:
+    return AuditRepoCM()
 
 
 class WalletRepoCM:

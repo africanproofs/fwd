@@ -645,7 +645,7 @@ Permission evaluation order (Phase 7):
   - `wallet-create`, `wallet-import` — admin wallet provisioning
   - `caller-create`, `caller-revoke` — admin caller management
   - `policy-load` — fwd lifespan startup (content spec below)
-  - `audit-verify-failure` (reserved; emitted by the chain-walker CLI when it discovers a break, written via a privileged code path)
+  - `audit-verify-failure` (reserved; emitted by the chain-walker CLI when it discovers a break, written via a privileged code path). **Status (Core invariant #18):** the enum value is accepted by `AuditRepo.append` as of v0.5.0a5, but the v0.5.0a5 walker does NOT write it — `clifwd audit verify` returns a `VerifyResult` and exits 2 on a break, it does not mutate the chain. The privileged self-writing-on-detected-break path is **deferred to v0.5.0a6 (or Phase 10)**; writing a row into a chain that is already known-broken needs its own anchoring design and is not required for v1 tamper-evidence.
 
 - **`request_json` canonicalization.** Before insert: `json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)`. Deterministic — same input always produces same bytes — which is what makes the hash-chain meaningful across observers. Same canonicalization applies to `outcome`.
 
@@ -672,13 +672,15 @@ Permission evaluation order (Phase 7):
 
 - **Concurrency.** Writes happen INSIDE the request's RequestScope session (v0.4.5 pattern). One writer-lock acquisition per request covers: nonce reservation + transaction INSERT + audit_log INSERT + rate-bucket increment. Estimated lock-holding-time delta per request from audit + rate writes: ~5–10 ms on top of the existing ~1 s (Vault decrypt + RPC). Within the 30 s busy_timeout headroom; no lock-split refactor needed for v1. Phase 10 may revisit if production contention surfaces.
 
-- **Audit-row authorship** (added at v0.5.0a2 self-review). One audit row per request/operation, written by the use case at the end of the operation (success or failure):
-  - `app/sign_and_send.py` writes `sign-and-send` and `sign-and-send-duplicate` rows
+- **Substrate vs integration split (Core invariant #18; cadence settled).** The audit-log **substrate** — `infra/audit_repo.py` (`AuditRepo.append/get/tail/verify`, `_canonical_json`, `_row_hash`, `GENESIS_PREV_HASH`, `_as_utc`), `app/audit_walk.py`, the `clifwd audit` CLI, the `AuditRepoCM` dependency — shipped at **v0.5.0a5**. The **integration** — threading `AuditRepo` into each use case so rows are actually written — is **deferred to v0.5.0a6** (the sign-and-send integration ship). The authorship plan below describes the a6 target, not a5 behaviour.
+
+- **Audit-row authorship** (added at v0.5.0a2 self-review; integration lands v0.5.0a6). One audit row per request/operation, written by the use case at the end of the operation (success or failure):
+  - `app/sign_and_send.py` writes `sign-and-send` and `sign-and-send-duplicate` rows. **a6 also unifies** `sign_and_send.py`'s existing `request_json` builder onto `audit_repo._canonical_json`: as shipped pre-a5 (`app/sign_and_send.py`, since v0.4.0a3) it uses `json.dumps({...}, sort_keys=True)` WITHOUT D16's `separators=(",", ":")` / `ensure_ascii=False`. This is not a chain-break risk (the chain hashes the stored string verbatim) but is a D16-conformance drift; a6 routes both through the one canonical helper.
   - `app/wallet_create.py` writes `wallet-create`; `app/wallet_import.py` writes `wallet-import`
-  - `app/caller_create.py` writes `caller-create`; `app/caller_revoke.py` writes `caller-revoke` (today both inline in `api/callers.py`; Phase 7 a5 extracts use cases or threads the audit repo through the existing handlers)
+  - `app/caller_create.py` writes `caller-create`; `app/caller_revoke.py` writes `caller-revoke` (today both inline in `api/callers.py`; Phase 7 a6 extracts use cases or threads the audit repo through the existing handlers)
   - `src/fwd/main.py::_startup_policy_load` writes the `policy-load` row at lifespan startup, before the first request handler binds
 
-  Each use case receives the `AuditRepo` via `RequestScope` (sign-and-send) or a dedicated `AdminScope` context manager (admin actions; lands at a5 as part of the integration ship). The audit write happens INSIDE the same writer-lock acquisition as the operation's other DB mutations — atomicity: nonce + tx row + rate buckets + audit row all commit together or all roll back.
+  Each use case receives the `AuditRepo` via `RequestScope` (sign-and-send) or a dedicated `AdminScope` context manager (admin actions; lands at a6 as part of the integration ship). The audit write happens INSIDE the same writer-lock acquisition as the operation's other DB mutations — atomicity: nonce + tx row + rate buckets + audit row all commit together or all roll back.
 
 - **`policy-load` event content** (added at v0.5.0a2 self-review). The fwd-startup policy-load row uses:
   - `caller = NULL` (no caller; lifespan event)
@@ -688,10 +690,10 @@ Permission evaluation order (Phase 7):
   - `outcome` is canonical JSON of: `{"policy_yaml_path": "<path>", "policy_yaml_sha256": "<64-char-hex>", "callers_count": <int>, "permissions_count": <int>, "wallet_constraints_count": <int>, "abis_loaded": ["reward_manager", ...], "fwd_version": "<version>"}`
   - One row per lifespan startup; `clifwd audit show <seq>` against the policy-load rows reconstructs the policy-hash timeline across restarts (useful for forensics: "which policy was in effect when tx X was signed?")
 
-- **Walker CLI.** New `clifwd audit` subcommand group, ships at v0.5.0a5:
-  - `clifwd audit verify [--from <seq>] [--to <seq>]` — walks the chain, recomputes `row_hash`, compares to stored value AND to next row's `prev_hash`. Exits 0 if entire chain intact; exits 2 with the first-break seq + diff on failure.
-  - `clifwd audit show <seq>` — pretty-prints one row with decoded JSON.
-  - `clifwd audit tail [-n N]` — last N rows in human form.
+- **Walker CLI.** New `clifwd audit` subcommand group, **shipped at v0.5.0a5** (`cli/audit.py` → `app/audit_walk.py` → `infra/audit_repo.py`; the CLI is cli-layer and reaches the repo through the app-layer walker, since `cli → {app, domain}` forbids a direct infra import):
+  - `clifwd audit verify [--from <seq>] [--to <seq>]` — walks the chain in `seq` order. For each row it (a) checks the stored `prev_hash` equals the expected predecessor hash (genesis `'0'*64` for the table-minimum row, else the prior row's stored `row_hash`; a windowed walk anchors on the row at `from_seq - 1` and reports a break if that anchor row is absent) and (b) recomputes `row_hash` (using `_as_utc(row.ts)` so the SQLite tz-drop round-trip is symmetric) and compares to the stored value. Exits 0 if the walked range is intact; exits 2 (stderr `CHAIN BROKEN at seq=<n>`) at the first linkage- or recompute-mismatch.
+  - `clifwd audit show <seq>` — pretty-prints one row, decoding `request_json`/`outcome` JSON when parseable; exits 1 if no row at `seq`.
+  - `clifwd audit tail [-n N]` — last N rows (default 20), one tab-separated line per row, ascending `seq`.
 
 - **Walker CLI access pattern** (added at v0.5.0a2 self-review). The canonical invocation runs INSIDE the fwd container via `docker exec`, accessing `/data/state.db` through SQLite's read-only mode. No admin auth, no HTTP path:
 

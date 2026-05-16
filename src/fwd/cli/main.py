@@ -10,6 +10,7 @@ import os
 import httpx
 import typer
 
+from fwd.cli.audit import app as audit_app
 from fwd.cli.callers import app as callers_app
 from fwd.cli.wallets import app as wallets_app
 from fwd.version import __version__
@@ -22,6 +23,7 @@ app = typer.Typer(
 
 app.add_typer(wallets_app, name="wallets")
 app.add_typer(callers_app, name="callers")
+app.add_typer(audit_app, name="audit")
 
 
 @app.command()

@@ -309,7 +309,7 @@ CREATE TABLE audit_log (
     decision_reason TEXT,
     outcome TEXT,                                 -- tx_id, error code, etc.
     prev_hash TEXT NOT NULL,                      -- hash of previous row (genesis = '0' * 64)
-    row_hash TEXT NOT NULL                        -- hash(prev_hash || ts || caller || action || request_json || decision || outcome)
+    row_hash TEXT NOT NULL                        -- sha256(canonical_json({prev_hash,ts,caller,action,request_json,decision,decision_reason,outcome})); see D16 / § Audit log (a1 NUL-join form retired at v0.5.0a2)
 );
 
 CREATE INDEX idx_tx_status ON transactions (status);
@@ -730,15 +730,23 @@ needs it (no speculative scope).
 
 ## Audit log
 
-Phase 7 wires the audit log writes that v0.4.0a3's empty schema has
-been waiting for. Authoritative hash-chain mechanics per
-`decisions.md` D16.
+Phase 7 fills v0.4.0a3's empty `audit_log` schema. Authoritative
+hash-chain mechanics per `decisions.md` D16. **Substrate/integration
+split (Core invariant #18):** the substrate — `infra/audit_repo.py`
+(`AuditRepo`, `_canonical_json`, `_row_hash`, `_as_utc`,
+`GENESIS_PREV_HASH`), `app/audit_walk.py`, the `clifwd audit` CLI, the
+`AuditRepoCM` dependency — shipped at **v0.5.0a5**. Writing rows from
+the use cases (sign-and-send / wallet / caller / lifespan policy-load)
+and unifying `app/sign_and_send.py`'s pre-existing non-compact
+`request_json` builder onto `_canonical_json` are **deferred to
+v0.5.0a6** (the integration ship). The concurrency/authorship
+paragraphs below describe the a6 target.
 
 **Row shape** (Alembic 0004 — already shipped):
 - `seq INTEGER PRIMARY KEY AUTOINCREMENT`
 - `ts TIMESTAMP NOT NULL`
 - `caller TEXT` — NULL for admin-keyed actions
-- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`
+- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`, `audit-verify-failure` (the last is accepted by `AuditRepo.append` from a5 but not written by the a5 walker — see D16)
 - `request_json TEXT` — canonical sorted-key compact JSON of request payload
 - `decision TEXT NOT NULL` — `approved` | `denied` | `error`
 - `decision_reason TEXT` — human-readable, e.g. `"policy_denied step=5: max_value_wei exceeded"`
@@ -746,19 +754,28 @@ been waiting for. Authoritative hash-chain mechanics per
 - `prev_hash TEXT NOT NULL` — hex SHA-256 of preceding row's `row_hash`; genesis = `'0' * 64`
 - `row_hash TEXT NOT NULL` — `sha256(canonical_json_dump({prev_hash, ts, caller, action, request_json, decision, decision_reason, outcome}).encode('utf-8')).hexdigest()` where canonical_json_dump uses `sort_keys=True, separators=(',',':'), ensure_ascii=False`. Revised at v0.5.0a2 self-review from the original NUL-joined concatenation, which was collision-fragile for fields that may contain literal NUL bytes (caller name, decision_reason).
 
-**Concurrency.** Audit writes happen INSIDE the request's RequestScope
-session (v0.4.5 single-session-per-request invariant). One writer-lock
-acquisition covers nonce reservation + transaction INSERT + audit_log
-INSERT + rate-bucket increment. Estimated additional lock-holding time
-from audit + rate: ~5–10 ms on top of the existing ~1 s Vault decrypt
-+ RPC. Within 30 s busy_timeout headroom; no lock-split refactor in
-v1.
+**Concurrency (a6 target).** Once integrated, audit writes happen
+INSIDE the request's RequestScope session (v0.4.5
+single-session-per-request invariant). One writer-lock acquisition
+covers nonce reservation + transaction INSERT + audit_log INSERT +
+rate-bucket increment. Estimated additional lock-holding time from
+audit + rate: ~5–10 ms on top of the existing ~1 s Vault decrypt +
+RPC. Within 30 s busy_timeout headroom; no lock-split refactor in v1.
+(a5 ships `AuditRepoCM` as a standalone session CM; `RequestScope` is
+extended to carry `AuditRepo` at a6.)
 
-**Walker CLI** ships at v0.5.0a5 — `clifwd audit verify | show | tail`,
-canonical invocation `docker exec fwd clifwd audit verify` (D16 walker
-access pattern). `verify` walks the chain, recomputes `row_hash`,
-compares to stored value AND to next row's `prev_hash`. Exits 0 on
-intact chain; 2 with first-break details on failure.
+**Walker CLI** shipped at v0.5.0a5 — `clifwd audit verify | show |
+tail`, canonical invocation `docker exec fwd clifwd audit verify` (D16
+walker access pattern). Layering: `cli/audit.py` → `app/audit_walk.py`
+→ `infra/audit_repo.py` (cli may not import infra directly). `verify`
+walks `seq` order, checking each row's stored `prev_hash` against the
+expected predecessor (genesis `'0'*64` for the table-minimum row, else
+the prior row's stored `row_hash`; a windowed walk anchors on
+`from_seq - 1` and breaks if that anchor is absent) AND the recomputed
+`row_hash` (`_as_utc(row.ts)` keeps the SQLite tz-drop round-trip
+symmetric). Exits 0 on an intact range; 2 (stderr `CHAIN BROKEN at
+seq=<n>`) at the first mismatch. `show` exits 1 if the seq is absent;
+`tail` prints the last N (default 20) ascending.
 
 **Backfill.** None. The audit log records forward from v0.5.0 only.
 Pre-Phase-7 wallets, callers, and transactions have no audit history.
