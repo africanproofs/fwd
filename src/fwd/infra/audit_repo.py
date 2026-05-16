@@ -177,6 +177,23 @@ class AuditRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def commit(self) -> None:
+        """Commit the underlying session.
+
+        Forensic-row durability (D16 / Core invariant #5): a `denied` or
+        `error` sign-and-send audit row is appended on the shared
+        RequestScope session and then the operation raises. That exception
+        propagates through `session_scope`, whose `except Exception:` arm
+        ROLLS BACK — discarding the just-appended forensic row (the exact
+        defect class as the v0.5.0a6 main.py SystemExit bug). The caller
+        commits via this method BEFORE re-raising so the refusal/failure
+        record survives (the trailing session_scope rollback is then a
+        no-op on an already-committed, empty transaction). The explicit
+        nonce/rate releases on the pre-broadcast path run before this
+        commit, so the committed operational state is correct (net-zero).
+        """
+        await self._session.commit()
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

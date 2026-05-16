@@ -244,6 +244,13 @@ async def sign_and_send(
             decision_reason=str(exc),
             outcome=None,
         )
+        # D16 / Core invariant #5: persist the forensic refusal row before
+        # the exception propagates through session_scope (whose except-arm
+        # rolls back). Gate runs BEFORE nonce reservation, so the only
+        # other pending write is the D14 step-8/9 rate increment — which
+        # SHOULD persist on a deny (the attempt is counted; deny does not
+        # call release_rate_after_failure).
+        await audit_repo.commit()
         raise
 
     # 3. Reserve nonce — DB is the source of truth (architecture.md step 6).
@@ -341,6 +348,11 @@ async def sign_and_send(
             decision_reason="pre_broadcast_failure",
             outcome=None,
         )
+        # Persist the forensic row + the just-applied nonce/rate releases
+        # before the exception rolls back session_scope (D16 / Core #5).
+        # reserve(+1) then release_if_unused(-1) net to zero, so the
+        # committed nonce/rate state is correct.
+        await audit_repo.commit()
         raise
 
     # 8. Broadcast (separate try; failure here does NOT release the nonce or rate —
@@ -357,6 +369,12 @@ async def sign_and_send(
             decision_reason="broadcast_failure",
             outcome=None,
         )
+        # Persist the forensic row before session_scope rolls back
+        # (D16 / Core #5). Per the broadcast-failure doctrine the nonce/
+        # rate are deliberately NOT released (the tx may be in mempools);
+        # committing here keeps the reserved nonce, which is the intended
+        # behavior — the receipt watcher decides the tx's fate.
+        await audit_repo.commit()
         raise RpcUnreachable(str(exc)) from exc
 
     # 9. Persist transaction row + hash.

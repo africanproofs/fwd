@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 from fwd import settings as settings_mod
 from fwd.infra import db as db_mod
+from fwd.infra.audit_repo import AuditRepo, audit_metadata
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonce_metadata
 from fwd.infra.wallet_repo import metadata as wallet_metadata
@@ -108,3 +109,64 @@ async def test_concurrent_session_scope_writes_through_real_infra(
         f"BEGIN IMMEDIATE through fwd.infra.db.session_scope failed"
     )
     assert len(set(reserved)) == 5, f"duplicate reservations: {reserved}"
+
+
+@pytest.mark.asyncio
+async def test_forensic_audit_row_survives_exception_through_session_scope(
+    fresh_db: Path,
+) -> None:
+    """The Phase 7 GA drill (v0.5.2) surfaced a D16 / Core invariant #5 bug:
+    a `denied`/`error` sign-and-send audit row was appended on the shared
+    RequestScope session and then the operation raised; the exception
+    propagated through `session_scope`, whose `except Exception:` arm
+    rolled it back — discarding the forensic row (same defect class as the
+    v0.5.0a6 main.py SystemExit bug). The a6 unit suite missed it because
+    it mocked the session; this exercises the REAL `session_scope`.
+
+    Fix: the deny/error arms call `AuditRepo.commit()` before re-raising.
+    This test is self-validating: the WITH-commit row must persist; the
+    WITHOUT-commit row must NOT (proving the harness detects the defect).
+    """
+    engine = db_mod.get_engine()
+    async with engine.begin() as conn:
+        await conn.run_sync(audit_metadata.create_all)
+
+    # WITH commit (the fix): append a denied row, commit, then raise.
+    with pytest.raises(RuntimeError, match="deny"):
+        async with db_mod.session_scope() as session:
+            ar = AuditRepo(session)
+            await ar.append(
+                action="sign-and-send",
+                decision="denied",
+                caller="phase7-gate-caller",
+                decision_reason="policy_denied step=6: arg 'to' predicate mismatch",
+            )
+            await ar.commit()
+            raise RuntimeError("deny")  # stands in for PolicyDenied
+
+    # WITHOUT commit (discriminator): append, then raise (no commit).
+    with pytest.raises(RuntimeError, match="lost"):
+        async with db_mod.session_scope() as session:
+            ar = AuditRepo(session)
+            await ar.append(
+                action="sign-and-send",
+                decision="error",
+                caller="phase7-gate-caller",
+                decision_reason="broadcast_failure",
+            )
+            raise RuntimeError("lost")
+
+    async with db_mod.session_scope() as session:
+        rows = await AuditRepo(session).tail(20)
+    await engine.dispose()
+
+    decisions = [r.decision for r in rows]
+    assert "denied" in decisions, (
+        "the committed forensic 'denied' row did NOT survive the exception "
+        "through session_scope — D16 / Core invariant #5 regression"
+    )
+    assert "error" not in decisions, (
+        "the un-committed 'error' row unexpectedly persisted — the harness "
+        "is not actually exercising the rollback; the test would not catch "
+        "a regression of the AuditRepo.commit() fix"
+    )

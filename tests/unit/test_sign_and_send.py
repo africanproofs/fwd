@@ -143,6 +143,9 @@ def _rate_repo_mock() -> MagicMock:
 def _audit_repo_mock() -> MagicMock:
     r = MagicMock()
     r.append = AsyncMock(return_value=MagicMock())
+    # v0.5.2: the deny/error arms commit the forensic row before re-raising
+    # (D16 / Core invariant #5 — survives the session_scope rollback).
+    r.commit = AsyncMock(return_value=None)
     return r
 
 
