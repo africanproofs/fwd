@@ -473,19 +473,19 @@ Permission evaluation order (Phase 7):
   3. Decode `request.data` against `contracts.<addr>.abi` (D15). Decode failure → 403.
   4. Look up `methods.<decoded.method_signature>`. Missing → 403.
   5. Compare `request.value_wei <= method.max_value_wei` (BigInt). Exceeded → 403.
-  6. For each `arg_predicates[name]`: if predicate is `any`, pass; else compare against `decoded.args[name]` (case-insensitive for addresses, exact for ints/bools/bytes). Mismatch → 403.
+  6. For each `arg_predicates[name]`: if predicate is the string sentinel `any`, pass; else `name` must be in `decoded.args` (the projected scalars — B1 omits non-scalars) or 403. The predicate value is **coerced at evaluation time** against the decoded arg's Python type — bool checked before int (bool ⊂ int in Python), int via `int(str(pval))`, address (`0x` + 40 hex) compared case-insensitively, plain string compared exactly. Mismatch → 403.
   7. Check `wallet_allowlist` includes `request.wallet`. Missing → 403.
   8. Caller rate check (`scope_caller × scope_wallet × scope_contract × scope_method × window`): atomic increment-and-test under writer lock; cap exceeded → 403.
   9. Wallet constraints lookup (`wallets.<name>.policy_path` → `wallet_constraints.<path>`): aggregate-value-cap check and wallet-rate check (own bucket). Exceeded → 403.
   10. Allow. Audit row written by caller (sign-and-send use case), not by the policy engine.
 
-- **Rate-limit state.** Two SQLite tables added at Alembic 0005 (a3 implementation ship):
+- **Rate-limit state.** Two SQLite tables added at Alembic 0005 (a4 implementation ship — `infra/rate_repo.py`):
 
   ```sql
   CREATE TABLE rate_buckets (                 -- caller-keyed signing-count buckets
       caller        TEXT NOT NULL,
       wallet        TEXT NOT NULL,
-      contract      TEXT NOT NULL,            -- checksummed address
+      contract      TEXT NOT NULL,            -- lowercased address (policy_engine passes request.to.lower())
       method        TEXT NOT NULL,            -- full ABI signature
       window_kind   TEXT NOT NULL,            -- 'hour' | 'day'
       window_start  TIMESTAMP NOT NULL,       -- UTC-aligned bucket boundary
@@ -503,16 +503,16 @@ Permission evaluation order (Phase 7):
   );
   ```
 
-  Windows are **fixed UTC-aligned buckets** (operator decision at v0.5.0a1): hour bucket `window_start = TRUNCATE(now, 'hour')`; day bucket `window_start = TRUNCATE(now, 'day')`. Trade-off: a 100/hour caller can issue 100 calls at 23:59 + 100 calls at 00:01 (effective 200 in 2 minutes around UTC midnight). Acceptable for v1; sliding windows deferred to Phase 10. Stale buckets older than the largest configured window are deleted at policy-load time (bounded growth).
+  Windows are **fixed UTC-aligned buckets** (operator decision at v0.5.0a1): hour bucket `window_start = TRUNCATE(now, 'hour')`; day bucket `window_start = TRUNCATE(now, 'day')`. Trade-off: a 100/hour caller can issue 100 calls at 23:59 + 100 calls at 00:01 (effective 200 in 2 minutes around UTC midnight). Acceptable for v1; sliding windows deferred to Phase 10. Stale buckets older than the largest configured window are deleted at policy-load time (bounded growth). **Wiring status (Core invariant #18):** the `RateRepo.delete_stale(before=...)` repo method ships at v0.5.0a4 (substrate, unit-tested); its invocation from the policy-load path is **deferred to v0.5.0a6** (the sign-and-send integration ship), where the lifespan startup wires policy-load → consistency-check → stale-bucket prune together.
 
 - **Concurrency.** Rate check + increment is a single round-trip under the writer lock (`BEGIN IMMEDIATE; SELECT counter; if counter < cap then UPDATE counter = counter + 1; COMMIT`). Audit log write (D16) happens in the same session — one writer-lock acquisition per request, same RequestScope pattern as v0.4.5.
 
 - **Reload semantics.** **Startup-only in v1** (operator decision at v0.5.0a1). Policy.yaml changes require `docker compose restart fwd`. The earlier architecture.md claim "Policy is hot-reloaded on file mtime change" is retired. SIGHUP hot-reload deferred to Phase 10.
 
 - **Startup fail-fast.** On boot, after loading policy.yaml:
-  1. Every active row in `callers` (`revoked_at IS NULL`) MUST reference a `policy_path` that exists in `policies` block. Missing → fwd refuses to serve, logs the orphan caller, exits.
-  2. Every method signature in `policies.*.contracts.*.methods` MUST resolve to a callable in the referenced ABI. Missing → fwd refuses to serve, logs the orphan signature, exits.
-  3. Every `wallets.policy_path` referenced in `permissions.*.wallet_allowlist` MUST exist in the `wallets` table; same for `wallet_constraints`. Missing → fail-fast.
+  1. Every active row in `callers` (`revoked_at IS NULL`) MUST be declared in `policy.callers` **keyed by caller NAME** (per D13 — `policy.callers` is name-keyed; the loader and the evaluator MUST agree on the key space). The caller's stored `policy_path` MUST match the binding's `policy_path` (drift detection, mirrors `policy_engine` step 1), and the binding's `policy_path` MUST resolve to a `permissions` block. Any failure → fwd refuses to serve, logs the orphan/drifted caller, exits. (Refined at v0.5.0a4 — the a1 phrasing "MUST reference a policy_path that exists in policies block" was implementable two ways; `infra/policy_loader.py::check_consistency` check 1 and `app/policy_engine.py` step 1 are now both name-keyed-with-drift-check. The original canonical-prompt §2 check-1 wording speced the loader policy_path-keyed while speccing the evaluator name-keyed — a Reviewer-surfaced spec defect corrected at commit per the v0.4.0a5 precedent; see `docs/history/0.5.0a4-policy-engine.md`.)
+  2. Every `policy.wallets` binding's `policy_path` MUST exist in `wallet_constraints` (check 5); every `wallet_allowlist` entry MUST resolve to a known wallet — DB `wallets` row or `policy.wallets` key (check 4). Missing → fail-fast.
+  3. Every contract's `abi` in `permissions.*.contracts.*` MUST be a registered ABI name (check 2). **Deferred (Core invariant #18):** the per-signature existence check — every `methods.<sig>` resolving to a callable in the referenced ABI — is **deferred to v0.5.0a6**. `AbiRegistry` (a3) exposes only `lookup(abi_name, selector_hex)`; it has no `signatures_for(abi_name)` accessor to enumerate an ABI's signatures by name alone. The a6 wiring ship extends `AbiRegistry` with that accessor and lands loader check 3.
 
   This is the audit-time consistency check; once it passes, runtime evaluation is dictionary lookups.
 
@@ -581,8 +581,8 @@ Permission evaluation order (Phase 7):
 
 - **Type handling at v0.5.0.** Expanded at v0.5.0a2 self-review to cover the ParticipantRegister ABI shape (which uses `string` fields for registration metadata — the original a1 scope excluded `string` and thereby contradicted shipping the participant_register ABI).
   - `address`: decoded as bytes, normalized to lowercase 0x-hex; arg_predicate comparison is case-insensitive.
-  - `uint*` (uint8 through uint256): decoded as Python int; arg_predicate string-int parsed at policy-load time to int. Python int's arbitrary precision handles uint256 cleanly.
-  - `int*` (int8 through int256): decoded as Python int (signed); arg_predicate string-int parsed at policy-load time. Same treatment as uint* — eth_abi handles the two-complement decoding.
+  - `uint*` (uint8 through uint256): decoded as Python int; the arg_predicate value is **coerced at evaluation time** (`int(str(pval))`) against the decoded arg's Python type, NOT at policy-load time — `policy.yaml` carries no ABI types, so `MethodRule.arg_predicates` is `dict[str, Any]` of raw YAML scalars and the engine learns the target type only from the decoded arg. Python int's arbitrary precision handles uint256 cleanly. (Refined at v0.5.0a4 — the a1/a2 "parsed at policy-load time" phrasing was Core-invariant-#18 drift: `domain/policy.py` does no type parsing; `app/policy_engine.py` step 6 coerces at eval time.)
+  - `int*` (int8 through int256): decoded as Python int (signed); same eval-time coercion as uint* — eth_abi handles the two's-complement decoding.
   - `bool`: decoded as bool.
   - `bytes32` (and any other fixed-size `bytesN` for N ≤ 32): decoded as 0x-hex string.
   - `bytes` (dynamic): decoded as 0x-hex string of the raw bytes; arg_predicate compares as case-insensitive hex.

@@ -611,44 +611,61 @@ to Phase 10.
 The Phase 7 policy engine evaluates each `/v1/sign-and-send` request
 against the loaded `policy.yaml`. Pure-function shape (per D14):
 
+Shipped shape (v0.5.0a4, `app/policy_engine.py` — aligned to code per
+Core invariant #18; the a1 sketch's `rate_buckets_advanced` audit-reason
+carrier is deferred to v0.5.0a5 where the audit log lands):
+
 ```python
 @dataclass(frozen=True)
 class AllowDecision:
     decoded: DecodedIntent       # the typed intent that passed
-    matched_permission_path: str # e.g. "ftso-claim"
-    rate_buckets_advanced: list[str]  # for audit_log decision_reason
+    matched_policy_path: str     # the binding's policy_path
 
 @dataclass(frozen=True)
 class DenyDecision:
-    reason: str                  # e.g. "policy_denied: max_value_wei exceeded"
-    step: int                    # 1-10 per D14 evaluation order
+    step: int                    # 0 = unexpected error; 1..9 = failing D14 step
+    reason: str                  # e.g. "max_value_wei exceeded"
 
 async def evaluate(
+    *,
     caller: Caller,
+    wallet: Wallet,
     request: SignAndSendRequest,
     policy: Policy,
-    intent_decoder: IntentDecoder,
+    registry: AbiRegistry,
     rate_repo: RateRepo,
-    wallet_repo: WalletRepo,
+    now: datetime,
 ) -> AllowDecision | DenyDecision: ...
 ```
 
-Evaluation order is the 10 steps in D14. Every `Deny` carries the step
-number for forensics; every `Allow` carries the list of advanced rate
-buckets (for audit log row's `decision_reason` field).
+Evaluation order is the 10 steps in D14. The entire body is wrapped in
+`try/except Exception → DenyDecision(step=0)` — `evaluate` never raises
+(default-deny, Core invariant #2). Every `Deny` carries the step number
+for forensics; the `Allow`-side audit `decision_reason` carrier is a
+v0.5.0a5 concern (audit log substrate).
 
 **Rate-limit state** lives in two SQLite tables (Alembic 0005,
-v0.5.0a3): `rate_buckets` (caller × wallet × contract × method × window
-counter) and `wallet_buckets` (wallet × window aggregate value sum +
-counter). Windows are fixed UTC-aligned (D14 operator decision: trade
-boundary bursts for simplicity). Buckets older than the largest
-configured window are deleted at policy-load time (bounded growth).
+v0.5.0a4, `infra/rate_repo.py`): `rate_buckets` (caller × wallet ×
+contract × method × window counter) and `wallet_buckets` (wallet ×
+window aggregate value sum + counter). Windows are fixed UTC-aligned
+(D14 operator decision: trade boundary bursts for simplicity). Buckets
+older than the largest configured window are deleted at policy-load
+time — `RateRepo.delete_stale()` ships at v0.5.0a4 (substrate); its
+policy-load-path invocation is **deferred to v0.5.0a6** (the
+sign-and-send integration ship).
 
-**Startup fail-fast** runs after policy load: orphan callers (caller
-whose `policy_path` is not in policy.yaml), orphan signatures (method in
-policy.yaml that does not resolve against its ABI), and orphan wallet
-references (`wallet_allowlist` entry not in `wallets` table) all cause
-fwd to refuse to serve.
+**Startup fail-fast** (`infra/policy_loader.py::check_consistency`)
+runs after policy load: an active caller is an orphan unless it is
+declared in `policy.callers` **by NAME**, its stored `policy_path`
+matches the binding's `policy_path` (drift detection, mirrors
+`policy_engine` step 1), and the binding resolves to a `permissions`
+block; `wallet_allowlist` entries must resolve to a known wallet (DB
+row or `policy.wallets` key); `policy.wallets` bindings must resolve to
+`wallet_constraints`; each contract `abi` must be a registered ABI
+name. The per-signature orphan check (every `methods.<sig>` resolving
+against its ABI) is **deferred to v0.5.0a6** — `AbiRegistry` has no
+`signatures_for(abi_name)` accessor yet. Any failure → fwd refuses to
+serve.
 
 ## Intent decoder
 
