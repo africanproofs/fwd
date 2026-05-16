@@ -440,7 +440,7 @@ Callers SHOULD send an `Idempotency-Key` header on every `POST /v1/sign-and-send
 
 **Behavior on missing header:** request proceeds normally; no idempotency protection applies. Recommended for one-shot ad-hoc operator calls; not recommended for automated callers.
 
-This contract is documented in v0.1.1; implementation lands in Phase 5.
+This contract is documented in v0.1.1; the replay implementation **shipped v0.5.0a7** (`api/sign.py` reads the `Idempotency-Key` header — ≤128 chars, else 400 `bad_idempotency_key`; `app/sign_and_send.py` checks `(caller, key)` via `TransactionRepo.get_by_idempotency_key` before the policy gate and, on a hit, returns the cached `tx_id` + seq-1 hash with a `sign-and-send-duplicate` audit row, no re-sign / re-broadcast / re-policy).
 
 ## Error envelope
 
@@ -665,10 +665,11 @@ window aggregate value sum + counter). Windows are fixed UTC-aligned
 (D14 operator decision: trade boundary bursts for simplicity). Buckets
 older than the largest configured window are deleted at policy-load
 time — `RateRepo.delete_stale()` ships at v0.5.0a4 (substrate); its
-policy-load-path invocation is **deferred to v0.5.0a7** (v0.5.0a6
-wired `_startup_policy_load` = policy-load + consistency-check but not
-the stale-bucket prune; not a correctness issue, a housekeeping one —
-bounded growth is fine at v1 dev volume).
+policy-load-path invocation **shipped v0.5.0a7** (`_startup_policy_load`
+success branch prunes `window_start` older than 2 days — older than the
+largest `hour`/`day` window — wrapped so a prune failure logs
+`lifespan.delete_stale_failed` and never blocks boot). The earlier
+"deferred to v0.5.0a7" marker is retired.
 
 **Startup fail-fast** (`infra/policy_loader.py::check_consistency`)
 runs after policy load: an active caller is an orphan unless it is
@@ -758,16 +759,20 @@ v0.5.0a6:** the `sign-and-send` row authorship (denied/error/approved
 via `app/policy_gate.py` + `app/sign_and_send.py` on the shared
 `RequestScope` session), the lifespan `policy-load` row
 (`_startup_policy_load`), and unifying `sign_and_send`'s `request_json`
-onto `_canonical_json`. **Deferred to v0.5.0a7:** the `wallet-*` /
-`caller-*` admin-action rows + `AdminScope`, plus idempotency-replay
-`sign-and-send-duplicate`. The authorship paragraph below is
-sign-and-send-shipped / admin-a7.
+onto `_canonical_json`. **Shipped v0.5.0a7:** the `wallet-*` /
+`caller-*` admin-action rows (a keyword-only `audit_repo` threaded
+through the four admin use cases — one row per call, success or
+known-failure, NO secret in `request_json`/`outcome`) + `AdminScope`/
+`AdminScopeCM`, plus the idempotency-replay `sign-and-send-duplicate`
+row. Both deferral markers retired (Core invariant #18). The
+chain-walker self-write `audit-verify-failure` row remains **Phase 10**
+(gated on the on-chain anchor — see "Tamper evidence", D16).
 
 **Row shape** (Alembic 0004 — already shipped):
 - `seq INTEGER PRIMARY KEY AUTOINCREMENT`
 - `ts TIMESTAMP NOT NULL`
 - `caller TEXT` — NULL for admin-keyed actions
-- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`, `audit-verify-failure` (the last is accepted by `AuditRepo.append` from a5 but not written by the a5 walker — see D16)
+- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`, `audit-verify-failure` (the last is accepted by `AuditRepo.append` from a5 but written by NO v0.5.0 path — the chain-walker self-write-on-break is **Phase 10**, gated on the on-chain anchor that closes the tamper-evidence recursion; see D16)
 - `request_json TEXT` — canonical sorted-key compact JSON of request payload
 - `decision TEXT NOT NULL` — `approved` | `denied` | `error`
 - `decision_reason TEXT` — human-readable, e.g. `"policy_denied step=5: max_value_wei exceeded"`

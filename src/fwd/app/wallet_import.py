@@ -4,8 +4,12 @@ Reads a privkey from a file (with refusal-table validation), passes it
 to EnvelopeSigner.import_wallet for encrypt + persist, and optionally
 shreds the source file.
 
-The CLI (clifwd wallets import) opens SignerCM and calls this use case.
+The CLI (clifwd wallets import) opens AdminScopeCM and calls this use case.
 The privkey never traverses HTTP.
+
+v0.5.0a7 adds the hash-chained audit-log row (D16): one row per call
+(success or known-failure). request_json carries name + policy_path +
+source_file path only — NEVER the privkey bytes or hex content.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.envelope_signer import (
     WalletAddressMismatch,
     WalletImportInvalidLength,
@@ -28,6 +33,7 @@ from fwd.infra.wallet_repo import WalletExistsError
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fwd.infra.audit_repo import AuditRepo
     from fwd.infra.envelope_signer import EnvelopeSigner
     from fwd.infra.wallet_repo import Wallet
 
@@ -107,36 +113,92 @@ class ShredSourceFailed(Exception):  # noqa: N818
 # --- The use case --------------------------------------------------------
 
 
-async def import_wallet(request: WalletImportRequest, signer: EnvelopeSigner) -> Wallet:
+async def import_wallet(
+    request: WalletImportRequest,
+    signer: EnvelopeSigner,
+    *,
+    audit_repo: AuditRepo,
+) -> Wallet:
     """Import a wallet from a host file. Per D12 in-process; per D9 CLI-only.
 
     Refusal table is enforced here. On any refusal, raises a specific
     exception that the CLI maps to exit code + message.
+
+    D16: one audit row per call (success or known-failure). request_json
+    carries name + policy_path + source_file path only — NEVER privkey bytes
+    or hex content.
     """
     path = request.privkey_file
+    _request_json = _canonical_json(
+        {
+            "name": request.name,
+            "policy_path": request.policy_path,
+            "source_file": str(path),
+        }
+    )
 
     # 1. File exists.
     if not path.exists():
-        raise PrivkeyFileNotFound(str(path))
+        exc = PrivkeyFileNotFound(str(path))
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc).__name__}: {exc}",
+        )
+        raise exc
 
     # 2. File mode is 0600.
     st = path.stat()
     mode = stat.S_IMODE(st.st_mode)
     if mode != 0o600:
-        raise PrivkeyFileBadMode(f"{mode:04o}")
+        exc_mode = PrivkeyFileBadMode(f"{mode:04o}")
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc_mode).__name__}: {exc_mode}",
+        )
+        raise exc_mode
 
     # 3. File owner matches current uid.
     if st.st_uid != os.getuid():
-        raise PrivkeyFileBadOwner(file_owner=st.st_uid, current_user=os.getuid())
+        exc_owner = PrivkeyFileBadOwner(file_owner=st.st_uid, current_user=os.getuid())
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc_owner).__name__}: {exc_owner}",
+        )
+        raise exc_owner
 
     # 4. Read content; decode to 32 bytes.
     content = path.read_text(encoding="ascii").strip()
     try:
         privkey_bytes = bytes.fromhex(content)
-    except ValueError as exc:
-        raise PrivkeyFileBadContent(length=len(content)) from exc
+    except ValueError as hex_exc:
+        exc_content = PrivkeyFileBadContent(length=len(content))
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc_content).__name__}: {exc_content}",
+        )
+        raise exc_content from hex_exc
     if len(privkey_bytes) != 32:
-        raise PrivkeyFileBadContent(length=len(privkey_bytes))
+        exc_content = PrivkeyFileBadContent(length=len(privkey_bytes))
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc_content).__name__}: {exc_content}",
+        )
+        raise exc_content
 
     # 5. Wrap in bytearray (hazard #2). The use case owns the buffer's
     #    lifetime up to the EnvelopeSigner.import_wallet call; after that,
@@ -152,12 +214,37 @@ async def import_wallet(request: WalletImportRequest, signer: EnvelopeSigner) ->
             expected_address=request.expected_address,
         )
     except WalletExistsError as exc:
-        raise WalletNameTakenImport(request.name) from exc
+        exc_taken = WalletNameTakenImport(request.name)
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc).__name__}: {exc}",
+        )
+        raise exc_taken from exc
     except WalletImportInvalidLength:
         # Already enforced above; defensive re-raise.
-        raise PrivkeyFileBadContent(length=len(privkey_buf)) from None
-    # WalletAddressMismatch surfaces directly to the CLI (its message is
-    # already user-facing per its __init__).
+        exc_inv = PrivkeyFileBadContent(length=len(privkey_buf))
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"WalletImportInvalidLength: buffer length {len(privkey_buf)}",
+        )
+        raise exc_inv from None
+    except WalletAddressMismatch as exc:
+        # WalletAddressMismatch surfaces directly to the CLI (its message is
+        # already user-facing per its __init__).
+        await audit_repo.append(
+            action="wallet-import",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc).__name__}: {exc}",
+        )
+        raise
 
     # 6. Optional shred of the source file. NOT a refusal — shredding is
     #    operator hygiene, not a security barrier.
@@ -167,6 +254,15 @@ async def import_wallet(request: WalletImportRequest, signer: EnvelopeSigner) ->
         except Exception as exc:  # noqa: BLE001
             logger.warning("wallet.import.shred_failed", path=str(path), error=str(exc))
             raise ShredSourceFailed(str(path)) from exc
+
+    # Audit approved row.
+    await audit_repo.append(
+        action="wallet-import",
+        decision="approved",
+        caller=None,
+        request_json=_request_json,
+        outcome=_canonical_json({"address": wallet.address}),
+    )
 
     logger.info(
         "wallet.import.ok",

@@ -1,4 +1,8 @@
-"""Wallet-import use case: D9 refusal-table tests."""
+"""Wallet-import use case: D9 refusal-table tests.
+
+v0.5.0a7: import_wallet gained keyword-only audit_repo param. All calls
+updated to pass a mock AuditRepo (append is AsyncMock).
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,13 @@ def _mock_signer(wallet: Wallet | None = None, side_effect: Exception | None = N
     return signer
 
 
+def _mock_audit_repo() -> MagicMock:
+    """Minimal mock AuditRepo: append is AsyncMock that returns None."""
+    repo = MagicMock()
+    repo.append = AsyncMock(return_value=None)
+    return repo
+
+
 def _dummy_wallet() -> Wallet:
     from datetime import UTC, datetime
 
@@ -57,7 +68,7 @@ async def test_file_not_found_raises(tmp_path: pytest.TempPathFactory) -> None:
     missing = tmp_path / "nope.hex"
     req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=missing)
     with pytest.raises(PrivkeyFileNotFound):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -66,7 +77,7 @@ async def test_bad_mode_raises(tmp_path: pytest.TempPathFactory) -> None:
     os.chmod(p, 0o644)
     req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
     with pytest.raises(PrivkeyFileBadMode):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -77,7 +88,7 @@ async def test_bad_owner_raises(
     monkeypatch.setattr(os, "getuid", lambda: 9999)
     req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
     with pytest.raises(PrivkeyFileBadOwner):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -87,7 +98,7 @@ async def test_bad_content_not_hex_raises(tmp_path: pytest.TempPathFactory) -> N
     p.chmod(0o600)
     req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
     with pytest.raises(PrivkeyFileBadContent):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -97,7 +108,7 @@ async def test_bad_content_wrong_length_raises(tmp_path: pytest.TempPathFactory)
     p.chmod(0o600)
     req = WalletImportRequest(name="w", policy_path="policies/w.yaml", privkey_file=p)
     with pytest.raises(PrivkeyFileBadContent):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -106,7 +117,7 @@ async def test_wallet_exists_raises(tmp_path: pytest.TempPathFactory) -> None:
     req = WalletImportRequest(name="dup", policy_path="policies/w.yaml", privkey_file=p)
     signer = _mock_signer(side_effect=WalletExistsError("dup"))
     with pytest.raises(WalletNameTakenImport):
-        await import_wallet(req, signer)
+        await import_wallet(req, signer, audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -121,7 +132,7 @@ async def test_address_mismatch_surfaces(tmp_path: pytest.TempPathFactory) -> No
     mismatch = WalletAddressMismatch(expected="0x" + "00" * 20, derived="0x" + "ab" * 20)
     signer = _mock_signer(side_effect=mismatch)
     with pytest.raises(WalletAddressMismatch):
-        await import_wallet(req, signer)
+        await import_wallet(req, signer, audit_repo=_mock_audit_repo())
 
 
 @pytest.mark.asyncio
@@ -129,7 +140,7 @@ async def test_happy_path_returns_wallet(tmp_path: pytest.TempPathFactory) -> No
     p = _write_privkey(tmp_path)
     req = WalletImportRequest(name="w1", policy_path="policies/w.yaml", privkey_file=p)
     wallet = _dummy_wallet()
-    result = await import_wallet(req, _mock_signer(wallet=wallet))
+    result = await import_wallet(req, _mock_signer(wallet=wallet), audit_repo=_mock_audit_repo())
     assert result.name == "w1"
 
 
@@ -160,7 +171,7 @@ async def test_shred_missing_raises_shred_source_failed(
     monkeypatch.setattr("fwd.app.wallet_import.shutil.which", lambda _: None)
 
     with pytest.raises(ShredSourceFailed):
-        await import_wallet(req, _mock_signer())
+        await import_wallet(req, _mock_signer(), audit_repo=_mock_audit_repo())
 
     # The source file MUST still exist (architecture.md doctrine: "the
     # wallet is provisioned but the source file remains on disk for the

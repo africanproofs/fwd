@@ -24,6 +24,7 @@ from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.nonce_repo import NonceRepo
+from fwd.infra.policy_loader import policy_path_exists as policy_path_exists  # re-export for api/
 from fwd.infra.rate_repo import RateRepo
 from fwd.infra.rpc import RpcManager
 from fwd.infra.transaction_repo import TransactionRepo
@@ -232,3 +233,53 @@ class RequestScopeCM:
 
 def get_request_scope() -> RequestScopeCM:
     return RequestScopeCM()
+
+
+@dataclass(frozen=True)
+class AdminScope:
+    """Bundle of components built atop a single session for admin operations.
+
+    Mirrors RequestScope but omits RpcManager (admin actions don't touch chain).
+    Provides signer + caller_repo + audit_repo on ONE shared session so that
+    admin-action mutations and the D16 audit row commit atomically under one
+    BEGIN IMMEDIATE (per AdminScopeCM below).
+    """
+
+    signer: EnvelopeSigner
+    caller_repo: CallerRepo
+    audit_repo: AuditRepo
+
+
+class AdminScopeCM:
+    """Single-session scope for admin write operations.
+
+    Opens ONE session_scope and constructs signer (via WalletRepo) +
+    caller_repo + audit_repo against the shared session. Also opens Vault.
+    Does NOT open an RpcManager — admin actions never hit chain.
+
+    The audit row commits atomically with the mutation (signer INSERT or
+    caller_repo INSERT/UPDATE) under the shared BEGIN IMMEDIATE lock.
+    """
+
+    async def __aenter__(self) -> AdminScope:
+        try:
+            self._vault = VaultClient()
+            self._vault_entered = await self._vault.__aenter__()
+        except VaultError as exc:
+            raise VaultUnavailableError(str(exc)) from exc
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        wallet_repo = WalletRepo(self._session)
+        return AdminScope(
+            signer=EnvelopeSigner(self._vault_entered, wallet_repo),
+            caller_repo=CallerRepo(self._session),
+            audit_repo=AuditRepo(self._session),
+        )
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+        await self._vault.__aexit__(exc_type, exc, tb)
+
+
+def get_admin_scope() -> AdminScopeCM:
+    return AdminScopeCM()

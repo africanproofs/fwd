@@ -3,8 +3,10 @@
 create  — HTTP client (POST /v1/admin/wallets), mirrors clifwd health.
 list    — HTTP client (GET /v1/admin/wallets stub; prints not-yet message).
 import  — IN-PROCESS per D12 (file-based privkey; never traverses HTTP).
-          Opens SignerCM from app.dependencies and calls
-          app.wallet_import.import_wallet.
+          Opens AdminScopeCM from app.dependencies and calls
+          app.wallet_import.import_wallet. v0.5.0a7: switched from
+          SignerCM to AdminScopeCM so the wallet-import audit row is
+          written on the shared AdminScope session (D16 authorship).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from pathlib import Path  # noqa: TC003
 import httpx
 import typer
 
-from fwd.app.dependencies import get_signer
+from fwd.app.dependencies import get_admin_scope
 from fwd.app.wallet_import import (
     PrivkeyFileBadContent,
     PrivkeyFileBadMode,
@@ -153,11 +155,16 @@ def import_command(
 
 
 async def _run_import(request: WalletImportRequest) -> None:
-    """Open SignerCM and call the import use case in-process."""
-    cm = get_signer()
+    """Open AdminScopeCM and call the import use case in-process.
+
+    v0.5.0a7: switched from SignerCM to AdminScopeCM so the wallet-import
+    audit row is written on the shared session (D16 authorship). CLI exit
+    codes are unchanged.
+    """
+    cm = get_admin_scope()
     try:
-        async with cm as signer:
-            wallet = await import_wallet(request, signer)
+        async with cm as scope:
+            wallet = await import_wallet(request, scope.signer, audit_repo=scope.audit_repo)
     except PrivkeyFileNotFound as exc:
         typer.echo(f"privkey-file not found: {exc}", err=True)
         raise typer.Exit(code=2) from exc

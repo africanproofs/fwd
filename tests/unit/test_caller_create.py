@@ -1,4 +1,8 @@
-"""create_caller use case unit tests."""
+"""create_caller use case unit tests.
+
+v0.5.0a7: create_caller gained keyword-only audit_repo param. All calls
+updated to pass a mock AuditRepo (append is AsyncMock).
+"""
 
 from __future__ import annotations
 
@@ -22,13 +26,22 @@ def _mock_caller(name: str) -> Caller:
     )
 
 
+def _mock_audit_repo() -> MagicMock:
+    """Minimal mock AuditRepo: append is AsyncMock."""
+    repo = MagicMock()
+    repo.append = AsyncMock(return_value=None)
+    return repo
+
+
 @pytest.mark.asyncio
 async def test_create_caller_happy_path() -> None:
     repo = MagicMock()
     repo.create = AsyncMock(return_value=_mock_caller("test"))
 
     result = await create_caller(
-        CallerCreateRequest(name="test", policy_path="policies/test.yaml"), repo
+        CallerCreateRequest(name="test", policy_path="policies/test.yaml"),
+        repo,
+        audit_repo=_mock_audit_repo(),
     )
 
     assert result.name == "test"
@@ -45,7 +58,11 @@ async def test_create_caller_name_taken_raises() -> None:
     repo.create = AsyncMock(side_effect=CallerExistsError("dup"))
 
     with pytest.raises(CallerNameTaken):
-        await create_caller(CallerCreateRequest(name="dup", policy_path="policies/test.yaml"), repo)
+        await create_caller(
+            CallerCreateRequest(name="dup", policy_path="policies/test.yaml"),
+            repo,
+            audit_repo=_mock_audit_repo(),
+        )
 
 
 @pytest.mark.asyncio
@@ -54,7 +71,9 @@ async def test_create_caller_result_has_policy_path() -> None:
     repo.create = AsyncMock(return_value=_mock_caller("svc"))
 
     result = await create_caller(
-        CallerCreateRequest(name="svc", policy_path="policies/svc.yaml"), repo
+        CallerCreateRequest(name="svc", policy_path="policies/svc.yaml"),
+        repo,
+        audit_repo=_mock_audit_repo(),
     )
 
     assert result.policy_path == "policies/test.yaml"  # from mocked Caller
@@ -66,7 +85,11 @@ async def test_create_caller_api_key_not_in_repo_call() -> None:
     repo = MagicMock()
     repo.create = AsyncMock(return_value=_mock_caller("svc"))
 
-    await create_caller(CallerCreateRequest(name="svc", policy_path="policies/svc.yaml"), repo)
+    await create_caller(
+        CallerCreateRequest(name="svc", policy_path="policies/svc.yaml"),
+        repo,
+        audit_repo=_mock_audit_repo(),
+    )
 
     call_kwargs = repo.create.call_args.kwargs
     assert "api_key" not in call_kwargs

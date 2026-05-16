@@ -1,4 +1,9 @@
-"""POST/DELETE/GET /v1/admin/callers endpoint tests."""
+"""POST/DELETE/GET /v1/admin/callers endpoint tests.
+
+v0.5.0a7: POST + DELETE handlers switched to AdminScopeCM. Write-handler
+tests override get_admin_scope to inject a fake AdminScope; use-case calls
+are patched at the module level as before. GET (list) handler is unchanged.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from fwd import settings as settings_mod
 from fwd.api.callers import router
 from fwd.app.caller_create import CallerCreateResult, CallerNameTaken
 from fwd.app.caller_revoke import CallerAlreadyRevoked, CallerNotFound
-from fwd.app.dependencies import get_caller_repo
+from fwd.app.dependencies import AdminScope, get_admin_scope, get_caller_repo
 from fwd.infra.caller_repo import Caller
 
 
@@ -28,10 +33,30 @@ def _caller_summary(name: str) -> Caller:
     )
 
 
+def _fake_admin_scope() -> AdminScope:
+    """Build an AdminScope backed by AsyncMock components (no Vault needed)."""
+    signer = MagicMock()
+    caller_repo = MagicMock()
+    audit_repo = MagicMock()
+    audit_repo.append = AsyncMock(return_value=None)
+    return AdminScope(signer=signer, caller_repo=caller_repo, audit_repo=audit_repo)
+
+
+class _FakeAdminScopeCM:
+    """Async CM that yields a fake AdminScope without touching Vault or DB."""
+
+    def __init__(self) -> None:
+        self._scope = _fake_admin_scope()
+
+    async def __aenter__(self) -> AdminScope:
+        return self._scope
+
+    async def __aexit__(self, *args: object) -> None:
+        pass
+
+
 def _make_client(
     monkeypatch: pytest.MonkeyPatch,
-    create_side_effect: object = None,
-    revoke_side_effect: object = None,
     list_return: list[Caller] | None = None,
 ) -> TestClient:
     monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
@@ -39,16 +64,6 @@ def _make_client(
 
     mock_repo = MagicMock()
     mock_repo.list_all = AsyncMock(return_value=list_return or [])
-
-    if create_side_effect is not None:
-        mock_repo.create = AsyncMock(side_effect=create_side_effect)
-    else:
-        mock_repo.create = AsyncMock(return_value=_caller_summary("new-caller"))
-
-    if revoke_side_effect is not None:
-        mock_repo.revoke = AsyncMock(side_effect=revoke_side_effect)
-    else:
-        mock_repo.revoke = AsyncMock(return_value=_caller_summary("alice"))
 
     class _FakeRepoCM:
         async def __aenter__(self) -> MagicMock:
@@ -59,7 +74,10 @@ def _make_client(
 
     app = FastAPI()
     app.include_router(router)
+    # GET (list) still uses CallerRepoCM.
     app.dependency_overrides[get_caller_repo] = lambda: _FakeRepoCM()
+    # Write handlers (POST/DELETE) use AdminScopeCM — override to avoid Vault.
+    app.dependency_overrides[get_admin_scope] = lambda: _FakeAdminScopeCM()
     return TestClient(app, raise_server_exceptions=False)
 
 

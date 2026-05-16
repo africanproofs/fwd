@@ -2,6 +2,10 @@
 
 Generates a fresh API key, stores its hash + prefix, returns the
 plaintext key (which `clifwd callers create` will print ONCE).
+
+v0.5.0a7 adds the hash-chained audit-log row (D16): one row per call
+(success or known-failure) on the shared AdminScope session. request_json
+carries name + policy_path only — NEVER the api_key plaintext or hash.
 """
 
 from __future__ import annotations
@@ -12,9 +16,11 @@ from typing import TYPE_CHECKING
 import structlog
 
 from fwd.infra.api_key import generate_api_key
+from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.caller_repo import CallerExistsError
 
 if TYPE_CHECKING:
+    from fwd.infra.audit_repo import AuditRepo
     from fwd.infra.caller_repo import CallerRepo
 
 logger = structlog.get_logger(__name__)
@@ -42,8 +48,18 @@ class CallerNameTaken(Exception):  # noqa: N818
     """409 — name already exists."""
 
 
-async def create_caller(request: CallerCreateRequest, repo: CallerRepo) -> CallerCreateResult:
-    """Mint a fresh caller key and persist its hash."""
+async def create_caller(
+    request: CallerCreateRequest,
+    repo: CallerRepo,
+    *,
+    audit_repo: AuditRepo,
+) -> CallerCreateResult:
+    """Mint a fresh caller key and persist its hash.
+
+    D16: one audit row per call. caller=None (admin action). request_json
+    carries name + policy_path only — NEVER api_key or key_hash.
+    """
+    _request_json = _canonical_json({"name": request.name, "policy_path": request.policy_path})
     generated = generate_api_key()
     try:
         caller = await repo.create(
@@ -54,8 +70,23 @@ async def create_caller(request: CallerCreateRequest, repo: CallerRepo) -> Calle
         )
     except CallerExistsError as exc:
         logger.info("caller.create.exists", name=request.name)
+        await audit_repo.append(
+            action="caller-create",
+            decision="error",
+            caller=None,
+            request_json=_request_json,
+            decision_reason=f"{type(exc).__name__}: {exc}",
+        )
         raise CallerNameTaken(request.name) from exc
 
+    await audit_repo.append(
+        action="caller-create",
+        decision="approved",
+        caller=None,
+        request_json=_request_json,
+        # prefix is NOT secret; NEVER the key or hash
+        outcome=_canonical_json({"api_key_prefix": caller.api_key_prefix}),
+    )
     logger.info(
         "caller.create.ok",
         name=caller.name,

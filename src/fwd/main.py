@@ -244,6 +244,23 @@ async def _startup_policy_load(_app: FastAPI) -> None:
             outcome=_canonical_json(outcome_dict),
         )
 
+        # Prune stale rate buckets (>2 days old) as a startup housekeeping step.
+        # Failure here must not block boot — best-effort only.
+        from datetime import UTC, datetime, timedelta
+
+        from fwd.infra.rate_repo import RateRepo
+
+        cutoff = datetime.now(UTC) - timedelta(days=2)
+        try:
+            deleted = await RateRepo(session).delete_stale(before=cutoff)
+            log.info(
+                "lifespan.rate_buckets_pruned",
+                deleted=deleted,
+                cutoff=cutoff.isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001 — housekeeping must not block boot
+            log.warning("lifespan.delete_stale_failed", error=str(exc))
+
     _app.state.policy = policy
     _app.state.abi_registry = registry
 

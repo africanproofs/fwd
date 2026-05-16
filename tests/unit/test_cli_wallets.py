@@ -5,6 +5,9 @@ at the cli.wallets module's httpx attribute. The import command's terminal
 use case (app.wallet_import.import_wallet) is mocked so tests don't need
 to construct a real 0600 privkey file.
 
+v0.5.0a7: import command switched from get_signer/SignerCM to
+get_admin_scope/AdminScopeCM. Tests patch get_admin_scope and import_wallet.
+
 Closes audit deferral F6.3 (CLI test coverage) for wallets commands.
 """
 
@@ -17,6 +20,7 @@ import httpx
 import pytest  # noqa: TC002
 from typer.testing import CliRunner
 
+from fwd.app.dependencies import AdminScope
 from fwd.app.wallet_import import (
     PrivkeyFileBadMode,
     PrivkeyFileNotFound,
@@ -40,16 +44,25 @@ def _fake_wallet(name: str = "alice", address: str | None = None) -> Wallet:
     )
 
 
-class _FakeSignerCM:
-    """Minimal async CM that yields a MagicMock signer.
+def _fake_admin_scope() -> AdminScope:
+    """Build an AdminScope backed by AsyncMock components (no Vault needed)."""
+    signer = MagicMock()
+    caller_repo = MagicMock()
+    audit_repo = MagicMock()
+    audit_repo.append = AsyncMock(return_value=None)
+    return AdminScope(signer=signer, caller_repo=caller_repo, audit_repo=audit_repo)
+
+
+class _FakeAdminScopeCM:
+    """Minimal async CM that yields a fake AdminScope.
 
     Tests that mock import_wallet at module scope don't actually exercise
-    the signer, but cli/wallets.py does enter the CM. Vault env vars are
-    NOT set in tests, so we must override get_signer to bypass VaultClient.
+    the signer/audit_repo, but cli/wallets.py does enter the CM. Vault env
+    vars are NOT set in tests; we override get_admin_scope to bypass Vault.
     """
 
-    async def __aenter__(self) -> MagicMock:
-        return MagicMock()
+    async def __aenter__(self) -> AdminScope:
+        return _fake_admin_scope()
 
     async def __aexit__(self, *args: object) -> None:
         pass
@@ -192,7 +205,7 @@ def test_wallets_import_success(tmp_path) -> None:  # type: ignore[no-untyped-de
     privkey_file.write_text("ab" * 32)
 
     with (
-        patch("fwd.cli.wallets.get_signer", return_value=_FakeSignerCM()),
+        patch("fwd.cli.wallets.get_admin_scope", return_value=_FakeAdminScopeCM()),
         patch(
             "fwd.cli.wallets.import_wallet",
             new=AsyncMock(return_value=_fake_wallet("alice")),
@@ -221,7 +234,7 @@ def test_wallets_import_bad_mode_exits_2(tmp_path) -> None:  # type: ignore[no-u
     privkey_file.write_text("ab" * 32)
 
     with (
-        patch("fwd.cli.wallets.get_signer", return_value=_FakeSignerCM()),
+        patch("fwd.cli.wallets.get_admin_scope", return_value=_FakeAdminScopeCM()),
         patch(
             "fwd.cli.wallets.import_wallet",
             new=AsyncMock(side_effect=PrivkeyFileBadMode("mode 0644 != 0600")),
@@ -246,7 +259,7 @@ def test_wallets_import_bad_mode_exits_2(tmp_path) -> None:  # type: ignore[no-u
 def test_wallets_import_not_found_exits_2(tmp_path) -> None:  # type: ignore[no-untyped-def]
     privkey_file = tmp_path / "privkey.hex"  # doesn't exist
     with (
-        patch("fwd.cli.wallets.get_signer", return_value=_FakeSignerCM()),
+        patch("fwd.cli.wallets.get_admin_scope", return_value=_FakeAdminScopeCM()),
         patch(
             "fwd.cli.wallets.import_wallet",
             new=AsyncMock(side_effect=PrivkeyFileNotFound(str(privkey_file))),
@@ -272,7 +285,7 @@ def test_wallets_import_name_taken_exits_3(tmp_path) -> None:  # type: ignore[no
     privkey_file = tmp_path / "privkey.hex"
     privkey_file.write_text("ab" * 32)
     with (
-        patch("fwd.cli.wallets.get_signer", return_value=_FakeSignerCM()),
+        patch("fwd.cli.wallets.get_admin_scope", return_value=_FakeAdminScopeCM()),
         patch(
             "fwd.cli.wallets.import_wallet",
             new=AsyncMock(side_effect=WalletNameTakenImport("alice")),
@@ -298,7 +311,7 @@ def test_wallets_import_address_mismatch_exits_2(tmp_path) -> None:  # type: ign
     privkey_file = tmp_path / "privkey.hex"
     privkey_file.write_text("ab" * 32)
     with (
-        patch("fwd.cli.wallets.get_signer", return_value=_FakeSignerCM()),
+        patch("fwd.cli.wallets.get_admin_scope", return_value=_FakeAdminScopeCM()),
         patch(
             "fwd.cli.wallets.import_wallet",
             new=AsyncMock(

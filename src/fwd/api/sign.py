@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from fwd.api.caller_auth import require_caller
@@ -85,7 +85,16 @@ async def post_sign_and_send(
     caller: Annotated[Caller, Depends(require_caller)],
     http_request: Request,
     scope_cm: RequestScopeCM = Depends(get_request_scope),  # noqa: B008
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),  # noqa: B008
 ) -> SignAndSendResponse:
+    if idempotency_key is not None and len(idempotency_key) > 128:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "bad_idempotency_key",
+                "message": "Idempotency-Key must be ≤128 chars",
+            },
+        )
     request = SignAndSendRequest(
         wallet=body.wallet,
         caller=caller.name,
@@ -94,6 +103,7 @@ async def post_sign_and_send(
         value_wei=body.value_wei,
         data=body.data,
         gas=body.gas,
+        idempotency_key=idempotency_key,
     )
     try:
         async with scope_cm as scope:

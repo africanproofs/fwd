@@ -80,6 +80,7 @@ class SignAndSendRequest:
     value_wei: str  # decimal string (no SQLite uint256 in 3c, but stay consistent)
     data: str  # 0x-prefixed even-length hex (or "0x" for empty)
     gas: int | None = None  # optional override; otherwise estimate_gas + 25% buffer
+    idempotency_key: str | None = None  # D14: per-caller scoped; missing = normal path
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,44 @@ async def sign_and_send(
     # Defense-in-depth: caller must be a non-empty string <= 64 chars.
     if not request.caller or len(request.caller) > 64:
         raise ValueError("caller must be a non-empty string with len <= 64")
+
+    # D14 idempotency replay — check BEFORE step 1 and BEFORE the policy gate.
+    # If caller+key matches a prior transaction, return the cached result without
+    # re-evaluating policy, reserving a nonce, or touching rate buckets.
+    if request.idempotency_key is not None:
+        existing = await tx_repo.get_by_idempotency_key(request.caller, request.idempotency_key)
+        if existing is not None:
+            hashes = await tx_repo.list_hashes_by_tx(existing.tx_id)
+            cached_hash = hashes[0].hash_hex if hashes else ""
+            orig_seq = await audit_repo.find_sign_and_send_seq(existing.tx_id)
+            await audit_repo.append(
+                action="sign-and-send-duplicate",
+                decision="approved",
+                caller=request.caller,
+                request_json=_canonical_json(
+                    {
+                        "wallet": request.wallet,
+                        "chain": request.chain,
+                        "to": request.to,
+                        "value_wei": request.value_wei,
+                        "data": request.data,
+                        "gas": request.gas,
+                        "idempotency_key": request.idempotency_key,
+                    }
+                ),
+                decision_reason="idempotency_replay",
+                outcome=_canonical_json(
+                    {
+                        "original_tx_id": existing.tx_id,
+                        "original_audit_seq": orig_seq,
+                    }
+                ),
+            )
+            return SignAndSendResult(
+                tx_id=existing.tx_id,
+                hash=cached_hash,
+                nonce=existing.nonce,
+            )
 
     # 1. Resolve wallet -> address.
     try:
@@ -349,6 +388,7 @@ async def sign_and_send(
         signed_raw=signed_raw_hex,
         status="submitted",
         submitted_at=datetime.now(UTC),
+        idempotency_key=request.idempotency_key,
     )
     await tx_repo.add_hash(tx_id, tx_hash, sequence_num=1)
 

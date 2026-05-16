@@ -7,6 +7,9 @@ fwd custodies.
 
 GET response is public-safe -- NEVER includes privkey_ciphertext or
 vault_master_key. Only name, address, policy_path, created_at.
+
+v0.5.0a7: POST handler swapped to AdminScopeCM (D16 audit authorship) +
+policy_path validation (D14 admin-endpoint validation).
 """
 
 from __future__ import annotations
@@ -14,11 +17,17 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from fwd.api.admin_auth import admin_required
-from fwd.app.dependencies import SignerCM, WalletRepoCM, get_signer, get_wallet_repo
+from fwd.app.dependencies import (
+    AdminScopeCM,
+    WalletRepoCM,
+    get_admin_scope,
+    get_wallet_repo,
+    policy_path_exists,
+)
 from fwd.app.wallet_create import (
     VaultUnavailableError,
     WalletCreateRequest,
@@ -65,7 +74,8 @@ class ListWalletsResponse(BaseModel):
 )
 async def post_wallets(
     body: CreateWalletBody,
-    signer_cm: SignerCM = Depends(get_signer),  # noqa: B008
+    http_request: Request,
+    admin_scope_cm: AdminScopeCM = Depends(get_admin_scope),  # noqa: B008
 ) -> CreateWalletResponse:
     if not _NAME_RE.match(body.name):
         raise HTTPException(
@@ -76,11 +86,26 @@ async def post_wallets(
             },
         )
 
+    # policy_path validation: skip when no policy is loaded (bootstrap order).
+    policy = getattr(http_request.app.state, "policy", None)
+    if policy is not None and not policy_path_exists(policy, body.policy_path, "wallet"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unknown_policy_path",
+                "message": (
+                    f"policy_path '{body.policy_path}' is not in the "
+                    f"loaded policy (wallet_constraints)"
+                ),
+            },
+        )
+
     try:
-        async with signer_cm as signer:
+        async with admin_scope_cm as scope:
             result = await create_wallet(
                 WalletCreateRequest(name=body.name, policy_path=body.policy_path),
-                signer,
+                scope.signer,
+                audit_repo=scope.audit_repo,
             )
     except WalletNameTaken:
         raise HTTPException(

@@ -104,6 +104,7 @@ class TransactionRepo:
         signed_raw: str | None,
         status: str,
         submitted_at: datetime | None,
+        idempotency_key: str | None = None,
     ) -> Transaction:
         assert status in _VALID_STATUSES, f"invalid status: {status}"
         existing = await self.get_by_id(tx_id, missing_ok=True)
@@ -120,7 +121,7 @@ class TransactionRepo:
                 contract_address=contract_address,
                 method_name=method_name,
                 value_wei=value_wei,
-                idempotency_key=None,
+                idempotency_key=idempotency_key,
                 request_json=request_json,
                 signed_raw=signed_raw,
                 status=status,
@@ -139,7 +140,7 @@ class TransactionRepo:
             contract_address=contract_address,
             method_name=method_name,
             value_wei=value_wei,
-            idempotency_key=None,
+            idempotency_key=idempotency_key,
             request_json=request_json,
             signed_raw=signed_raw,
             status=status,
@@ -147,6 +148,45 @@ class TransactionRepo:
             confirmed_at=None,
             receipt_json=None,
             created_at=now,
+        )
+
+    async def get_by_idempotency_key(
+        self,
+        caller: str,
+        key: str,
+    ) -> Transaction | None:
+        """Return the transaction for a given (caller, idempotency_key) pair, or None.
+
+        The partial-unique index idx_tx_idempotency (caller, idempotency_key)
+        guarantees at most one result. Per-caller scope: same key from a
+        different caller is NOT a match.
+        """
+        result = await self._session.execute(
+            select(transactions).where(
+                transactions.c.caller == caller,
+                transactions.c.idempotency_key == key,
+            )
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return Transaction(
+            tx_id=row.tx_id,
+            wallet=row.wallet,
+            chain=row.chain,
+            caller=row.caller,
+            nonce=row.nonce,
+            contract_address=row.contract_address,
+            method_name=row.method_name,
+            value_wei=row.value_wei,
+            idempotency_key=row.idempotency_key,
+            request_json=row.request_json,
+            signed_raw=row.signed_raw,
+            status=row.status,
+            submitted_at=row.submitted_at,
+            confirmed_at=row.confirmed_at,
+            receipt_json=row.receipt_json,
+            created_at=row.created_at,
         )
 
     async def add_hash(

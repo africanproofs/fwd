@@ -2,6 +2,9 @@
 
 Per docs/architecture.md § API surface. Admin-gated (D11): callers
 themselves cannot create/revoke/list other callers.
+
+v0.5.0a7: POST + DELETE handlers swapped to AdminScopeCM (D16 audit
+authorship) + policy_path validation on POST (D14 admin-endpoint validation).
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from fwd.api.admin_auth import admin_required
@@ -24,7 +27,13 @@ from fwd.app.caller_revoke import (
     CallerNotFound,
     revoke_caller,
 )
-from fwd.app.dependencies import CallerRepoCM, get_caller_repo
+from fwd.app.dependencies import (
+    AdminScopeCM,
+    CallerRepoCM,
+    get_admin_scope,
+    get_caller_repo,
+    policy_path_exists,
+)
 
 router = APIRouter()
 
@@ -65,7 +74,8 @@ class ListCallersResponse(BaseModel):
 )
 async def post_callers(
     body: CreateCallerBody,
-    caller_repo_cm: Annotated[CallerRepoCM, Depends(get_caller_repo)],
+    http_request: Request,
+    admin_scope_cm: AdminScopeCM = Depends(get_admin_scope),  # noqa: B008
 ) -> CreateCallerResponse:
     if not _NAME_RE.match(body.name):
         raise HTTPException(
@@ -76,10 +86,26 @@ async def post_callers(
             },
         )
 
+    # policy_path validation: skip when no policy is loaded (bootstrap order).
+    policy = getattr(http_request.app.state, "policy", None)
+    if policy is not None and not policy_path_exists(policy, body.policy_path, "caller"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unknown_policy_path",
+                "message": (
+                    f"policy_path '{body.policy_path}' is not in the "
+                    f"loaded policy (permissions)"
+                ),
+            },
+        )
+
     try:
-        async with caller_repo_cm as repo:
+        async with admin_scope_cm as scope:
             result = await create_caller(
-                CallerCreateRequest(name=body.name, policy_path=body.policy_path), repo
+                CallerCreateRequest(name=body.name, policy_path=body.policy_path),
+                scope.caller_repo,
+                audit_repo=scope.audit_repo,
             )
     except CallerNameTaken:
         raise HTTPException(
@@ -106,11 +132,11 @@ async def post_callers(
 )
 async def delete_caller(
     name: str,
-    caller_repo_cm: Annotated[CallerRepoCM, Depends(get_caller_repo)],
+    admin_scope_cm: AdminScopeCM = Depends(get_admin_scope),  # noqa: B008
 ) -> None:
     try:
-        async with caller_repo_cm as repo:
-            await revoke_caller(name, repo)
+        async with admin_scope_cm as scope:
+            await revoke_caller(name, scope.caller_repo, audit_repo=scope.audit_repo)
     except CallerNotFound:
         raise HTTPException(
             status_code=404,
