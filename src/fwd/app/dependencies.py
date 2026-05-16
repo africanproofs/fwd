@@ -172,27 +172,34 @@ def get_wallet_repo() -> WalletRepoCM:
 
 @dataclass(frozen=True)
 class RequestScope:
-    """Bundle of components built atop a single session — see RequestScopeCM."""
+    """Bundle of components built atop a single session — see RequestScopeCM.
+
+    v0.5.0a6 adds rate_repo, audit_repo, wallet_repo so the sign-and-send
+    path shares ONE session for all DB mutations (nonce + tx + rate + audit)
+    under the single BEGIN IMMEDIATE per D16 atomicity requirement.
+    """
 
     signer: EnvelopeSigner
     rpc_mgr: RpcManager
     tx_repo: TransactionRepo
     nonce_repo: NonceRepo
+    rate_repo: RateRepo
+    audit_repo: AuditRepo
+    wallet_repo: WalletRepo
 
 
 class RequestScopeCM:
     """Single-session scope for signing-flow operations.
 
     Opens ONE session_scope and constructs signer + tx_repo + nonce_repo
-    against that shared session. Also opens Vault + RpcManager. Designed
-    for api/sign.py and app/receipt_watcher.py — both flows need all
-    four components, and pre-v0.4.5 each opened its own session_scope,
-    causing SQLite writer-lock contention under our BEGIN IMMEDIATE
-    event handler (each session.execute fires `begin` → BEGIN IMMEDIATE
-    → contends with the other sessions' writer-lock attempts).
+    + rate_repo + audit_repo + wallet_repo against that shared session.
+    Also opens Vault + RpcManager. Designed for api/sign.py and
+    app/receipt_watcher.py — both flows need all components, and pre-v0.4.5
+    each opened its own session_scope, causing SQLite writer-lock contention
+    under our BEGIN IMMEDIATE event handler.
 
     Sharing one session means one BEGIN IMMEDIATE per request/tick.
-    Reads and writes from the three repos cooperate cleanly.
+    Reads and writes from all repos cooperate cleanly.
     """
 
     async def __aenter__(self) -> RequestScope:
@@ -210,6 +217,9 @@ class RequestScopeCM:
             rpc_mgr=self._rpc_mgr,
             tx_repo=TransactionRepo(self._session),
             nonce_repo=NonceRepo(self._session),
+            rate_repo=RateRepo(self._session),
+            audit_repo=AuditRepo(self._session),
+            wallet_repo=wallet_repo,
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]

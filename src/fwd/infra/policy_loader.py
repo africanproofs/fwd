@@ -4,13 +4,8 @@ Loads policy.yaml from disk, validates it against the Pydantic schema, and
 cross-references it against live callers, wallets, and the ABI registry.
 See decisions.md D14 for the startup fail-fast mandate.
 
-Note on check 3 (method signature existence): AbiRegistry exposes only
-abi_names() and lookup(abi_name, selector_hex). There is no public accessor
-that enumerates all signatures for a given ABI by name alone (lookup
-requires a selector, not a signature). Implementing check 3 would require
-modifying abi_registry.py (out of scope for this ship). Checks 1, 2, 4, 5
-are fully implemented; check 3 is deferred to the a6 wiring ship, where
-AbiRegistry can be extended with a signatures_for(abi_name) accessor.
+Checks 1, 2, 3, 4, 5 are all implemented (check 3 landed in v0.5.0a6
+after AbiRegistry was extended with the signatures_for(abi_name) accessor).
 """
 
 from __future__ import annotations
@@ -75,8 +70,9 @@ def check_consistency(
          mirrors policy_engine step 1). The binding's policy_path must
          resolve to a policy.permissions block.
       2. Every permissions.<path>.contracts.<addr>.abi not in registry.abi_names().
-      3. (DEFERRED to a6) Per-signature existence check — requires AbiRegistry
-         extension with a signatures_for(abi_name) accessor.
+      3. Per-signature existence check: for each contract rule whose abi IS known,
+         every method signature must exist in registry.signatures_for(abi_name).
+         (Landed v0.5.0a6 after AbiRegistry.signatures_for was added.)
       4. Every wallet_allowlist entry not resolvable to policy.wallets or DB wallets.
       5. Every policy.wallets binding whose policy_path is not in
          policy.wallet_constraints.
@@ -124,8 +120,16 @@ def check_consistency(
                     f"permissions '{perm_path}' contract '{addr}' "
                     f"references unknown abi '{crule.abi}'"
                 )
-            # Check 3 deferred: per-signature validation requires
-            # AbiRegistry.signatures_for(abi_name) — add in a6.
+            else:
+                # Check 3: per-signature existence (only when abi IS known —
+                # avoids double-reporting on an unknown-abi contract).
+                known_sigs = registry.signatures_for(crule.abi)
+                for sig in crule.methods:
+                    if sig not in known_sigs:
+                        errors.append(
+                            f"permission '{perm_path}' contract '{addr}' "
+                            f"method '{sig}' not found in abi '{crule.abi}'"
+                        )
 
         # Check 4: wallet_allowlist entries must resolve to known wallets.
         for wallet_name in perm.wallet_allowlist:

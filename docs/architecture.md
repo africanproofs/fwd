@@ -641,8 +641,22 @@ async def evaluate(
 Evaluation order is the 10 steps in D14. The entire body is wrapped in
 `try/except Exception → DenyDecision(step=0)` — `evaluate` never raises
 (default-deny, Core invariant #2). Every `Deny` carries the step number
-for forensics; the `Allow`-side audit `decision_reason` carrier is a
-v0.5.0a5 concern (audit log substrate).
+for forensics.
+
+**Live wiring (shipped v0.5.0a6).** `app/policy_gate.py` (`gate()` →
+`PolicyDenied` on Deny; `release_rate_after_failure()`) is called by
+`app/sign_and_send.py` BEFORE nonce reservation: a denied request never
+reserves a nonce, never signs, never broadcasts (the synthetic-attack
+matrix asserts `rpc.send_raw_transaction` is not awaited for all 10
+deny vectors). The v0.3.0 Coston2-only chain allowlist was **lifted** —
+`policy.yaml` (via the engine) is now the sole authorization;
+`infra/rpc.py::ALLOWED_CHAINS` is reduced to the RPC-routing rail
+(`{14,19,114}` = chains fwd has a configured URL for). Rate
+release-on-failure mirrors the nonce release (engine increments at
+step 8/9; a pre-broadcast failure calls `release_rate_after_failure`
+with keys re-derived from the `AllowDecision` + policy);
+`add_committed_value` (wallet aggregate) is added ONLY on broadcast
+success, with the same `now` the engine used.
 
 **Rate-limit state** lives in two SQLite tables (Alembic 0005,
 v0.5.0a4, `infra/rate_repo.py`): `rate_buckets` (caller × wallet ×
@@ -651,8 +665,10 @@ window aggregate value sum + counter). Windows are fixed UTC-aligned
 (D14 operator decision: trade boundary bursts for simplicity). Buckets
 older than the largest configured window are deleted at policy-load
 time — `RateRepo.delete_stale()` ships at v0.5.0a4 (substrate); its
-policy-load-path invocation is **deferred to v0.5.0a6** (the
-sign-and-send integration ship).
+policy-load-path invocation is **deferred to v0.5.0a7** (v0.5.0a6
+wired `_startup_policy_load` = policy-load + consistency-check but not
+the stale-bucket prune; not a correctness issue, a housekeeping one —
+bounded growth is fine at v1 dev volume).
 
 **Startup fail-fast** (`infra/policy_loader.py::check_consistency`)
 runs after policy load: an active caller is an orphan unless it is
@@ -662,10 +678,12 @@ matches the binding's `policy_path` (drift detection, mirrors
 block; `wallet_allowlist` entries must resolve to a known wallet (DB
 row or `policy.wallets` key); `policy.wallets` bindings must resolve to
 `wallet_constraints`; each contract `abi` must be a registered ABI
-name. The per-signature orphan check (every `methods.<sig>` resolving
-against its ABI) is **deferred to v0.5.0a6** — `AbiRegistry` has no
-`signatures_for(abi_name)` accessor yet. Any failure → fwd refuses to
-serve.
+name; AND (check 3, **shipped v0.5.0a6**) every `methods.<sig>` under
+a known-abi contract must resolve against
+`AbiRegistry.signatures_for(abi)` (added a6). Any failure → fwd
+refuses to serve (fail-fast: `_startup_policy_load` writes a
+`policy-load` `decision="error"` audit row, commits it, then
+`SystemExit(1)`).
 
 ## Intent decoder
 
@@ -735,12 +753,15 @@ hash-chain mechanics per `decisions.md` D16. **Substrate/integration
 split (Core invariant #18):** the substrate — `infra/audit_repo.py`
 (`AuditRepo`, `_canonical_json`, `_row_hash`, `_as_utc`,
 `GENESIS_PREV_HASH`), `app/audit_walk.py`, the `clifwd audit` CLI, the
-`AuditRepoCM` dependency — shipped at **v0.5.0a5**. Writing rows from
-the use cases (sign-and-send / wallet / caller / lifespan policy-load)
-and unifying `app/sign_and_send.py`'s pre-existing non-compact
-`request_json` builder onto `_canonical_json` are **deferred to
-v0.5.0a6** (the integration ship). The concurrency/authorship
-paragraphs below describe the a6 target.
+`AuditRepoCM` dependency — shipped at **v0.5.0a5**. **Shipped
+v0.5.0a6:** the `sign-and-send` row authorship (denied/error/approved
+via `app/policy_gate.py` + `app/sign_and_send.py` on the shared
+`RequestScope` session), the lifespan `policy-load` row
+(`_startup_policy_load`), and unifying `sign_and_send`'s `request_json`
+onto `_canonical_json`. **Deferred to v0.5.0a7:** the `wallet-*` /
+`caller-*` admin-action rows + `AdminScope`, plus idempotency-replay
+`sign-and-send-duplicate`. The authorship paragraph below is
+sign-and-send-shipped / admin-a7.
 
 **Row shape** (Alembic 0004 — already shipped):
 - `seq INTEGER PRIMARY KEY AUTOINCREMENT`

@@ -20,6 +20,7 @@ import os
 import uuid
 from pathlib import Path  # noqa: TC003
 
+import eth_abi
 import httpx
 import pytest
 from eth_account import Account
@@ -27,9 +28,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from fwd import settings as settings_mod
 from fwd.app.sign_and_send import SignAndSendRequest, sign_and_send
+from fwd.domain.policy import Policy
+from fwd.infra.abi_registry import AbiRegistry
+from fwd.infra.audit_repo import AuditRepo, audit_metadata
+from fwd.infra.caller_repo import Caller
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonces_metadata
+from fwd.infra.rate_repo import RateRepo, rate_metadata
 from fwd.infra.rpc import RpcClient
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as tx_metadata
@@ -37,6 +43,53 @@ from fwd.infra.vault_client import VaultClient
 from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallets_metadata
 from tests.conftest import needs_vault
+
+_ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
+
+# ERC-20 contract address used in the integration test (lowercase).
+_ERC20_CONTRACT = "0x" + "11" * 20
+_TRANSFER_SELECTOR = "0xa9059cbb"
+_RECIPIENT = "0x" + "22" * 20
+
+
+def _transfer_calldata(to: str = _RECIPIENT, amount: int = 0) -> str:
+    """Return 0x-prefixed calldata for ERC20 transfer(address,uint256)."""
+    encoded = eth_abi.encode(["address", "uint256"], [to, amount])
+    raw = bytes.fromhex(_TRANSFER_SELECTOR[2:]) + encoded
+    return "0x" + raw.hex()
+
+
+def _make_integ_policy(wallet_name: str, caller_name: str) -> Policy:
+    """Minimal permissive policy for integration testing (no rate limits)."""
+    return Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {
+                caller_name: {"policy_path": "perm/integ"},
+            },
+            "wallets": {
+                wallet_name: {"policy_path": "wc/integ"},
+            },
+            "permissions": {
+                "perm/integ": {
+                    "contracts": {
+                        _ERC20_CONTRACT: {
+                            "abi": "erc20",
+                            "methods": {
+                                "transfer(address,uint256)": {
+                                    "max_value_wei": "0",
+                                }
+                            },
+                        }
+                    },
+                    "wallet_allowlist": [wallet_name],
+                }
+            },
+            "wallet_constraints": {
+                "wc/integ": {},
+            },
+        }
+    )
 
 
 def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-untyped-def]
@@ -109,6 +162,11 @@ async def test_sign_and_send_real_vault_mock_rpc(
         await conn.run_sync(wallets_metadata.create_all)
         await conn.run_sync(nonces_metadata.create_all)
         await conn.run_sync(tx_metadata.create_all)
+        await conn.run_sync(rate_metadata.create_all)
+        await conn.run_sync(audit_metadata.create_all)
+
+    # Load the real ABI registry.
+    registry = AbiRegistry.load(_ABIS_DIR)
 
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -118,25 +176,51 @@ async def test_sign_and_send_real_vault_mock_rpc(
         signer = EnvelopeSigner(vault, repo)
         tx_repo = TransactionRepo(session)
         nonce_repo = NonceRepo(session)
+        rate_repo = RateRepo(session)
+        audit_repo = AuditRepo(session)
 
         # 1. Create a wallet against real Vault.
-        wallet = await signer.create_wallet(name="integ-sign-test", policy_path="integ-sign")
+        wallet = await signer.create_wallet(name="integ-sign-test", policy_path="perm/integ")
         await session.commit()
 
-        # 2. Build an RpcClient using the mock transport.
+        # 2. Build policy + RpcClient using the mock transport.
+        policy = _make_integ_policy("integ-sign-test", "integration-test-caller")
         rpc = RpcClient(114, "http://mock-rpc", mock_http)
 
-        # 3. sign_and_send.
+        # 3. sign_and_send with real policy gate (v0.5.0a6). Uses ERC-20 calldata.
         request = SignAndSendRequest(
             wallet="integ-sign-test",
             caller="integration-test-caller",
             chain=114,
-            to="0x" + "11" * 20,
+            to=_ERC20_CONTRACT,
             value_wei="0",
-            data="0x",
+            data=_transfer_calldata(),
             gas=21000,
         )
-        result = await sign_and_send(request, signer, rpc, tx_repo, nonce_repo)
+        # Build a Caller object for the policy gate (mirrors what require_caller returns).
+        from datetime import UTC, datetime
+
+        integ_caller = Caller(
+            name="integration-test-caller",
+            api_key_hash="h",
+            api_key_prefix="p",
+            policy_path="perm/integ",
+            created_at=datetime.now(UTC),
+            revoked_at=None,
+        )
+        result = await sign_and_send(
+            request,
+            signer,
+            rpc,
+            tx_repo,
+            nonce_repo,
+            caller=integ_caller,
+            wallet=wallet,
+            policy=policy,
+            registry=registry,
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
+        )
 
         assert result.hash == "0x" + "ab" * 32
         assert result.nonce == 0

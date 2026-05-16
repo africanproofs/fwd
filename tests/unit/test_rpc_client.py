@@ -20,14 +20,17 @@ def _set_rpc_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     settings_mod.get_settings.cache_clear()
 
 
-def test_v030_allows_coston2_only() -> None:
-    assert ALLOWED_CHAINS == frozenset({114})  # noqa: SIM300
+def test_allowed_chains_is_rpc_routing_set() -> None:
+    # v0.5.0a6 lifted the v0.3.0 Coston2-only authZ gate. ALLOWED_CHAINS is
+    # now the RPC-routing rail (chains fwd has a configured RPC URL for);
+    # per-caller authorization is policy.yaml's job, not this set's.
+    assert ALLOWED_CHAINS == frozenset({14, 19, 114})  # noqa: SIM300
 
 
-def test_disallowed_chain_construction_raises() -> None:
+def test_unconfigured_chain_construction_raises() -> None:
     http = httpx.AsyncClient()
-    with pytest.raises(RpcError, match="not allowed"):
-        RpcClient(14, "http://flare", http)  # Flare not in v0.3.0 allowlist
+    with pytest.raises(RpcError, match="no RPC URL configured"):
+        RpcClient(1, "http://eth", http)  # chain 1 has no configured RPC URL in fwd
 
 
 @pytest.mark.asyncio

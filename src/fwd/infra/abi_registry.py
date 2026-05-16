@@ -145,3 +145,14 @@ class AbiRegistry:
     def abi_names(self) -> frozenset[str]:
         """Return the frozenset of loaded ABI names."""
         return frozenset(self._data.keys())
+
+    def signatures_for(self, abi_name: str) -> frozenset[str]:
+        """Return the frozenset of method_signatures indexed for *abi_name*.
+
+        Empty frozenset if the abi_name is unknown. Used by
+        policy_loader check 3 (per-signature orphan detection).
+        """
+        submap = self._data.get(abi_name)
+        if submap is None:
+            return frozenset()
+        return frozenset(m.method_signature for m in submap.values())

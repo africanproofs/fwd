@@ -1,0 +1,72 @@
+# fwd policy.yaml — EXAMPLE (NOT loaded; documentation only).
+#
+# The real policy.yaml is operator-controlled and gitignored (Core
+# invariant #12: public repo, private config). This file documents the
+# caller-keyed schema (decisions.md D13/D14, src/fwd/domain/policy.py).
+# Copy to $FWD_POLICY_PATH (default /etc/fwd/policy.yaml) and edit.
+#
+# Schema is strict (extra keys rejected). version MUST be 1.
+#
+# Evaluation (D14, 10 steps, default-deny — only step 10 returns Allow):
+#   1 caller -> binding (by NAME; caller.policy_path must match binding;
+#               binding.policy_path must resolve to a permissions block)
+#   2 request.to -> permissions.<path>.contracts.<addr>  (addr case-insensitive)
+#   3 decode request.data against contracts.<addr>.abi   (decode fail -> deny)
+#   4 decoded method signature must be in contracts.<addr>.methods
+#   5 request.value_wei <= methods.<sig>.max_value_wei   (BigInt)
+#   6 arg_predicates: "any" passes; else coerced-compare to the decoded
+#     scalar arg (bool-before-int; int via int(str(v)); address
+#     case-insensitive; plain string exact)
+#   7 request.wallet in permissions.<path>.wallet_allowlist
+#   8 caller rate bucket (per_hour / per_day) increment-and-test
+#   9 wallet_constraints: aggregate-value cap + wallet rate
+#  10 Allow.
+#
+# Startup fail-fast (infra/policy_loader.check_consistency): every
+# ACTIVE caller must be declared here by NAME with a matching
+# policy_path; every contract abi must be a registered ABI
+# (config/abis/registry.yaml); every method signature must exist in
+# that ABI; every wallet_allowlist entry must resolve; every
+# wallets.<name>.policy_path must be a wallet_constraints key.
+
+version: 1
+
+# Caller bearer-token identities (the `name` is the caller's name in
+# the callers table; policy_path indirects to a permissions block).
+callers:
+  ftso-claimer:
+    policy_path: perm/ftso-claimer
+
+# Wallet -> wallet_constraints indirection (per-wallet aggregate/rate).
+wallets:
+  claim-recipient:
+    policy_path: wc/claim-recipient
+
+permissions:
+  perm/ftso-claimer:
+    contracts:
+      # RewardManager (address is matched case-insensitively). The abi
+      # name must exist in config/abis/registry.yaml.
+      "0x0000000000000000000000000000000000000000":
+        abi: reward_manager
+        methods:
+          # Full canonical ABI signature. Non-scalar args (the proof
+          # array) are decoded but not predicatable (B1) — bound the
+          # method by max_value_wei + rate instead.
+          "claim(address,address,uint24,bool,(uint24,bytes20,uint120,uint8,bytes32[])[])":
+            max_value_wei: "0"
+            arg_predicates:
+              # Pin the reward recipient; "any" would allow any value.
+              _recipient: "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294"
+    wallet_allowlist:
+      - claim-recipient
+    rate:
+      per_hour: 4
+      per_day: 8
+
+wallet_constraints:
+  wc/claim-recipient:
+    max_aggregate_value_wei_per_day: "0"
+    rate:
+      per_hour: 4
+      per_day: 8

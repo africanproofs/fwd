@@ -2,11 +2,14 @@
 
 Per architecture.md § Signing flow steps 7, 9-13, 16, fwd talks to chain
 RPCs over JSON-RPC/HTTP. v1 supports Flare (chain_id=14), Songbird (19),
-Coston2 (114). v0.3.0 hardcoded allowlist: Coston2 only — Phase 7 lifts
-this with policy.yaml.
+Coston2 (114). v0.5.0a6 lifted the v0.3.0 Coston2-only authZ gate: the
+policy engine is now the sole authorization. ALLOWED_CHAINS remains as
+the RPC-routing rail — the set of chains fwd has a configured RPC URL
+for (you cannot sign on a chain fwd cannot reach); per-caller authZ is
+policy.yaml's job, not this set's.
 
 Public surface:
-- ALLOWED_CHAINS — frozenset[int] of permitted chain_ids in this version.
+- ALLOWED_CHAINS — frozenset[int] of chains fwd has an RPC URL for.
 - RpcError — JSON-RPC returned an error or unexpected shape.
 - RpcUnavailable — node unreachable or non-200 HTTP.
 - RpcClient — per-chain RPC handle. Constructed via RpcManager.for_chain().
@@ -31,8 +34,10 @@ CHAIN_LABELS: dict[int, str] = {
     114: "coston2",
 }
 
-# Chain IDs allowed in v0.3.0. Phase 7 lifts this when policy.yaml lands.
-ALLOWED_CHAINS: frozenset[int] = frozenset({114})  # Coston2 only
+# Chains fwd has a configured RPC URL for (RPC-routing rail, NOT authZ —
+# v0.5.0a6 lifted the Coston2-only authZ gate; policy.yaml authorizes).
+# Must stay in lockstep with _resolve_url's supported chain_ids.
+ALLOWED_CHAINS: frozenset[int] = frozenset({14, 19, 114})  # Flare, Songbird, Coston2
 
 
 class RpcError(Exception):
@@ -65,8 +70,9 @@ class RpcClient:
     def __init__(self, chain_id: int, url: str, http: httpx.AsyncClient) -> None:
         if chain_id not in ALLOWED_CHAINS:
             raise RpcError(
-                f"chain_id={chain_id} not allowed in v0.3.0 (Coston2 only); "
-                f"Phase 7 lifts this with policy.yaml"
+                f"chain_id={chain_id} has no RPC URL configured in fwd "
+                f"(supported: {sorted(ALLOWED_CHAINS)}). This is an RPC-routing "
+                f"limit, not authZ — policy.yaml authorizes per caller."
             )
         self._chain_id = chain_id
         self._url = url

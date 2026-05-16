@@ -18,10 +18,12 @@ import asyncio
 import contextlib
 import ctypes
 import ctypes.util
+import hashlib
 import logging
 import os
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -163,6 +165,96 @@ def _mlockall() -> None:
         )
 
 
+async def _startup_policy_load(_app: FastAPI) -> None:
+    """Load and validate policy.yaml + ABI registry at startup (D14 fail-fast).
+
+    Stashes the loaded Policy and AbiRegistry on app.state for use by the
+    sign-and-send handler. Writes a policy-load audit row (D16). On
+    consistency errors, logs each error and raises SystemExit(1) per the
+    D14 fail-fast mandate.
+    """
+    from fwd.infra.abi_registry import AbiRegistry, AbiRegistryError
+    from fwd.infra.audit_repo import AuditRepo, _canonical_json
+    from fwd.infra.caller_repo import CallerRepo
+    from fwd.infra.db import session_scope
+    from fwd.infra.policy_loader import PolicyLoadError, check_consistency, load_policy
+    from fwd.infra.wallet_repo import WalletRepo
+
+    s = get_settings()
+    policy_path = Path(s.fwd_policy_path)
+    abis_dir = Path(s.fwd_abis_dir)
+
+    log = structlog.get_logger(__name__)
+
+    try:
+        registry = AbiRegistry.load(abis_dir)
+    except AbiRegistryError as exc:
+        log.error("lifespan.abi_registry_load_failed", error=str(exc))
+        raise SystemExit(1) from exc
+
+    try:
+        policy = load_policy(policy_path)
+    except PolicyLoadError as exc:
+        log.error("lifespan.policy_load_failed", error=str(exc))
+        raise SystemExit(1) from exc
+
+    outcome_dict = {
+        "policy_yaml_path": str(policy_path),
+        "policy_yaml_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "callers_count": len(policy.callers),
+        "permissions_count": len(policy.permissions),
+        "wallet_constraints_count": len(policy.wallet_constraints),
+        "abis_loaded": sorted(registry.abi_names()),
+        "fwd_version": __version__,
+    }
+
+    async with session_scope() as session:
+        callers = await CallerRepo(session).list_all(include_revoked=False)
+        wallets = await WalletRepo(session).list_all()
+        errors = check_consistency(policy, callers, wallets, registry)
+        audit_repo = AuditRepo(session)
+        if errors:
+            for err in errors:
+                log.error("lifespan.policy_consistency_error", error=err)
+            await audit_repo.append(
+                action="policy-load",
+                decision="error",
+                caller=None,
+                request_json=None,
+                decision_reason=("; ".join(errors))[:2000],
+                outcome=_canonical_json(outcome_dict),
+            )
+            # SystemExit is BaseException; session_scope's `except Exception`
+            # neither commits nor rolls back, so commit the forensic error
+            # row explicitly before exiting — D16 "the row remains as
+            # evidence" (decisions.md:686).
+            await session.commit()
+            raise SystemExit(1)
+        await audit_repo.append(
+            action="policy-load",
+            decision="approved",
+            caller=None,
+            request_json=None,
+            decision_reason=(
+                f"policy loaded: {len(policy.callers)} callers, "
+                f"{len(policy.permissions)} permissions, "
+                f"{len(policy.wallet_constraints)} wallet_constraints, "
+                f"{len(registry.abi_names())} abis"
+            ),
+            outcome=_canonical_json(outcome_dict),
+        )
+
+    _app.state.policy = policy
+    _app.state.abi_registry = registry
+
+    log.info(
+        "lifespan.policy_loaded",
+        callers=len(policy.callers),
+        permissions=len(policy.permissions),
+        abis=sorted(registry.abi_names()),
+    )
+
+
 async def _startup_reconcile() -> None:
     """Best-effort startup nonce reconciliation.
 
@@ -208,6 +300,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if os.environ.get("FWD_DISABLE_MLOCK") != "1":
         _mlockall()
         await _startup_reconcile()
+        await _startup_policy_load(_app)
+    elif os.environ.get("FWD_POLICY_PATH"):
+        await _startup_policy_load(_app)
 
     watcher_task: asyncio.Task[None] | None = None
     s = get_settings()

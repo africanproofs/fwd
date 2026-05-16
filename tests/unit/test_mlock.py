@@ -20,7 +20,12 @@ async def test_lifespan_calls_mlockall_when_not_disabled(
 ) -> None:
     """Default behaviour: lifespan startup invokes _mlockall."""
     monkeypatch.delenv("FWD_DISABLE_MLOCK", raising=False)
-    with patch("fwd.main._mlockall") as mock_mlock:
+    monkeypatch.delenv("FWD_POLICY_PATH", raising=False)
+    with (
+        patch("fwd.main._mlockall") as mock_mlock,
+        patch("fwd.main._startup_reconcile"),
+        patch("fwd.main._startup_policy_load"),
+    ):
         from fwd.main import lifespan
 
         async with lifespan(MagicMock()):
@@ -34,7 +39,11 @@ async def test_lifespan_skips_mlockall_when_disabled(
 ) -> None:
     """FWD_DISABLE_MLOCK=1 skips the syscall (dev/test escape hatch)."""
     monkeypatch.setenv("FWD_DISABLE_MLOCK", "1")
-    with patch("fwd.main._mlockall") as mock_mlock:
+    monkeypatch.delenv("FWD_POLICY_PATH", raising=False)
+    with (
+        patch("fwd.main._mlockall") as mock_mlock,
+        patch("fwd.main._startup_policy_load"),
+    ):
         from fwd.main import lifespan
 
         async with lifespan(MagicMock()):
@@ -49,7 +58,12 @@ async def test_lifespan_skip_only_on_exact_match(
     """Other truthy values (true, yes, 0, empty) do NOT skip — only literal '1'."""
     for skip_val in ("0", "true", "yes", "TRUE", ""):
         monkeypatch.setenv("FWD_DISABLE_MLOCK", skip_val)
-        with patch("fwd.main._mlockall") as mock_mlock:
+        monkeypatch.delenv("FWD_POLICY_PATH", raising=False)
+        with (
+            patch("fwd.main._mlockall") as mock_mlock,
+            patch("fwd.main._startup_reconcile"),
+            patch("fwd.main._startup_policy_load"),
+        ):
             from fwd.main import lifespan
 
             async with lifespan(MagicMock()):

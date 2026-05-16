@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # State
     database_url: str = Field(default="sqlite+aiosqlite:////data/state.db")
 
+    # Phase 7 policy engine (v0.5.0a6).
+    fwd_policy_path: str = Field(default="/etc/fwd/policy.yaml")
+    fwd_abis_dir: str = Field(default="/app/config/abis")
+
     # RPC URLs (Phase 3c). Defaults match .env.example public Flare endpoints.
     # In production AP swaps these to ap-ftso-01 / ap-ftso-02 internal RPCs.
     rpc_url_flare: str = Field(default="https://flare-api.flare.network/ext/C/rpc")

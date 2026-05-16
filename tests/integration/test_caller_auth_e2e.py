@@ -11,13 +11,18 @@ primitives:
   - Real Vault encrypts the wallet privkey; real Vault decrypts at sign
     time; mock RPC accepts the broadcast.
 
+v0.5.0a6 update: sign_and_send now requires caller, wallet, policy,
+registry, rate_repo, and audit_repo keyword args (policy gate integrated).
+The test constructs a minimal permissive policy + real AbiRegistry so the
+ERC-20 transfer path succeeds end-to-end.
+
 Verifies:
   - The Phase 4 Caller object is correctly constructed and persisted.
   - resolve_caller(generated.key) returns the active Caller.
   - resolve_caller after revoke() returns None.
   - resolve_caller with a forged key returns None even with prefix match.
   - sign_and_send is callable end-to-end with the resolved caller in
-    request context (verifies the full auth + signing path lights up).
+    request context (verifies the full auth + policy + signing path).
 
 Per D11, this test does NOT exercise admin auth — admin auth is unit-
 tested in test_admin_caller_bright_line.py. This integration is the
@@ -28,8 +33,9 @@ from __future__ import annotations
 
 import json as _json
 import os
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
+import eth_abi
 import httpx
 import pytest
 from eth_account import Account
@@ -38,12 +44,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from fwd import settings as settings_mod
 from fwd.app.caller_resolution import resolve_caller
 from fwd.app.sign_and_send import SignAndSendRequest, sign_and_send
+from fwd.domain.policy import Policy
+from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.api_key import generate_api_key
+from fwd.infra.audit_repo import AuditRepo, audit_metadata
 from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.caller_repo import metadata as caller_metadata
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonce_metadata
+from fwd.infra.rate_repo import RateRepo, rate_metadata
 from fwd.infra.rpc import RpcClient
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as transaction_metadata
@@ -51,6 +61,55 @@ from fwd.infra.vault_client import VaultClient
 from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallet_metadata
 from tests.conftest import needs_vault
+
+_ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
+
+# ERC-20 contract address the policy permits (lowercase).
+_ERC20_CONTRACT = "0x" + "22" * 20
+# ERC-20 transfer(address,uint256) selector.
+_TRANSFER_SELECTOR = "0xa9059cbb"
+# Recipient for the test transfer.
+_RECIPIENT = "0x" + "33" * 20
+
+
+def _transfer_calldata(to: str = _RECIPIENT, amount: int = 0) -> str:
+    """Return 0x-prefixed calldata for ERC20 transfer(address,uint256)."""
+    encoded = eth_abi.encode(["address", "uint256"], [to, amount])
+    raw = bytes.fromhex(_TRANSFER_SELECTOR[2:]) + encoded
+    return "0x" + raw.hex()
+
+
+def _make_integ_policy(wallet_name: str, caller_name: str) -> Policy:
+    """Minimal permissive policy for integration testing."""
+    return Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {
+                caller_name: {"policy_path": "perm/integ"},
+            },
+            "wallets": {
+                wallet_name: {"policy_path": "wc/integ"},
+            },
+            "permissions": {
+                "perm/integ": {
+                    "contracts": {
+                        _ERC20_CONTRACT: {
+                            "abi": "erc20",
+                            "methods": {
+                                "transfer(address,uint256)": {
+                                    "max_value_wei": "0",
+                                }
+                            },
+                        }
+                    },
+                    "wallet_allowlist": [wallet_name],
+                }
+            },
+            "wallet_constraints": {
+                "wc/integ": {},
+            },
+        }
+    )
 
 
 def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-untyped-def]
@@ -119,7 +178,7 @@ async def test_caller_create_resolve_and_sign_e2e(
     monkeypatch.setenv("VAULT_ADDR", os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200"))
     settings_mod.get_settings.cache_clear()
 
-    # Build a single tmp DB with all tables (callers + wallets + nonces + transactions).
+    # Build a single tmp DB with all tables.
     db = tmp_path / "test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
     async with engine.begin() as conn:
@@ -127,6 +186,11 @@ async def test_caller_create_resolve_and_sign_e2e(
         await conn.run_sync(caller_metadata.create_all)
         await conn.run_sync(nonce_metadata.create_all)
         await conn.run_sync(transaction_metadata.create_all)
+        await conn.run_sync(rate_metadata.create_all)
+        await conn.run_sync(audit_metadata.create_all)
+
+    # Load the real ABI registry (config/abis/).
+    registry = AbiRegistry.load(_ABIS_DIR)
 
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -136,6 +200,8 @@ async def test_caller_create_resolve_and_sign_e2e(
         caller_repo = CallerRepo(session)
         tx_repo = TransactionRepo(session)
         nonce_repo = NonceRepo(session)
+        rate_repo = RateRepo(session)
+        audit_repo = AuditRepo(session)
         signer = EnvelopeSigner(vault, wallet_repo)
 
         # 1. Real argon2id key generation.
@@ -148,7 +214,7 @@ async def test_caller_create_resolve_and_sign_e2e(
             name="integ-caller-test",
             api_key_hash=generated.key_hash,
             api_key_prefix=generated.key_prefix,
-            policy_path="integ-caller-policy",
+            policy_path="perm/integ",
         )
         await session.commit()
         # Sanity: the persisted Caller carries the same hash + prefix we just
@@ -161,7 +227,7 @@ async def test_caller_create_resolve_and_sign_e2e(
         resolved = await resolve_caller(generated.key, caller_repo)
         assert resolved is not None, "argon2id round-trip failed"
         assert resolved.name == "integ-caller-test"
-        assert resolved.policy_path == "integ-caller-policy"
+        assert resolved.policy_path == "perm/integ"
         assert resolved.api_key_prefix == generated.key_prefix
 
         # 4. Forged key with the same prefix → resolve returns None.
@@ -174,29 +240,38 @@ async def test_caller_create_resolve_and_sign_e2e(
         assert await resolve_caller("fwd_live_short", caller_repo) is None
 
         # 6. Create a wallet via the real Vault path (Phase 3b).
-        wallet = await signer.create_wallet(
-            name="integ-caller-wallet", policy_path="integ-caller-policy"
-        )
+        wallet = await signer.create_wallet(name="integ-caller-wallet", policy_path="perm/integ")
         await session.commit()
 
-        # 7. Build an RpcClient using the mock transport.
+        # 7. Build policy + RpcClient using the mock transport.
+        policy = _make_integ_policy("integ-caller-wallet", "integ-caller-test")
         rpc = RpcClient(114, "http://mock-rpc", mock_http)
 
         # 8. sign_and_send through the real signer (decrypt via real Vault) and
-        #    mock RPC. The resolved caller's policy_path is what would be used
-        #    by Phase 7's policy engine; in Phase 4 it's stored, not enforced.
-        #    (v0.4.0a3 added the explicit caller field per F8.1; v0.4.0a3 +
-        #    v0.4.0a5 added the tx_repo + nonce_repo args.)
+        #    mock RPC, with real policy gate (v0.5.0a6). Uses ERC-20 transfer
+        #    calldata so the policy engine can decode intent at step 3.
         request = SignAndSendRequest(
             wallet="integ-caller-wallet",
             caller=resolved.name,
             chain=114,
-            to="0x" + "22" * 20,
+            to=_ERC20_CONTRACT,
             value_wei="0",
-            data="0x",
+            data=_transfer_calldata(),
             gas=21000,
         )
-        result = await sign_and_send(request, signer, rpc, tx_repo, nonce_repo)
+        result = await sign_and_send(
+            request,
+            signer,
+            rpc,
+            tx_repo,
+            nonce_repo,
+            caller=resolved,
+            wallet=wallet,
+            policy=policy,
+            registry=registry,
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
+        )
 
         assert result.hash == "0x" + "cd" * 32
         assert result.nonce == 0

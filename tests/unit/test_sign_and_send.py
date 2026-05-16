@@ -1,26 +1,33 @@
-"""sign_and_send use case unit tests with mocked signer + rpc + tx_repo + nonce_repo."""
+"""sign_and_send use case unit tests with mocked signer + rpc + tx_repo + nonce_repo.
+
+v0.5.0a6: sign_and_send now requires caller, wallet, policy, registry,
+rate_repo, audit_repo keyword args. The policy gate is stubbed via an
+AllowDecision-returning mock so existing tests continue to exercise the
+signer/RPC/nonce_repo failure paths in isolation.
+"""
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from fwd.app.sign_and_send import (
-    ChainNotAllowed,
     RpcUnreachable,
     SignAndSendRequest,
     VaultUnavailableError,
     WalletNotFound,
     sign_and_send,
 )
+from fwd.domain.intent import DecodedIntent
 from fwd.domain.signer import SignedTransaction
 from fwd.infra.nonce_repo import NonceNotInitializedError
 from fwd.infra.rpc import RpcUnavailable
 from fwd.infra.vault_client import VaultError
-from fwd.infra.wallet_repo import WalletNotFoundError
+from fwd.infra.wallet_repo import Wallet, WalletNotFoundError
 
 
 def _request(**kwargs: Any) -> SignAndSendRequest:
@@ -84,12 +91,94 @@ def _nonce_repo(nonce: int = 0) -> MagicMock:
     return r
 
 
+# ---------------------------------------------------------------------------
+# v0.5.0a6 — stubs for the new required keyword args.
+# The policy gate is mocked at the module level so existing tests exercise
+# the signer/RPC/nonce_repo paths without needing a real policy/registry.
+# ---------------------------------------------------------------------------
+
+_DECODED_INTENT = DecodedIntent(
+    contract="0x" + "11" * 20,
+    method_signature="transfer(address,uint256)",
+    selector="0xa9059cbb",
+    args={"to": "0x" + "33" * 20, "value": 0},
+)
+
+
+def _fake_caller() -> MagicMock:
+    c = MagicMock()
+    c.name = "test-caller"
+    c.policy_path = "perm/test"
+    return c
+
+
+def _fake_wallet() -> Wallet:
+    return Wallet(
+        name="test-wallet",
+        address="0x" + "aa" * 20,
+        privkey_ciphertext="vault:v1:x",
+        vault_master_key="fwd-master",
+        policy_path="wc/test",
+        created_at=datetime.now(UTC),
+    )
+
+
+def _fake_policy() -> MagicMock:
+    p = MagicMock()
+    return p
+
+
+def _fake_registry() -> MagicMock:
+    return MagicMock()
+
+
+def _rate_repo_mock() -> MagicMock:
+    r = MagicMock()
+    r.add_committed_value = AsyncMock(return_value=None)
+    r.release_caller = AsyncMock(return_value=None)
+    r.release_wallet = AsyncMock(return_value=None)
+    return r
+
+
+def _audit_repo_mock() -> MagicMock:
+    r = MagicMock()
+    r.append = AsyncMock(return_value=MagicMock())
+    return r
+
+
+def _policy_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Return default policy-gate keyword args for sign_and_send.
+
+    Patches policy_gate.gate to return an AllowDecision so the existing
+    tests can call sign_and_send without a real policy/registry/rate_repo.
+    Overrides are passed through.
+    """
+    return {
+        "caller": _fake_caller(),
+        "wallet": _fake_wallet(),
+        "policy": _fake_policy(),
+        "registry": _fake_registry(),
+        "rate_repo": _rate_repo_mock(),
+        "audit_repo": _audit_repo_mock(),
+        **overrides,
+    }
+
+
+def _allow_decision() -> MagicMock:
+    from fwd.app.policy_engine import AllowDecision
+
+    return AllowDecision(decoded=_DECODED_INTENT, matched_policy_path="perm/test")
+
+
 @pytest.mark.asyncio
 async def test_happy_path() -> None:
     request = _request()
     signer = _signer()
     rpc = _rpc(tx_hash="0x" + "ab" * 32)
-    result = await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo(nonce=42))
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        result = await sign_and_send(
+            request, signer, rpc, _tx_repo(), _nonce_repo(nonce=42), **_policy_kwargs()
+        )
     assert result.hash == "0x" + "ab" * 32
     assert result.nonce == 42
     signer.address.assert_awaited_once_with("test-wallet")
@@ -98,42 +187,55 @@ async def test_happy_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_chain_not_allowed_in_v030() -> None:
-    request = _request(chain=14)  # Flare
-    with pytest.raises(ChainNotAllowed):
-        await sign_and_send(request, _signer(), _rpc(), _tx_repo(), _nonce_repo())
-
-
-@pytest.mark.asyncio
 async def test_wallet_not_found() -> None:
     signer = _signer()
     signer.address = AsyncMock(side_effect=WalletNotFoundError("no-such"))
-    with pytest.raises(WalletNotFound):
-        await sign_and_send(_request(), signer, _rpc(), _tx_repo(), _nonce_repo())
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(WalletNotFound),
+    ):
+        await sign_and_send(
+            _request(), signer, _rpc(), _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
 
 
 @pytest.mark.asyncio
 async def test_rpc_unreachable_on_chain_id() -> None:
     rpc = _rpc()
     rpc.verify_chain_id = AsyncMock(side_effect=RpcUnavailable("conn refused"))
-    with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), _nonce_repo())
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(RpcUnreachable),
+    ):
+        await sign_and_send(
+            _request(), _signer(), rpc, _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
 
 
 @pytest.mark.asyncio
 async def test_rpc_unreachable_on_broadcast() -> None:
     rpc = _rpc()
     rpc.send_raw_transaction = AsyncMock(side_effect=RpcUnavailable("timeout"))
-    with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), _nonce_repo())
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(RpcUnreachable),
+    ):
+        await sign_and_send(
+            _request(), _signer(), rpc, _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
 
 
 @pytest.mark.asyncio
 async def test_vault_failure_during_sign() -> None:
     signer = _signer()
     signer.sign_transaction = AsyncMock(side_effect=VaultError("decrypt failed"))
-    with pytest.raises(VaultUnavailableError):
-        await sign_and_send(_request(), signer, _rpc(), _tx_repo(), _nonce_repo())
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(VaultUnavailableError),
+    ):
+        await sign_and_send(
+            _request(), signer, _rpc(), _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
 
 
 @pytest.mark.asyncio
@@ -141,7 +243,8 @@ async def test_estimate_gas_when_not_provided() -> None:
     request = _request(gas=None)
     rpc = _rpc(gas_estimate=50_000)
     signer = _signer()
-    await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo())
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo(), **_policy_kwargs())
     rpc.estimate_gas.assert_awaited_once()
     # tx_dict passed to sign_transaction had gas = int(50_000 * 1.25) = 62_500
     args, _ = signer.sign_transaction.await_args
@@ -154,7 +257,8 @@ async def test_explicit_gas_skips_estimate() -> None:
     request = _request(gas=200_000)
     rpc = _rpc()
     signer = _signer()
-    await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo())
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo(), **_policy_kwargs())
     rpc.estimate_gas.assert_not_awaited()
     args, _ = signer.sign_transaction.await_args
     _, tx_dict = args
@@ -165,8 +269,13 @@ async def test_explicit_gas_skips_estimate() -> None:
 async def test_malformed_fee_history() -> None:
     rpc = _rpc()
     rpc.fee_history = AsyncMock(return_value={"baseFeePerGas": []})  # empty list
-    with pytest.raises(RpcUnreachable, match="unexpected eth_feeHistory"):
-        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), _nonce_repo())
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(RpcUnreachable, match="unexpected eth_feeHistory"),
+    ):
+        await sign_and_send(
+            _request(), _signer(), rpc, _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
 
 
 @pytest.mark.asyncio
@@ -175,7 +284,10 @@ async def test_tx_dict_shape() -> None:
     request = _request(value_wei="100", data="0xabcd")
     rpc = _rpc(base_fee=2_000_000_000)
     signer = _signer()
-    await sign_and_send(request, signer, rpc, _tx_repo(), _nonce_repo(nonce=7))
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(
+            request, signer, rpc, _tx_repo(), _nonce_repo(nonce=7), **_policy_kwargs()
+        )
     args, _ = signer.sign_transaction.await_args
     _, tx_dict = args
     assert tx_dict["type"] == 2
@@ -194,7 +306,8 @@ async def test_sign_and_send_persists_transaction_row() -> None:
     """tx_repo.create is called once after broadcast with the right shape."""
     tx_repo = _tx_repo()
     request = _request(data="0xabcdef01aabbccdd")  # 8-byte data → method_name = "0xabcdef01"
-    await sign_and_send(request, _signer(), _rpc(), tx_repo, _nonce_repo())
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(request, _signer(), _rpc(), tx_repo, _nonce_repo(), **_policy_kwargs())
 
     tx_repo.create.assert_awaited_once()
     _, kwargs = tx_repo.create.call_args
@@ -213,7 +326,10 @@ async def test_sign_and_send_persists_transaction_row() -> None:
 @pytest.mark.asyncio
 async def test_sign_and_send_returns_tx_id_in_result() -> None:
     """result.tx_id is a valid UUIDv7 string."""
-    result = await sign_and_send(_request(), _signer(), _rpc(), _tx_repo(), _nonce_repo())
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        result = await sign_and_send(
+            _request(), _signer(), _rpc(), _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
     assert len(result.tx_id) == 36
     parsed = uuid.UUID(result.tx_id)
     assert parsed.version == 7
@@ -227,7 +343,8 @@ async def test_sign_and_send_uses_nonce_repo_not_rpc_for_nonce() -> None:
     """Happy path: nonce comes from nonce_repo, not rpc.transaction_count."""
     nonce_repo = _nonce_repo(nonce=5)
     rpc = _rpc()
-    await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo)
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.reserve_next.assert_awaited_once_with("test-wallet", 114)
     rpc.transaction_count.assert_not_awaited()
 
@@ -238,7 +355,8 @@ async def test_sign_and_send_init_path_when_nonce_uninitialized() -> None:
     nonce_repo = _nonce_repo()
     nonce_repo.reserve_next = AsyncMock(side_effect=[NonceNotInitializedError("test-wallet"), 5])
     rpc = _rpc(nonce=5)
-    await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo)
+    with patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo, **_policy_kwargs())
     rpc.transaction_count.assert_awaited_once_with("0xabc", block="pending")
     nonce_repo.init_for_wallet.assert_awaited_once_with("test-wallet", 114, 5)
     assert nonce_repo.reserve_next.await_count == 2
@@ -250,8 +368,11 @@ async def test_sign_and_send_releases_nonce_on_vault_failure() -> None:
     nonce_repo = _nonce_repo(nonce=3)
     signer = _signer()
     signer.sign_transaction = AsyncMock(side_effect=VaultError("decrypt failed"))
-    with pytest.raises(VaultUnavailableError):
-        await sign_and_send(_request(), signer, _rpc(), _tx_repo(), nonce_repo)
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(VaultUnavailableError),
+    ):
+        await sign_and_send(_request(), signer, _rpc(), _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.release_if_unused.assert_awaited_once_with("test-wallet", 114, 3)
 
 
@@ -261,8 +382,11 @@ async def test_sign_and_send_releases_nonce_on_fee_history_failure() -> None:
     nonce_repo = _nonce_repo(nonce=7)
     rpc = _rpc()
     rpc.fee_history = AsyncMock(side_effect=RpcUnavailable("timeout"))
-    with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo)
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(RpcUnreachable),
+    ):
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.release_if_unused.assert_awaited_once_with("test-wallet", 114, 7)
 
 
@@ -272,6 +396,39 @@ async def test_sign_and_send_does_NOT_release_on_broadcast_failure() -> None:  #
     nonce_repo = _nonce_repo(nonce=9)
     rpc = _rpc()
     rpc.send_raw_transaction = AsyncMock(side_effect=RpcUnavailable("timeout"))
-    with pytest.raises(RpcUnreachable):
-        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo)
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(RpcUnreachable),
+    ):
+        await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.release_if_unused.assert_not_awaited()
+
+
+# --- legacy test for removed chain allowlist ---
+
+
+@pytest.mark.asyncio
+async def test_chain_not_allowed_removed_in_v050a6() -> None:
+    """The v0.3.0 ALLOWED_CHAINS gate is removed; policy engine is now sole authZ.
+
+    Previously Flare (chain_id=14) was rejected with ChainNotAllowed before reaching
+    the policy engine. Now the chain gate is gone; rejection comes from the policy
+    engine (via PolicyDenied) or from RpcUnreachable (unknown chain → _resolve_url
+    raises). This test verifies ChainNotAllowed is no longer raised by sign_and_send
+    for a chain that merely wasn't in the v0.3.0 allowlist.
+    """
+    from fwd.app.policy_gate import PolicyDenied
+
+    request = _request(chain=14)  # Flare — was rejected by ALLOWED_CHAINS in v0.3.0
+    # Policy gate rejects (no policy for Flare in the stub) — that's PolicyDenied, not ChainNotAllowed.
+    # gate mock raises PolicyDenied to simulate a policy denial.
+    with (
+        patch(
+            "fwd.app.sign_and_send.gate",
+            new=AsyncMock(side_effect=PolicyDenied(step=1, reason="caller not in policy")),
+        ),
+        pytest.raises(PolicyDenied),
+    ):
+        await sign_and_send(
+            request, _signer(), _rpc(), _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )

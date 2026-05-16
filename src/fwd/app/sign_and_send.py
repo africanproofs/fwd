@@ -14,10 +14,8 @@ Per architecture.md § Signing flow:
   10. Return tx_id + tx hash + nonce.
 
 Phase 3c does NOT include:
-- Policy evaluation (Phase 7)
-- Hash-chained audit row (Phase 7; we structlog only)
 - Receipt watcher / replacement-on-stuck (Phase 5a6)
-- Idempotency-Key handling (Phase 5a6 or Phase 7)
+- Idempotency-Key handling (Phase 7; deferred from a6 to a7)
 
 v0.4.0a3 adds:
 - caller: str field on SignAndSendRequest (F8.1 — explicit, not via request.state).
@@ -30,29 +28,45 @@ v0.4.0a5 adds:
 - Reserve nonce from DB; lazy-init from RPC on first use per arch step 6.
 - Pre-broadcast failure (steps 7, 10, 11) releases the reserved nonce.
 - Broadcast failure (step 13) does NOT release — receipt watcher decides.
+
+v0.5.0a6 adds:
+- Policy gate (D14): caller/wallet/policy/registry/rate_repo/audit_repo
+  keyword args; default-deny enforced before nonce reservation.
+- Rate release-on-failure: pre-broadcast failures release rate buckets.
+- Rate add_committed_value: post-broadcast-success increments wallet agg.
+- Hash-chained audit row (D16): every request outcome appended to audit_log.
+- Coston2 hardcoded-allowlist gate removed: policy is now sole authZ.
+- ALLOWED_CHAINS import removed (no longer an authZ gate here).
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
 
+from fwd.app.policy_gate import PolicyDenied as PolicyDenied  # re-export for api/sign.py
+from fwd.app.policy_gate import gate, release_rate_after_failure
+from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.nonce_repo import NonceNotInitializedError
-from fwd.infra.rpc import ALLOWED_CHAINS as ALLOWED_CHAINS
 from fwd.infra.rpc import RpcError, RpcUnavailable
 from fwd.infra.uuidv7 import uuid7_str
 from fwd.infra.vault_client import VaultError
 from fwd.infra.wallet_repo import WalletNotFoundError
 
 if TYPE_CHECKING:
+    from fwd.domain.policy import Policy
+    from fwd.infra.abi_registry import AbiRegistry
+    from fwd.infra.audit_repo import AuditRepo
+    from fwd.infra.caller_repo import Caller
     from fwd.infra.envelope_signer import EnvelopeSigner
     from fwd.infra.nonce_repo import NonceRepo
+    from fwd.infra.rate_repo import RateRepo
     from fwd.infra.rpc import RpcClient
     from fwd.infra.transaction_repo import TransactionRepo
+    from fwd.infra.wallet_repo import Wallet
 
 logger = structlog.get_logger(__name__)
 
@@ -80,7 +94,12 @@ class WalletNotFound(Exception):  # noqa: N818
 
 
 class ChainNotAllowed(Exception):  # noqa: N818
-    """400 - chain_id is not in v0.3.0's allowlist (Coston2-only)."""
+    """400 - chain_id is not in v0.3.0's allowlist (Coston2-only).
+
+    Kept for backward-compat import from api/sign.py. Policy engine is now
+    the sole authZ gate (v0.5.0a6); this class is effectively dead but
+    harmless to keep.
+    """
 
 
 class RpcUnreachable(Exception):  # noqa: N818
@@ -105,22 +124,52 @@ _DEFAULT_TIP_WEI = 1_000_000_000  # 1 gwei
 _GAS_ESTIMATE_BUFFER = 1.25  # +25% on estimate_gas
 
 
+async def _audit(
+    audit_repo: AuditRepo,
+    request: SignAndSendRequest,
+    caller: Caller,
+    *,
+    decision: str,
+    decision_reason: str | None,
+    outcome: str | None,
+) -> None:
+    """Append one audit row for this sign-and-send operation (D16)."""
+    await audit_repo.append(
+        action="sign-and-send",
+        decision=decision,
+        caller=caller.name,
+        request_json=_canonical_json(
+            {
+                "wallet": request.wallet,
+                "chain": request.chain,
+                "to": request.to,
+                "value_wei": request.value_wei,
+                "data": request.data,
+                "gas": request.gas,
+            }
+        ),
+        decision_reason=decision_reason,
+        outcome=outcome,
+    )
+
+
 async def sign_and_send(
     request: SignAndSendRequest,
     signer: EnvelopeSigner,
     rpc: RpcClient,
     tx_repo: TransactionRepo,
     nonce_repo: NonceRepo,
+    *,
+    caller: Caller,
+    wallet: Wallet,
+    policy: Policy,
+    registry: AbiRegistry,
+    rate_repo: RateRepo,
+    audit_repo: AuditRepo,
 ) -> SignAndSendResult:
     # Defense-in-depth: caller must be a non-empty string <= 64 chars.
     if not request.caller or len(request.caller) > 64:
         raise ValueError("caller must be a non-empty string with len <= 64")
-
-    if request.chain not in ALLOWED_CHAINS:
-        raise ChainNotAllowed(
-            f"chain_id={request.chain} not in v0.3.0 allowlist; "
-            f"Phase 7 lifts this with policy.yaml"
-        )
 
     # 1. Resolve wallet -> address.
     try:
@@ -133,6 +182,30 @@ async def sign_and_send(
         await rpc.verify_chain_id()
     except (RpcUnavailable, RpcError) as exc:
         raise RpcUnreachable(str(exc)) from exc
+
+    # Policy gate — BEFORE nonce reservation (D14 / v0.5.0a6).
+    # The engine decodes intent + evaluates all 10 steps + increments rate buckets.
+    now = datetime.now(UTC)
+    try:
+        allow = await gate(
+            caller=caller,
+            wallet=wallet,
+            request=request,
+            policy=policy,
+            registry=registry,
+            rate_repo=rate_repo,
+            now=now,
+        )
+    except PolicyDenied as exc:
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="denied",
+            decision_reason=str(exc),
+            outcome=None,
+        )
+        raise
 
     # 3. Reserve nonce — DB is the source of truth (architecture.md step 6).
     try:
@@ -211,20 +284,47 @@ async def sign_and_send(
             reserved_nonce=nonce,
             released=released,
         )
+        # Release rate buckets (mirrors nonce release; D14 / v0.5.0a2 doctrine).
+        await release_rate_after_failure(
+            allow=allow,
+            caller=caller,
+            wallet=wallet,
+            request=request,
+            policy=policy,
+            rate_repo=rate_repo,
+            now=now,
+        )
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="pre_broadcast_failure",
+            outcome=None,
+        )
         raise
 
-    # 8. Broadcast (separate try; failure here does NOT release the nonce —
+    # 8. Broadcast (separate try; failure here does NOT release the nonce or rate —
     # the tx may have been seen by other nodes; receipt watcher decides).
     try:
         tx_hash = await rpc.send_raw_transaction(signed.raw_transaction)
     except (RpcUnavailable, RpcError) as exc:
+        # Broadcast failure: do NOT release rate (tx may be in mempools).
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="broadcast_failure",
+            outcome=None,
+        )
         raise RpcUnreachable(str(exc)) from exc
 
     # 9. Persist transaction row + hash.
     tx_id = uuid7_str()
     contract_address = request.to
     method_name = request.data[:10] if len(request.data) >= 10 else request.data
-    request_json = json.dumps(
+    request_json = _canonical_json(
         {
             "wallet": request.wallet,
             "chain": request.chain,
@@ -232,8 +332,7 @@ async def sign_and_send(
             "value_wei": request.value_wei,
             "data": request.data,
             "gas": request.gas,
-        },
-        sort_keys=True,
+        }
     )
     signed_raw_hex = "0x" + signed.raw_transaction.hex()
 
@@ -252,6 +351,23 @@ async def sign_and_send(
         submitted_at=datetime.now(UTC),
     )
     await tx_repo.add_hash(tx_id, tx_hash, sequence_num=1)
+
+    # Post-broadcast-success: add committed value to wallet aggregate (D14).
+    await rate_repo.add_committed_value(
+        wallet=wallet.name,
+        value_wei=int(request.value_wei),
+        now=now,
+    )
+
+    # Audit row: approved (D16).
+    await _audit(
+        audit_repo,
+        request,
+        caller,
+        decision="approved",
+        decision_reason=None,
+        outcome=_canonical_json({"tx_id": tx_id, "hash": tx_hash, "nonce": nonce}),
+    )
 
     # Per architecture.md hazards #3: log only non-secret fields.
     # NEVER log signed.raw_transaction, plaintext privkeys, or wallet

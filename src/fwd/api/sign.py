@@ -1,8 +1,8 @@
 """POST /v1/sign-and-send — caller-auth in v0.4.0-alpha+ (was admin-gated in v0.3.0-v0.3.x).
 
 Per architecture.md § API surface + § Signing flow + decisions.md D11.
-v0.3.0 hardcoded allowlist: Coston2 (chain_id=114) only. Phase 7 lifts
-with policy.yaml.
+v0.3.0 hardcoded allowlist: Coston2 (chain_id=114) only.
+v0.5.0a6 lifts the chain allowlist: policy engine is now the sole authZ.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from fwd.api.caller_auth import require_caller
@@ -19,8 +19,8 @@ from fwd.app.dependencies import (
     RequestScopeCM,
     get_request_scope,
 )
+from fwd.app.policy_gate import PolicyDenied
 from fwd.app.sign_and_send import (
-    ALLOWED_CHAINS,
     ChainNotAllowed,
     RpcUnreachable,
     SignAndSendRequest,
@@ -83,16 +83,9 @@ class SignAndSendResponse(BaseModel):
 async def post_sign_and_send(
     body: SignAndSendBody,
     caller: Annotated[Caller, Depends(require_caller)],
+    http_request: Request,
     scope_cm: RequestScopeCM = Depends(get_request_scope),  # noqa: B008
 ) -> SignAndSendResponse:
-    if body.chain not in ALLOWED_CHAINS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "chain_not_allowed",
-                "message": f"chain_id={body.chain} not in v0.3.0 allowlist; Coston2 (114) only",
-            },
-        )
     request = SignAndSendRequest(
         wallet=body.wallet,
         caller=caller.name,
@@ -105,9 +98,35 @@ async def post_sign_and_send(
     try:
         async with scope_cm as scope:
             rpc = scope.rpc_mgr.for_chain(body.chain)
+            wallet_obj = await scope.wallet_repo.get_by_name(body.wallet, missing_ok=True)
+            if wallet_obj is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "wallet_not_found",
+                        "message": f"wallet '{body.wallet}' not found",
+                    },
+                )
+            policy = http_request.app.state.policy
+            registry = http_request.app.state.abi_registry
             result = await sign_and_send(
-                request, scope.signer, rpc, scope.tx_repo, scope.nonce_repo
+                request,
+                scope.signer,
+                rpc,
+                scope.tx_repo,
+                scope.nonce_repo,
+                caller=caller,
+                wallet=wallet_obj,
+                policy=policy,
+                registry=registry,
+                rate_repo=scope.rate_repo,
+                audit_repo=scope.audit_repo,
             )
+    except PolicyDenied as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "policy_denied", "message": str(exc)},
+        ) from exc
     except ChainNotAllowed as exc:
         raise HTTPException(
             status_code=400,
