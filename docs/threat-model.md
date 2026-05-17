@@ -54,7 +54,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 - Default-deny policy (Core invariant #2).
 - Intent decoding refuses unparseable calldata (Core invariant #3).
 - Rate limits per caller, per window.
-- Audit log records every request and decision; abuse becomes immediately visible.
+- Audit log records every request and decision; abuse becomes immediately visible. (True for *denied/errored* requests — the policy-probing case — only since **v0.5.4 / Core invariant #19**: pre-fix those forensic rows were appended on the request session and then rolled back with the failing transaction, so an attacker probing the policy left no audit trace. Bug fixed v0.5.2, codified as an invariant v0.5.4.)
 - API key revocation via admin CLI (no service restart needed).
 
 **Residual risk.** Bounded by policy. Compared to today (compromise = total loss of the `.env` private key), this is a dramatic upgrade.

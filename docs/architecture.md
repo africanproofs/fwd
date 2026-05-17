@@ -790,6 +790,24 @@ RPC. Within 30 s busy_timeout headroom; no lock-split refactor in v1.
 (a5 ships `AuditRepoCM` as a standalone session CM; `RequestScope` is
 extended to carry `AuditRepo` at a6.)
 
+**Forensic-row durability (v0.5.4; Core invariant #19, decisions.md
+D16).** A `denied`/`error`/aborted audit row is committed
+independently of the transaction the failure rolls back. The
+anti-pattern — append on the shared session, `raise`, exception
+unwinds `session_scope`'s `except Exception: rollback`, row discarded —
+is forbidden. `sign_and_send.py`'s three exception arms call
+`await audit_repo.commit()` before re-raising;
+`main.py::_startup_policy_load` commits before `SystemExit(1)`. The
+commit is on the single already-open session (a second `session_scope`
+re-introduces the v0.4.5 two-session BEGIN IMMEDIATE deadlock) and
+also leaves the doctrinally-correct operational end-state (deny keeps
+the D14 rate increment; pre-broadcast nets zero after explicit
+releases; broadcast-fail keeps the reserved nonce). Enforced by a
+test against the **real** `fwd.infra.db.session_scope` rollback with a
+without-commit control — a mocked session is blind to it, which is why
+the defect shipped at v0.5.0a6 (main.py), recurred at v0.5.2
+(sign_and_send.py), and was caught only by the Phase 7 GA live drill.
+
 **Walker CLI** shipped at v0.5.0a5 — `clifwd audit verify | show |
 tail`, canonical invocation `docker exec fwd clifwd audit verify` (D16
 walker access pattern). Layering: `cli/audit.py` → `app/audit_walk.py`
