@@ -18,6 +18,7 @@ import pytest
 from fwd.app.sign_and_send import (
     RpcUnreachable,
     SignAndSendRequest,
+    TransactionRejected,
     VaultUnavailableError,
     WalletNotFound,
     sign_and_send,
@@ -25,7 +26,7 @@ from fwd.app.sign_and_send import (
 from fwd.domain.intent import DecodedIntent
 from fwd.domain.signer import SignedTransaction
 from fwd.infra.nonce_repo import NonceNotInitializedError
-from fwd.infra.rpc import RpcUnavailable
+from fwd.infra.rpc import RpcError, RpcUnavailable
 from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import Wallet, WalletNotFoundError
 
@@ -405,6 +406,38 @@ async def test_sign_and_send_does_NOT_release_on_broadcast_failure() -> None:  #
     ):
         await sign_and_send(_request(), _signer(), rpc, _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.release_if_unused.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_rejected_releases_nonce_and_is_terminal() -> None:
+    """A node-deterministic rejection (RpcError from eth_sendRawTransaction —
+    e.g. -32000 insufficient funds) is TERMINAL, not retryable: the reserved
+    nonce + rate are released (the tx is provably not in flight) and the
+    caller gets TransactionRejected, NOT RpcUnreachable/502. This is the
+    inverse pair of test_sign_and_send_does_NOT_release_on_broadcast_failure
+    (RpcUnavailable retains). Regression for the v1.0.0 Coston2-rehearsal
+    live-drill finding: a retained nonce here permanently wedges the wallet
+    because startup reconcile only logs the drift, never heals it."""
+    nonce_repo = _nonce_repo(nonce=9)
+    rpc = _rpc()
+    rpc.send_raw_transaction = AsyncMock(
+        side_effect=RpcError("rpc 114 eth_sendRawTransaction: -32000 insufficient funds")
+    )
+    audit = _audit_repo_mock()
+    with (
+        patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(TransactionRejected),
+    ):
+        await sign_and_send(
+            _request(),
+            _signer(),
+            rpc,
+            _tx_repo(),
+            nonce_repo,
+            **_policy_kwargs(audit_repo=audit),
+        )
+    nonce_repo.release_if_unused.assert_awaited_once_with("test-wallet", 114, 9)
+    audit.commit.assert_awaited_once()
 
 
 # --- legacy test for removed chain allowlist ---

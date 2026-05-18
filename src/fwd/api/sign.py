@@ -24,6 +24,7 @@ from fwd.app.sign_and_send import (
     ChainNotAllowed,
     RpcUnreachable,
     SignAndSendRequest,
+    TransactionRejected,
     VaultUnavailableError,
     WalletNotFound,
     sign_and_send,
@@ -151,6 +152,15 @@ async def post_sign_and_send(
         raise HTTPException(
             status_code=503,
             detail={"error": "vault_unavailable", "message": str(exc)},
+        ) from exc
+    except TransactionRejected as exc:
+        # Terminal: the node deterministically refused the tx (insufficient
+        # funds, nonce too low/high, ...). NOT retryable — the caller must
+        # resolve the cause (e.g. fund the wallet). The reserved nonce was
+        # released, so a corrected re-submission is not nonce-wedged.
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "transaction_rejected", "message": str(exc)},
         ) from exc
     except RpcUnreachable as exc:
         raise HTTPException(

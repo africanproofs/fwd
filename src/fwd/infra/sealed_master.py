@@ -33,18 +33,36 @@ class SealedMaster:
         s = get_settings()
         path = s.fwd_master_key_file
 
-        if not os.path.isfile(path):
-            raise SealError(f"master key file not found: {path}")
+        # Open first, then fstat the SAME descriptor: validation is bound
+        # to the opened inode (no stat-then-open TOCTOU). O_NOFOLLOW
+        # refuses a symlinked master path. This file is the entire custody
+        # root, so every check is fd-bound and explicit.
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError as exc:
+            raise SealError(f"master key file not found: {path}") from exc
+        except OSError as exc:  # ELOOP (symlinked path) or any open failure
+            raise SealError(
+                f"master key file could not be opened safely "
+                f"(symlink or unreadable?): {path} ({exc})"
+            ) from exc
 
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-        if mode != 0o600:
-            raise SealError(f"master key file mode must be 0600 (got {oct(mode)}): {path}")
-
-        if os.stat(path).st_uid != os.geteuid():
-            raise SealError(f"master key file must be owned by the user running fwd: {path}")
-
-        with open(path, "rb") as f:
-            raw = f.read()
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                raise SealError(f"master key file must be a regular file: {path}")
+            mode = stat.S_IMODE(st.st_mode)
+            if mode != 0o600:
+                raise SealError(f"master key file mode must be 0600 (got {oct(mode)}): {path}")
+            if st.st_uid != os.geteuid():
+                raise SealError(f"master key file must be owned by the user running fwd: {path}")
+            if st.st_size != 32:
+                raise SealError(
+                    f"master key file must be exactly 32 bytes (got {st.st_size}): {path}"
+                )
+            raw = os.read(fd, 33)  # 33: a >32 file is caught even if st_size raced
+        finally:
+            os.close(fd)
 
         if len(raw) != 32:
             raise SealError(f"master key file must be exactly 32 bytes (got {len(raw)}): {path}")

@@ -89,7 +89,7 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 | Printer access | Paper backup of 2 of 5 unseal shares | Trivial |
 | Off-site physical location | One paper share + one encrypted USB lives outside primary residence | Decide |
 | a local `backup` volume (v0.4.3) IAM keys | Litestream → bucket credentials (read+write scoped to `s3://ap-fwd-backups/...`) | Generate at Phase 6 |
-| Hardware wallet for identity rotation | Phase 8 `setClaimRecipient` transaction signed by identity address | Already in use by AP |
+| Hardware wallet for identity rotation | Phase 8 `ClaimSetupManager.setClaimExecutors` transaction signed by identity address | Already in use by AP |
 
 ## Cross-project dependencies (callers, not `fwd`'s deps)
 

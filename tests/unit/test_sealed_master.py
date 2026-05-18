@@ -7,7 +7,8 @@ Verifies:
 - decrypt of non-"seal:v1:" prefix raises SealError;
 - decrypt of corrupted blob raises SealError;
 - __init__ raises SealError on: missing file, wrong mode (0644), wrong size
-  (31 bytes), not-a-file (directory path);
+  (31 bytes), not-a-regular-file (directory path), symlinked path
+  (O_NOFOLLOW, fd-bound checks — the custody-root hardening);
 - __aexit__ zeroizes: after ``async with``, internal bytearray is all-zero;
 - 32-byte all-zero plaintext and a 32-byte privkey-shaped plaintext both
   round-trip (the real privkey use case).
@@ -144,9 +145,23 @@ def test_init_wrong_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_init_not_a_file_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Passing a directory path must be rejected."""
+    """A directory path must be rejected by the fd-bound regular-file check."""
     _set_master_file(monkeypatch, str(tmp_path))
-    with pytest.raises(SealError, match="not found"):
+    with pytest.raises(SealError, match="regular file"):
+        SealedMaster()
+
+
+def test_init_rejects_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A symlinked master path must be refused (O_NOFOLLOW, custody-root
+    hardening) even when the link target is itself a valid 0600 32-byte
+    file owned by the caller."""
+    real = tmp_path / "real.key"
+    real.write_bytes(os.urandom(32))
+    os.chmod(real, 0o600)
+    link = tmp_path / "master.key"
+    os.symlink(real, link)
+    _set_master_file(monkeypatch, str(link))
+    with pytest.raises(SealError, match="symlink|opened safely"):
         SealedMaster()
 
 

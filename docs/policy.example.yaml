@@ -53,7 +53,7 @@ permissions:
           # Full canonical ABI signature. Non-scalar args (the proof
           # array) are decoded but not predicatable (B1) — bound the
           # method by max_value_wei + rate instead.
-          "claim(address,address,uint24,bool,(uint24,bytes20,uint120,uint8,bytes32[])[])":
+          "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])":
             max_value_wei: "0"
             arg_predicates:
               # Pin the reward recipient; "any" would allow any value.

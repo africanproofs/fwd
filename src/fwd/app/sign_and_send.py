@@ -111,6 +111,24 @@ class RpcUnreachable(Exception):  # noqa: N818
     """
 
 
+class TransactionRejected(Exception):  # noqa: N818
+    """422 - the node deterministically rejected the signed tx at
+    eth_sendRawTransaction (a JSON-RPC error object: insufficient funds,
+    nonce too low/high, intrinsic gas too low, bad signature, ...).
+
+    Distinct from RpcUnreachable: the node was reachable and *refused* the
+    tx at ingress validation, so it is provably NOT in any mempool and
+    will never mine. The reserved nonce + rate are released (the
+    pre-broadcast-failure semantics apply — the tx is not in flight) and
+    the caller is told this is TERMINAL, not retryable. Retrying without
+    changing the cause (e.g. funding the wallet) is futile. (Instituted
+    at v1.0.0 — the Coston2-rehearsal live drill surfaced that conflating
+    this with RpcUnreachable both mislabels it 502-retryable AND retains
+    the nonce, permanently wedging the wallet; startup reconcile only
+    logs that drift and never heals it. Core invariant #14.)
+    """
+
+
 class VaultUnavailableError(Exception):
     """503 - Vault unreachable or returned an error during decrypt/encrypt.
 
@@ -355,12 +373,23 @@ async def sign_and_send(
         await audit_repo.commit()
         raise
 
-    # 8. Broadcast (separate try; failure here does NOT release the nonce or rate —
-    # the tx may have been seen by other nodes; receipt watcher decides).
+    # 8. Broadcast. Two distinct failure modes, NOT one (v1.0.0 — the
+    # Coston2-rehearsal live drill, Core invariant #14):
+    #  - RpcUnavailable (transport: httpx error / non-200 / timeout): fwd
+    #    does NOT know whether the node saw the tx. Keep the reserved
+    #    nonce + rate; the receipt watcher decides the tx's fate. 502.
+    #  - RpcError (the node returned a JSON-RPC error object — insufficient
+    #    funds / nonce too low|high / intrinsic gas / bad sig / ...): the
+    #    node *deterministically refused* the tx at ingress validation. It
+    #    never entered any txpool, was never gossiped — it is provably NOT
+    #    in flight and will never mine. Release the reserved nonce + rate
+    #    exactly as the pre-broadcast block does (net reserve/release = 0)
+    #    so the next request is not wedged behind a permanent nonce gap
+    #    (startup reconcile only LOGS that drift; it never heals it), and
+    #    surface a TERMINAL (non-retryable) error, not 502.
     try:
         tx_hash = await rpc.send_raw_transaction(signed.raw_transaction)
-    except (RpcUnavailable, RpcError) as exc:
-        # Broadcast failure: do NOT release rate (tx may be in mempools).
+    except RpcUnavailable as exc:
         await _audit(
             audit_repo,
             request,
@@ -370,12 +399,47 @@ async def sign_and_send(
             outcome=None,
         )
         # Persist the forensic row before session_scope rolls back
-        # (D16 / Core #5). Per the broadcast-failure doctrine the nonce/
-        # rate are deliberately NOT released (the tx may be in mempools);
-        # committing here keeps the reserved nonce, which is the intended
-        # behavior — the receipt watcher decides the tx's fate.
+        # (D16 / Core #5). Nonce/rate deliberately NOT released (the tx
+        # may be in mempools); committing keeps the reserved nonce — the
+        # receipt watcher decides the tx's fate.
         await audit_repo.commit()
         raise RpcUnreachable(str(exc)) from exc
+    except RpcError as exc:
+        # Deterministic node rejection: the tx is provably not in flight.
+        # Release the reservation (mirrors the pre-broadcast block above)
+        # so a corrected re-submission (e.g. after funding the wallet) is
+        # not stuck behind a permanent nonce gap.
+        released = await nonce_repo.release_if_unused(request.wallet, request.chain, nonce)
+        logger.warning(
+            "sign_and_send.broadcast_rejected",
+            wallet=request.wallet,
+            chain=request.chain,
+            reserved_nonce=nonce,
+            released=released,
+            error=str(exc),
+        )
+        await release_rate_after_failure(
+            allow=allow,
+            caller=caller,
+            wallet=wallet,
+            request=request,
+            policy=policy,
+            rate_repo=rate_repo,
+            now=now,
+        )
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="broadcast_rejected",
+            outcome=None,
+        )
+        # Persist the forensic row + the just-applied nonce/rate releases
+        # before session_scope rolls back (D16 / Core #5). reserve(+1)
+        # then release_if_unused(-1) net to zero — committed state correct.
+        await audit_repo.commit()
+        raise TransactionRejected(str(exc)) from exc
 
     # 9. Persist transaction row + hash.
     tx_id = uuid7_str()
