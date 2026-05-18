@@ -1,0 +1,52 @@
+# fwd ship history — index
+
+Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a3 (verbatim, relocated from the old CLAUDE.md § Scope) is in `SHIP-LOG.md`. Both are append-only honest history — Core invariant #18, no revisionism. A new version adds its deep file here + one line below (see fwd `CLAUDE.md` § Linear-forward versioning).
+
+- **v0.1.0** — documentation-only inception (no deep file; see `SHIP-LOG.md`)
+- **v0.1.1** — pre phase 1 fixes — `0.1.1-pre-phase-1-fixes.md`
+- **v0.1.2** — vault transit pivot — `0.1.2-vault-transit-pivot.md`
+- **v0.2.0** — spike coston2 — `0.2.0-spike-coston2.md`
+- **v0.2.1** — pre phase 2 fixes — `0.2.1-pre-phase-2-fixes.md`
+- **v0.2.2** — wallet create import — `0.2.2-wallet-create-import.md`
+- **v0.2.3** — clifwd rename — `0.2.3-clifwd-rename.md`
+- **v0.3.0a1** — vault deployment — `0.3.0a1-vault-deployment.md`
+- **v0.3.0a2** — vault addr fix — `0.3.0a2-vault-addr-fix.md`
+- **v0.3.0a3** — dev shortcut doctrine — `0.3.0a3-dev-shortcut-doctrine.md`
+- **v0.3.0a4** — token lifecycle doctrine — `0.3.0a4-token-lifecycle-doctrine.md`
+- **v0.3.0a5** — handoff demarcation doctrine — `0.3.0a5-handoff-demarcation-doctrine.md`
+- **v0.3.0a6** — wallet provisioning — `0.3.0a6-wallet-provisioning.md`
+- **v0.3.0** — alpha phase 2 scaffold — `0.3.0-alpha-phase-2-scaffold.md`
+- **v0.3.0** — phase 3c sign and send — `0.3.0-phase-3c-sign-and-send.md`
+- **v0.3.2** — audit corrections — `0.3.2-audit-corrections.md`
+- **v0.3.3** — pre phase 4 doctrine — `0.3.3-pre-phase-4-doctrine.md`
+- **v0.4.0a1** — caller auth — `0.4.0a1-caller-auth.md`
+- **v0.4.0a2** — audit corrections — `0.4.0a2-audit-corrections.md`
+- **v0.4.0a3** — state schema and tx persistence — `0.4.0a3-state-schema-and-tx-persistence.md`
+- **v0.4.0a4** — prompt wrapper doctrine — `0.4.0a4-prompt-wrapper-doctrine.md`
+- **v0.4.0a5** — nonce manager — `0.4.0a5-nonce-manager.md`
+- **v0.4.0a6** — receipt watcher — `0.4.0a6-receipt-watcher.md`
+- **v0.4.0a7** — admin wallet inventory and cli tests — `0.4.0a7-admin-wallet-inventory-and-cli-tests.md`
+- **v0.4.0** — phase 5 ga runbook — `0.4.0-phase-5-ga-runbook.md`
+- **v0.4.1** — phase6 litestream s3 and restore runbook — `0.4.1-phase6-litestream-s3-and-restore-runbook.md`
+- **v0.4.2** — phase6 vault snapshot and restore — `0.4.2-phase6-vault-snapshot-and-restore.md`
+- **v0.4.3** — backup substrate reversion — `0.4.3-backup-substrate-reversion.md`
+- **v0.4.4** — f6.2 ci integration — `0.4.4-f6.2-ci-integration.md`
+- **v0.4.5** — phase 5 verification met and concurrency fix — `0.4.5-phase-5-verification-met-and-concurrency-fix.md`
+- **v0.4.6** — phase 6 drill drift fixes — `0.4.6-phase-6-drill-drift-fixes.md`
+- **v0.5.0a1** — phase 7 doctrine — `0.5.0a1-phase-7-doctrine.md`
+- **v0.5.0a2** — phase 7 doctrine self review — `0.5.0a2-phase-7-doctrine-self-review.md`
+- **v0.5.0a3** — abi intent decoder — `0.5.0a3-abi-intent-decoder.md`
+- **v0.5.0a4** — policy engine — `0.5.0a4-policy-engine.md`
+- **v0.5.0a5** — audit log — `0.5.0a5-audit-log.md`
+- **v0.5.0a6** — sign and send integration — `0.5.0a6-sign-and-send-integration.md`
+- **v0.5.0a7** — admin audit idempotency — `0.5.0a7-admin-audit-idempotency.md`
+- **v0.5.0** — phase 7 ga — `0.5.0-phase-7-ga.md`
+- **v0.5.1** — phase 7 ga substrate and partial evidence — `0.5.1-phase-7-ga-substrate-and-partial-evidence.md`
+- **v0.5.2** — phase 7 ga deny audit fix — `0.5.2-phase-7-ga-deny-audit-fix.md`
+- **v0.5.3** — phase 7 ga verification met — `0.5.3-phase-7-ga-verification-met.md`
+- **v0.5.4** — core invariant 19 forensic row durability — `0.5.4-core-invariant-19-forensic-row-durability.md`
+- **v0.5.5** — audit reconciliation — `0.5.5-audit-reconciliation.md`
+- **v0.5.6** — hygiene cleanup — `0.5.6-hygiene-cleanup.md`
+- **v1.0.0a1** — vault to sealed master — `1.0.0a1-vault-to-sealed-master.md`
+- **v1.0.0a2** — sealed master verification runbook — `1.0.0a2-sealed-master-verification-runbook.md`
+- **v1.0.0a3** — sealed master verification met — `1.0.0a3-sealed-master-verification-met.md`
