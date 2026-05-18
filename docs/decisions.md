@@ -773,6 +773,25 @@ Permission evaluation order (Phase 7):
 - **A real consumer demands tamper-PROOF audit** (e.g., regulatory). Phase 10 on-chain anchor lands.
 - **Audit log writes become a measurable contention point** (production migration hits a workload mix that surfaces it). Lock-split the audit write out of the request's writer-lock critical section. Phase 10.
 
+## D17. Doctrine ship-types: feature, constitutional-amendment, bounded post-verification reconciliation
+
+**Decision.** The per-ship doctrine-surface rule (CLAUDE.md § Linear-forward versioning, instituted v1.0.0) caps a ship at three doctrine artifacts and obligates the Reviewer to reject more. That cap is correct for **feature ships** and is the corpus-bloat remedy the fourth audit demanded. It is structurally unable to govern two legitimate non-feature acts: (a) amending the constitution itself, and (b) reconciling invariant *text* to code a prior byte-verified ship already made true. Forcing either through the 3-artifact cap either blocks it or fragments it across feature ships — and a fragmented reconciliation leaves Core-#18 partially-true doctrine states on `main`. Operator-authorized 2026-05-19 (the single constitutional item gated by the v3 FSP plan), this decision adds two named, bounded non-feature ship-types:
+
+- **Constitutional-amendment ship** — amends CLAUDE.md process/invariant doctrine. Bounded surface: amended CLAUDE.md section(s) + a D-record + the three feature-ship artifacts + the two version files. Self-ratifying (governed by the definition it introduces; the self-reference recorded honestly here per Core invariant #18). Never a Reviewer self-grant — explicit operator authorization is constitutive. **v1.1.0a3 is the genesis instance** (it enacts this very D-record).
+- **Bounded post-verification reconciliation ship** — reconciles invariant text to a *prior, already-shipped, byte/GATE-verified* ship's code. Binding constraints: (i) only text the just-shipped verified code makes true, nothing GATE-pending; (ii) every reconciled edit annotated inline `(code in ship vX.Y.ZaN makes this true)`; (iii) NO § Scope narrative paragraph; (iv) ONE coherent ship, never fragmented. Bounded surface: reconciled invariant lines (CLAUDE.md / decisions.md / architecture.md / threat-model.md) + a D-record + the three feature-ship artifacts + the two version files. Cannot ship until the reconciled code's verification gate has passed. Reusable for 9a-iii, 9b, 9c, 10x.
+
+Neither type relaxes Core invariant #18 — each *narrows* it by forcing reconciliation into one annotated, operator-visible, gate-anchored ship instead of leaking partial truth across feature ships.
+
+**Why this matters.** Without this, the FSP doctrine reconciliation (Core #3 EIP-191 reframe, #7 honest hot-`.env` carve-out, #17 honest hot-key text, CLAUDE.md:49 clarifying note) had no compliant home: it exceeds three artifacts by construction, and a per-ship operator "checkbox" does not amend a rule — only a recorded constitutional act does. The rule that exists to prevent doctrine bloat must not, by its own rigidity, force doctrine *dishonesty* (partial-truth fragments on main). Naming the ship-types makes the seam explicit and reusable for every future Step-0/GATE-verified phase.
+
+**Consequences.**
+
+- **v1.1.0a3** (this ship) enacts the amendment: CLAUDE.md § Linear-forward versioning gains the two ship-type definitions; the Reviewer-obligations bullet is scoped to feature ships; this D17 lands; § Scope Current line advances; version bumped. Doctrine-only — zero code change; v1.1.0a1/a2 behaviour unaffected; full suite stays 458 passed / 1 skipped.
+- **v1.1.0a4** re-sequences the former "9a-iii" reconciliation (the v3 plan named it v1.1.0a3). It is a bounded post-verification reconciliation ship and is **hard-gated on GATE-1 live-Coston2** — it cannot honestly reword Core #3 until the fwd-reconstructed EIP-191 digest is proven real on-chain against the real `FlareSystemsManager` + a real-`signing-tool`-binary signature diff.
+- 9b / 9c / 10x reuse both ship-types without re-authorization (the constitutional act is generic; only a *new* constitutional change needs a new operator authorization + D-record).
+
+**When to revisit.** If a future audit finds either bounded surface is itself a bloat vector (e.g. reconciliation ships growing speculative text despite constraint (i)), tighten the constraint and record the tightening as its own constitutional-amendment ship — the mechanism is now self-hosting.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.
