@@ -12,9 +12,9 @@ Every dependency `fwd` requires, grouped by tier. The "Status for AP" column fla
 | Flare RPC | ✅ Exists | `ap-ftso-01:9650` (archive node, internal) |
 | Songbird RPC | ✅ Exists | `ap-ftso-02:9650` (pruned node, internal) |
 | Coston2 RPC | ✅ Public | `https://coston2-api.flare.network/ext/C/rpc` — outside AP's control, fine for spike + tests |
-| **Scaleway Object Storage bucket** | ⚠️ Create one | New bucket for Litestream backups. ~€0/mo at AP volume. |
+| **a local `backup` volume (v0.4.3) bucket** | ⚠️ Create one | New bucket for Litestream backups. ~€0/mo at AP volume. |
 
-**Net-new operational surface:** one Scaleway Object Storage bucket. Nothing else.
+**Net-new operational surface:** one a local `backup` volume (v0.4.3) bucket. Nothing else.
 
 Notably **NOT required:**
 - AWS account
@@ -30,11 +30,12 @@ Notably **NOT required:**
 
 | Service | Image (pinned) | Role |
 |---|---|---|
-| `vault` | `hashicorp/vault:<version-pinned>` | Custody + signing (Transit engine, ECDSA secp256k1) |
+| `vault` | `hashicorp/vault:<version-pinned>` | Custody — envelope encryption only (Transit `aes256-gcm96`; NOT a signer — D1 v0.1.2 pivot; no `transit/sign/*`) |
 | `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway service (FastAPI) |
-| `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to S3-compatible storage |
+| `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to a local `backup` volume (v0.4.3 — no cloud) |
+| `vault-snapshot` | `fwd-vault-snapshot` (vault CLI) | Periodic Raft snapshot to the local `backup` volume (v0.4.3) |
 
-All three deployed and managed by `docker-compose.yml`. Nothing manual to install on the host beyond Docker itself.
+All four deployed and managed by `docker-compose.yml`. Nothing manual to install on the host beyond Docker itself.
 
 ## Python runtime libraries (inside the `fwd` container)
 
@@ -45,10 +46,10 @@ All three deployed and managed by `docker-compose.yml`. Nothing manual to instal
 | `pydantic` | `^2.9` | Request/response validation (with FastAPI) |
 | `pydantic-settings` | `^2.6` | Env var configuration |
 | `httpx` | `^0.27` | Async HTTP — RPC + Vault |
-| `hvac` | `^2.3` | HashiCorp Vault Python client (Transit-compatible) |
+| ~~`hvac`~~ | — | NEVER adopted — the Vault client is hand-rolled on `httpx` (`infra/vault_client.py`); this row was doctrine drift, struck v0.5.6 |
 | `eth-account` | `^0.13` | EIP-1559 transaction encoding, RLP |
 | `eth-utils` | `^5.0` | keccak256, address formatting, EIP-55 checksum |
-| `coincurve` | `^20.0` | secp256k1 — needed for external privkey generation (`coincurve.PrivateKey()`); v-recovery is no longer in the v1 hot path (eth-account returns Ethereum-shaped output directly), but coincurve stays for key generation and forward-compatibility with future HSM-backed signers that return raw (r, s) |
+| `coincurve` | `^20.0` | secp256k1 — `eth-account`'s active backend (`eth_keys ... CoinCurveECCBackend`); pinned for custody-path supply-chain legibility, NOT directly imported by `fwd` (wallet keygen is `eth_account.Account.create()` per the v0.2.0 spike). Kept v0.5.5 (audit contest). |
 | `sqlalchemy` | `^2.0` | DB layer (async) |
 | `aiosqlite` | `^0.20` | Async SQLite driver |
 | `alembic` | `^1.13` | Schema migrations |
@@ -89,7 +90,7 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 | GPG keypair on YubiKey hardware token | Encrypting unseal shares for digital backup; PIN-protected | Verify or set up |
 | Printer access | Paper backup of 2 of 5 unseal shares | Trivial |
 | Off-site physical location | One paper share + one encrypted USB lives outside primary residence | Decide |
-| Scaleway Object Storage IAM keys | Litestream → bucket credentials (read+write scoped to `s3://ap-fwd-backups/...`) | Generate at Phase 6 |
+| a local `backup` volume (v0.4.3) IAM keys | Litestream → bucket credentials (read+write scoped to `s3://ap-fwd-backups/...`) | Generate at Phase 6 |
 | Hardware wallet for identity rotation | Phase 8 `setClaimRecipient` transaction signed by identity address | Already in use by AP |
 
 ## Cross-project dependencies (callers, not `fwd`'s deps)
@@ -122,7 +123,7 @@ Listed because earlier design drafts implied otherwise; making the absences expl
 
 ## Honest summary
 
-The only genuinely net-new operational dependency AP picks up by building `fwd` is **HashiCorp Vault running in Docker** (and a Scaleway bucket for state's backup). Everything else is either already operating, already in AP's standard stack, or trivially provisioned.
+The only genuinely net-new operational dependency AP picks up by building `fwd` is **HashiCorp Vault running in Docker** (with state backups on a local volume). Everything else is either already operating, already in AP's standard stack, or trivially provisioned.
 
 Compared to the AWS-KMS alternative, `fwd` adds *less* total dependency surface — it removes a cloud account at the cost of one extra container. Compared to the K3s alternative, `fwd` removes the K8s control-plane dependency at the cost of slightly weaker caller authentication (bearer keys vs SA tokens), with a documented Phase 10 mTLS upgrade path.
 

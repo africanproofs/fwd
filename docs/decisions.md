@@ -650,7 +650,7 @@ Permission evaluation order (Phase 7):
 
 - **`request_json` canonicalization.** Before insert: `json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)`. Deterministic — same input always produces same bytes — which is what makes the hash-chain meaningful across observers. Same canonicalization applies to `outcome`.
 
-- **Hash input** (revised at v0.5.0a2 self-review). The original a1 doctrine used a NUL-byte-joined concatenation, which is collision-resistant only when none of the contributing fields contain a literal NUL — a property NOT guaranteed for free-form fields like `caller` (caller name, set by admin) or `decision_reason` (human-readable). The fix is to canonical-JSON-serialize the row's logical fields and hash the serialization, eliminating the NUL ambiguity by construction (the JSON encoder escapes embedded NUL bytes as ` `):
+- **Hash input** (revised at v0.5.0a2 self-review). The original a1 doctrine used a NUL-byte-joined concatenation, which is collision-resistant only when none of the contributing fields contain a literal NUL — a property NOT guaranteed for free-form fields like `caller` (caller name, set by admin) or `decision_reason` (human-readable). The fix is to canonical-JSON-serialize the row's logical fields and hash the serialization, eliminating the NUL ambiguity by construction (the JSON encoder escapes embedded NUL bytes as `\u0000`):
 
   ```python
   row_dict = {

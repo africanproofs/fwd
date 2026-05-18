@@ -67,7 +67,7 @@ Four Docker services, two Docker networks, three named volumes (v0.4.3 reversed 
 | Boundary | Mechanism | Failure if breached |
 |---|---|---|
 | caller → `fwd` | Bearer API key over HTTP on `fwd-callers` Docker network | Attacker can submit requests within that caller's policy scope |
-| `fwd` → Vault | Vault token issued via Vault's K8s-style auth or AppRole, scoped to specific transit keys | Attacker can request signatures within `fwd`'s Vault permissions; cannot extract keys |
+| `fwd` → Vault | AppRole token scoped to `transit/encrypt|decrypt/fwd-master` (NO `transit/sign/*` — D1: Vault is an `aes256-gcm96` envelope, not a signer) | A compromised `fwd` (or leaked AppRole creds + the SQLite ciphertexts) can `transit/decrypt` and recover EVERY wallet plaintext key — the same capability `fwd` itself has (threat-model A4/A5, Core inv #1). The boundary protects only offline disk theft (ciphertext-only). The independent-record property the threat model leans on requires a Vault audit device, which is NOT enabled today (v0.5.5 audit OE-2 — a Phase 8 entry gate). |
 | Vault → key material | AES-256-GCM at rest; memory-locked (`mlock`) at runtime; Raft data on encrypted volume | Attacker with host root can extract key from Vault memory while unsealed |
 | `fwd` → RPC | HTTPS/JSON-RPC | Compromised RPC could censor or fork view; signed tx still safe |
 | Operator → Vault unseal | Shamir 3-of-5, 2 paper + 3 GPG-encrypted, geographically distributed | Attacker with 3 shares + host access can use the keys |
