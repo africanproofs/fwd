@@ -1,7 +1,11 @@
 """SQLAlchemy async engine + session factory.
 
 Per architecture.md § SQLite schema, fwd applies these PRAGMAs at startup:
-  journal_mode=WAL, synchronous=NORMAL, busy_timeout=5000, foreign_keys=ON.
+  journal_mode=WAL, synchronous=NORMAL, busy_timeout=30000, foreign_keys=ON.
+  (busy_timeout bumped 5000 -> 30000 at v0.4.5 to absorb concurrent-writer
+  queueing during sign-and-send bursts; the connect handler below sets
+  30000 — this docstring previously still read 5000, reconciled v0.5.5
+  per Core invariant #18.)
 
 Phase 3b applies them via the connection-event handler below.
 Phase 5a5 adds a BEGIN IMMEDIATE event listener to serialize writers

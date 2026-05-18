@@ -55,7 +55,7 @@ All three deployed and managed by `docker-compose.yml`. Nothing manual to instal
 | `argon2-cffi` | `^23.1` | API key hashing (argon2id) |
 | `pyyaml` | `^6.0` | Policy file loading |
 | `structlog` | `^24.4` | JSON structured logging |
-| `prometheus-client` | `^0.21` | Metrics (Phase 10, dependency present from start) |
+| ~~`prometheus-client`~~ | — | Removed v0.5.5 (audit OE-6): zero src/ use; re-add at Phase 10 when `/metrics` is built |
 | `tenacity` | `^9.0` | Retry policies for RPC calls |
 | `typer` | `^0.16` | CLI framework |
 | `rich` | `^13.9` | CLI rendering |

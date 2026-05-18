@@ -4,7 +4,7 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
 
 ## One-paragraph summary
 
-`fwd` is an HTTP signing service. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce, retrieves the wallet's Vault-wrapped private-key ciphertext from SQLite, asks HashiCorp Vault Transit to decrypt it via `aes256-gcm96` envelope encryption, signs the EIP-1559 transaction in-process with `eth-account`, zeroizes the plaintext key buffer immediately, broadcasts the signed transaction, and writes a hash-chained audit row recording the entire decision. Private keys are generated externally (secure RNG), envelope-encrypted at rest by Vault, and exist as plaintext in `fwd`'s process memory only during the bounded signing operation. State (nonces, transactions, audit log) lives in SQLite, replicated continuously to Scaleway Object Storage by Litestream. Deployment is a single-host `docker compose up`.
+`fwd` is an HTTP signing service. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce, retrieves the wallet's Vault-wrapped private-key ciphertext from SQLite, asks HashiCorp Vault Transit to decrypt it via `aes256-gcm96` envelope encryption, signs the EIP-1559 transaction in-process with `eth-account`, zeroizes the plaintext key buffer immediately, broadcasts the signed transaction, and writes a hash-chained audit row recording the entire decision. Private keys are generated externally (secure RNG), envelope-encrypted at rest by Vault, and exist as plaintext in `fwd`'s process memory only during the bounded signing operation. State (nonces, transactions, audit log) lives in SQLite, replicated continuously by Litestream to a local `backup` volume (v0.4.3 — "no outside dependencies"; off-host transport is operator-driven). Deployment is a single-host `docker compose up`.
 
 ## Component topology
 
@@ -36,18 +36,20 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
                                          │
                               ┌──────────▼───────────┐
                               │ litestream sidecar   │
-                              │ → Scaleway Object    │
-                              │   Storage            │
+                              │ → local backup vol   │
+                              │ vault-snapshot sidecar│
+                              │ → local backup vol   │
                               └──────────────────────┘
 ```
 
-Three Docker services, two Docker networks, two named volumes:
+Four Docker services, two Docker networks, three named volumes (v0.4.3 reversed the earlier Scaleway-S3 direction — backups go to a local volume; off-host transport is the operator's job):
 
 | Service | Image | Role |
 |---|---|---|
 | `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway. FastAPI on port 8080, bound to `127.0.0.1`. |
 | `vault` | `hashicorp/vault:<pinned>` | Custody. Raft storage, Transit engine. Reachable only on `fwd-internal` network. |
-| `litestream` | `litestream/litestream:<pinned>` | SQLite continuous replication to Scaleway Object Storage. |
+| `litestream` | `litestream/litestream:<pinned>` | SQLite continuous replication to the local `backup` volume (v0.4.3 — no cloud). |
+| `vault-snapshot` | `fwd-vault-snapshot` (vault CLI + ca-certs) | Periodic `vault operator raft snapshot save` → local `backup` volume (v0.4.3 — no aws-cli, no S3). |
 
 | Network | Purpose |
 |---|---|
@@ -58,6 +60,7 @@ Three Docker services, two Docker networks, two named volumes:
 |---|---|
 | `vault-data` | Vault Raft storage (encrypted at rest with master key) |
 | `fwd-state` | SQLite `state.db` + audit log + WAL files |
+| `backup` | Litestream replica of `state.db` + `vault-snapshots/*.snap` (v0.4.3; operator transports off-host) |
 
 ## Trust boundaries
 
@@ -102,7 +105,9 @@ The `/v1/sign-and-send` happy path:
     - Lookup API key hash in callers table
     - Resolve caller → policy_path
 
-3.  fwd loads policy.yaml (hot-reloaded on file change)
+3.  fwd uses the policy.yaml loaded once at startup (reload requires
+    `docker compose restart fwd` — D14 startup-only in v1; see § Policy
+    YAML format "Reload")
     - Resolve (caller, wallet) → permissions
 
 4.  fwd decodes intent
@@ -191,8 +196,15 @@ The `/v1/sign-and-send` happy path:
                                 contract_address, method_name, value_wei,
                                 idempotency_key, request_json,
                                 signed_raw, status='submitted')
-    - INSERT INTO transaction_args (tx_id, arg_name, arg_type, arg_value)
-        — one row per decoded argument
+    - (Phase 8) INSERT INTO transaction_args (tx_id, arg_name, arg_type,
+        arg_value) — one row per decoded argument. NOT wired in v0.5.x:
+        the decoder feeds the policy gate and the audit log
+        (`request_json`/`decision_reason` carry the full decoded intent,
+        so forensics are not blind); the `transactions` row persists
+        selector-only `method_name` (`request.data[:10]`) +
+        `contract_address` (`request.to`). Populating `transaction_args`
+        from `DecodedIntent.args` comes due at Phase 8 (Core invariant
+        #18 deferral — explicit phase marker, not silent drift).
     - INSERT INTO transaction_hashes (tx_id, sequence_num=1, hash_hex)
     - INSERT INTO audit_log (caller, action='sign-and-send',
                              request_json, decision='approved',
@@ -322,15 +334,15 @@ PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=3000
 
 ## API surface
 
-Frozen for v1.
+The **shipped** surface (v0.5.x, mounted in `src/fwd/main.py`) is frozen for v1. Rows tagged **(deferred)** are NOT mounted yet — they carry an explicit phase marker per Core invariant #18 (no silent contract drift).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `POST` | `/v1/sign-and-send` | caller | Build → policy → sign → broadcast |
-| `POST` | `/v1/sign-typed-data` | caller | EIP-712 signing |
-| `GET` | `/v1/wallets` | caller | List wallets accessible to caller |
+| `POST` | `/v1/sign-typed-data` | caller | EIP-712 signing — **(deferred — Phase 9/10; not mounted; the CLAUDE.md "What FWD IS NOT" `/sign-typed-data` mention is forward-looking, not shipped)** |
+| `GET` | `/v1/wallets` | caller | List wallets accessible to caller — **(deferred — Phase 9/10; today only admin `GET /v1/admin/wallets`, v0.4.0a7)** |
 | `GET` | `/v1/transactions/{tx_id}` | caller | Status + hash history + receipt |
-| `GET` | `/v1/audit` | admin | Hash-chained audit log (paginated) |
+| `GET` | `/v1/audit` | admin | Hash-chained audit log — **(deferred — HTTP not mounted; today the CLI walker `clifwd audit verify\|show\|tail`, shipped v0.5.0a5, is the v1 surface)** |
 | `GET` | `/healthz` | none | Liveness + Vault sealed status + RPC reachability |
 | `POST` | `/v1/admin/wallets` | admin | Generate privkey internally, encrypt via Vault `fwd-master`, persist ciphertext, return address. See § Wallet provisioning. |
 | `POST` | `/v1/admin/callers` | admin | Issue caller API key |
@@ -418,7 +430,7 @@ Not supported in v1. See `decisions.md` D9 § "When to revisit" for the deferred
 |---|---|
 | Disaster recovery (host failure) | Litestream restore (SQLite ciphertext) + Vault Raft snapshot restore (master key) on a new host. The wallet keeps signing without any plaintext ever existing on disk. |
 | Migration to a hardware wallet | Generate a new wallet on the HW device, transfer balance on-chain, retire the old `fwd`-resident wallet. |
-| Forensics / non-repudiation | `GET /v1/audit` walks the hash-chained audit log; the signed transactions themselves are forensic evidence. |
+| Forensics / non-repudiation | `clifwd audit verify\|show\|tail` (v0.5.0a5 CLI walker) walks the hash-chained audit log; the signed transactions themselves are forensic evidence. (HTTP `GET /v1/audit` deferred — see § API surface.) |
 
 ## Idempotency
 
@@ -829,29 +841,22 @@ the chain is only as anchored as the operator's out-of-band snapshots
 of `clifwd audit verify`. Phase 10 on-chain anchor (weekly Merkle root
 commit to Flare via fwd itself) closes the recursion.
 
-## Backup and restore
+**Reversed at v0.4.3 (operator directive "no outside dependencies").** The v0.4.1/v0.4.2 Scaleway-S3 direction (Litestream → Object Storage, `aws-cli` snapshot upload) was retired: backups now go to a **local `backup` Docker volume**; off-host transport is the operator's job with the operator's own tools (rsync/restic/borg/NAS/USB — `fwd` is the custody daemon, not a backup-distribution daemon). The canonical restore is `docs/runbooks/restore.md` (the post-v0.4.3 local-volume rewrite); this section is a summary, not the source of truth.
 
-**Continuous:** Litestream replicates `state.db` to Scaleway Object Storage every 10s with ~1MB WAL bursts. Bucket: `s3://ap-fwd-backups/<host-name>/state.db.litestream/`.
+**Continuous:** the `litestream` sidecar replicates `state.db` to `/backup/state.db` on the `backup` volume (`config/litestream/litestream.yml`: `type: file`, `sync-interval: 10s`, `snapshot-interval: 24h`, `retention: 72h`). ~10 s RPO.
 
-**On-demand Vault snapshots:** `vault operator raft snapshot save vault-snapshot-<ts>.bin` — runs nightly via host cron, uploaded to the same bucket under `vault-snapshots/`. Encrypts at rest with the existing Vault master key.
+**Periodic Vault snapshots:** the `vault-snapshot` sidecar loops `vault operator raft snapshot save` → `/backup/vault-snapshots/vault-<UTC-ts>.snap` (interval `VAULT_SNAPSHOT_INTERVAL_SEC`, default 24 h; rotation keeps newest `VAULT_SNAPSHOT_RETENTION_COUNT`, default 7). The `fwd-snapshot` AppRole has ONLY `read` on `sys/storage/raft/snapshot` — disjoint from `fwd-app` (snapshot role cannot decrypt; app role cannot snapshot).
 
-**Restore drill (documented in `runbooks/restore.md`):**
-1. `docker compose down`
-2. `litestream restore -o state.db s3://ap-fwd-backups/<host>/state.db`
-3. `vault operator raft snapshot restore vault-snapshot-<ts>.bin`
-4. `docker compose up -d`
-5. Unseal Vault (3 of 5 shares)
-6. Verify nonce reconciliation against on-chain state via `clifwd reconcile`
-7. Confirm `/healthz` reports green
+**Restore drill — canonical in `runbooks/restore.md` (8-step, local-volume).** Summary: operator copies the `backup` volume contents onto the new host first; bring up `vault` only; `litestream restore` `state.db` from the volume; Vault Raft snapshot restore (throwaway-init → restore → unseal with the **original D6 shares** — a fresh `vault-init.sh` is retired as broken: it regenerates the seal, making old shares + old wallet ciphertexts useless); bring up `fwd` + `litestream`; smoke-test via `clifwd health`; nonce reconciliation runs automatically at fwd startup (`app/nonce_reconcile.py` via `_startup_reconcile` — there is **no** `clifwd reconcile` subcommand; reconcile is a boot step, silence = happy path); `/v1/sign-and-send` through to `status=mined`.
 
-Target RTO: 30 minutes from a clean host.
+Target RTO: ≤ 30 minutes from a clean host (Phase 6 GA drill measured 7 m 36 s — v0.4.6).
 
 ## Observability
 
 | Surface | Mechanism | v1 / v2 |
 |---|---|---|
 | Liveness / readiness | `GET /healthz` | v1 |
-| Audit log | `GET /v1/audit` + CLI walker that verifies the hash chain | v1 |
+| Audit log | `clifwd audit verify\|show\|tail` CLI walker (v0.5.0a5) that verifies the hash chain; HTTP `GET /v1/audit` deferred (§ API surface) | v1 (CLI) |
 | Structured logs | `structlog` JSON to stdout, captured by Docker | v1 |
 | Prometheus metrics | `/metrics` endpoint, `prometheus-client` gauges/counters | v2 (Phase 10) |
 | Alerting | Out of scope for v1 | v2 |
