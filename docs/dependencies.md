@@ -30,12 +30,10 @@ Notably **NOT required:**
 
 | Service | Image (pinned) | Role |
 |---|---|---|
-| `vault` | `hashicorp/vault:<version-pinned>` | Custody — envelope encryption only (Transit `aes256-gcm96`; NOT a signer — D1 v0.1.2 pivot; no `transit/sign/*`) |
-| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway service (FastAPI) |
+| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway service (FastAPI). Custody is in-process: `SealedMaster` AES-256-GCM under a mode-0600 host-file master (v1.0.0a1 retired the `vault` + `vault-snapshot` services — D1) |
 | `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to a local `backup` volume (v0.4.3 — no cloud) |
-| `vault-snapshot` | `fwd-vault-snapshot` (vault CLI) | Periodic Raft snapshot to the local `backup` volume (v0.4.3) |
 
-All four deployed and managed by `docker-compose.yml`. Nothing manual to install on the host beyond Docker itself.
+Two services (was four pre-v1.0.0a1: `vault` + `vault-snapshot` deleted with the Vault retirement) deployed and managed by `docker-compose.yml`. Nothing manual to install on the host beyond Docker itself.
 
 ## Python runtime libraries (inside the `fwd` container)
 

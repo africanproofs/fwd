@@ -52,8 +52,8 @@ from fwd.app.policy_gate import gate, release_rate_after_failure
 from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.nonce_repo import NonceNotInitializedError
 from fwd.infra.rpc import RpcError, RpcUnavailable
+from fwd.infra.sealed_master import SealError
 from fwd.infra.uuidv7 import uuid7_str
-from fwd.infra.vault_client import VaultError
 from fwd.infra.wallet_repo import WalletNotFoundError
 
 if TYPE_CHECKING:
@@ -315,7 +315,7 @@ async def sign_and_send(
         # 7. Sign in-process.
         try:
             signed = await signer.sign_transaction(request.wallet, tx_dict)
-        except VaultError as exc:
+        except SealError as exc:
             raise VaultUnavailableError(str(exc)) from exc
 
     except (RpcUnreachable, VaultUnavailableError, ValueError):

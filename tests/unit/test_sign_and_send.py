@@ -26,7 +26,7 @@ from fwd.domain.intent import DecodedIntent
 from fwd.domain.signer import SignedTransaction
 from fwd.infra.nonce_repo import NonceNotInitializedError
 from fwd.infra.rpc import RpcUnavailable
-from fwd.infra.vault_client import VaultError
+from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import Wallet, WalletNotFoundError
 
 
@@ -231,7 +231,7 @@ async def test_rpc_unreachable_on_broadcast() -> None:
 @pytest.mark.asyncio
 async def test_vault_failure_during_sign() -> None:
     signer = _signer()
-    signer.sign_transaction = AsyncMock(side_effect=VaultError("decrypt failed"))
+    signer.sign_transaction = AsyncMock(side_effect=SealError("decrypt failed"))
     with (
         patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
         pytest.raises(VaultUnavailableError),
@@ -370,7 +370,7 @@ async def test_sign_and_send_releases_nonce_on_vault_failure() -> None:
     """Vault failure during sign triggers safe-conditional nonce release."""
     nonce_repo = _nonce_repo(nonce=3)
     signer = _signer()
-    signer.sign_transaction = AsyncMock(side_effect=VaultError("decrypt failed"))
+    signer.sign_transaction = AsyncMock(side_effect=SealError("decrypt failed"))
     with (
         patch("fwd.app.sign_and_send.gate", new=AsyncMock(return_value=_allow_decision())),
         pytest.raises(VaultUnavailableError),

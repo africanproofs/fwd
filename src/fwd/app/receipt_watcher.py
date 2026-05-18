@@ -38,7 +38,7 @@ import structlog
 from fwd.app.dependencies import RequestScopeCM
 from fwd.app.sign_and_send import _DEFAULT_TIP_WEI, _GAS_ESTIMATE_BUFFER
 from fwd.infra.rpc import RpcError, RpcUnavailable
-from fwd.infra.vault_client import VaultError
+from fwd.infra.sealed_master import SealError
 
 if TYPE_CHECKING:
     from fwd.infra.envelope_signer import EnvelopeSigner
@@ -288,7 +288,7 @@ async def _replace(
 
     try:
         signed = await signer.sign_transaction(tx.wallet, tx_dict)
-    except VaultError as exc:
+    except SealError as exc:
         logger.warning(
             "receipt_watcher.replace_sign_failed",
             tx_id=tx.tx_id,

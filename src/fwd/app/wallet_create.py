@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from fwd.infra.audit_repo import _canonical_json
-from fwd.infra.vault_client import VaultError
+from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import WalletExistsError
 
 if TYPE_CHECKING:
@@ -41,7 +41,7 @@ class WalletNameTaken(Exception):  # noqa: N818
 
 
 class VaultUnavailableError(Exception):
-    """503-equivalent. Wraps infra VaultError for the api layer."""
+    """503-equivalent. Wraps infra SealError for the api layer."""
 
 
 async def create_wallet(
@@ -74,7 +74,7 @@ async def create_wallet(
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
         raise WalletNameTaken(request.name) from exc
-    except VaultError as exc:
+    except SealError as exc:
         logger.error("wallet.create.vault_error", error=str(exc))
         await audit_repo.append(
             action="wallet-create",

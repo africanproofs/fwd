@@ -26,8 +26,8 @@ from fwd.app.receipt_watcher import (
 from fwd.app.sign_and_send import _DEFAULT_TIP_WEI, _GAS_ESTIMATE_BUFFER
 from fwd.domain.signer import SignedTransaction
 from fwd.infra.rpc import RpcError, RpcUnavailable
+from fwd.infra.sealed_master import SealError
 from fwd.infra.transaction_repo import Transaction, TransactionHash
-from fwd.infra.vault_client import VaultError
 
 
 def _config(
@@ -394,7 +394,7 @@ async def test_replace_vault_failure_logs_and_returns() -> None:
     rpc_mgr = _rpc_manager(rpc)
     tx_repo = _tx_repo(hashes)
     signer = _signer()
-    signer.sign_transaction = AsyncMock(side_effect=VaultError("sealed"))
+    signer.sign_transaction = AsyncMock(side_effect=SealError("sealed"))
     nonce_repo = _nonce_repo()
 
     await _process_tx(

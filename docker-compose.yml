@@ -1,33 +1,4 @@
 services:
-  vault:
-    image: hashicorp/vault:1.18.2
-    container_name: fwd-vault
-    cap_add:
-      - IPC_LOCK
-    # The official vault image drops to the vault user (uid=100) via su-exec.
-    # Docker named volumes are created root-owned, so we chown /vault/data first.
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["chown -R vault:vault /vault/data && exec /usr/local/bin/docker-entrypoint.sh server"]
-    environment:
-      # The vault CLI defaults to https://127.0.0.1:8200 when VAULT_ADDR is unset.
-      # Our listener is HTTP (config.hcl tls_disable=true; fwd-internal is the
-      # security boundary). Without this, every `docker exec fwd-vault vault <cmd>`
-      # fails with "http: server gave HTTP response to HTTPS client". Setting it
-      # in container env makes vault-init.sh and the runbook commands work as-is.
-      VAULT_ADDR: http://127.0.0.1:8200
-    volumes:
-      - vault-data:/vault/data
-      - ./config/vault/:/vault/config/:ro
-      - ./scripts/:/vault/scripts/:ro
-    networks:
-      - fwd-internal
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "VAULT_ADDR=http://127.0.0.1:8200 vault status -format=json || true"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   fwd:
     image: registry.gitlab.com/proofs.africa/fwd/fwd:${FWD_IMAGE_TAG:-dev}
     build:
@@ -51,9 +22,6 @@ services:
       memlock:
         soft: -1
         hard: -1
-    depends_on:
-      vault:
-        condition: service_started
     env_file:
       - .env
     environment:
@@ -70,8 +38,11 @@ services:
       # gitignored, never in the image/repo). The ABI registry ships in
       # the image via Dockerfile `COPY config/`; only policy.yaml mounts.
       - ./config/policy.yaml:/etc/fwd/policy.yaml:ro
+      # v1.0.0a1 sealed master (0600 on host; gitignored like policy.yaml —
+      # Core invariant #12). Generate with
+      # `clifwd master generate --out ./config/master.key`.
+      - ./config/master.key:/run/fwd/master.key:ro
     networks:
-      - fwd-internal
       - fwd-callers
     restart: unless-stopped
 
@@ -97,38 +68,17 @@ services:
     # access — no internal Vault traffic, no public S3 egress.
     restart: unless-stopped
 
-  vault-snapshot:
-    build:
-      context: .
-      dockerfile: config/vault-snapshot/Dockerfile
-    container_name: fwd-vault-snapshot
-    depends_on:
-      vault:
-        condition: service_started
-    env_file:
-      - .env
-    environment:
-      VAULT_ADDR: http://vault:8200
-    volumes:
-      - backup:/backup
-    networks:
-      - fwd-internal
-    restart: unless-stopped
-
 networks:
-  fwd-internal:
-    internal: true
   fwd-callers:
     driver: bridge
 
 volumes:
-  vault-data:
   fwd-state:
   backup:
-    # Shared backup target for Litestream (/backup/state.db…) and
-    # vault-snapshot (/backup/vault-snapshots/…). Off-host transport is the
-    # operator's responsibility (rsync / restic / borg / NAS / USB — out of
-    # band, against this volume). fwd does not transport backups off-host.
+    # Shared backup target for Litestream (/backup/state.db…).
+    # Off-host transport is the operator's responsibility (rsync / restic /
+    # borg / NAS / USB — out of band, against this volume). fwd does not
+    # transport backups off-host.
     # The volume is created as a Docker-managed named volume by default; for
     # production deployments operators are encouraged to bind-mount a
     # host-path here via an override compose file.

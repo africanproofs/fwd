@@ -67,7 +67,7 @@ Four Docker services, two Docker networks, three named volumes (v0.4.3 reversed 
 | Boundary | Mechanism | Failure if breached |
 |---|---|---|
 | caller → `fwd` | Bearer API key over HTTP on `fwd-callers` Docker network | Attacker can submit requests within that caller's policy scope |
-| `fwd` → Vault | AppRole token scoped to `transit/encrypt|decrypt/fwd-master` (NO `transit/sign/*` — D1: Vault is an `aes256-gcm96` envelope, not a signer) | A compromised `fwd` (or leaked AppRole creds + the SQLite ciphertexts) can `transit/decrypt` and recover EVERY wallet plaintext key — the same capability `fwd` itself has (threat-model A4/A5, Core inv #1). The boundary protects only offline disk theft (ciphertext-only). The independent-record property the threat model leans on requires a Vault audit device, which is NOT enabled today (v0.5.5 audit OE-2 — a Phase 8 entry gate). |
+| `fwd` → sealed master | AES-256-GCM under a 32-byte mode-0600 host-file master loaded once at startup (v1.0.0a1; no Vault, no `transit/*`, no AppRole — D1) | A compromised running `fwd`, OR host read of BOTH the master-key file AND the SQLite ciphertexts, recovers EVERY wallet plaintext key — the deliberate v1.0.0a1 trade-off for low-value automation keys on a never-public host (threat-model A4, Core inv #1). Offline theft of ciphertexts WITHOUT the master file = ciphertext only. |
 | Vault → key material | AES-256-GCM at rest; memory-locked (`mlock`) at runtime; Raft data on encrypted volume | Attacker with host root can extract key from Vault memory while unsealed |
 | `fwd` → RPC | HTTPS/JSON-RPC | Compromised RPC could censor or fork view; signed tx still safe |
 | Operator → Vault unseal | Shamir 3-of-5, 2 paper + 3 GPG-encrypted, geographically distributed | Attacker with 3 shares + host access can use the keys |
@@ -92,7 +92,7 @@ mTLS / SPIFFE / workload identity is deferred to Phase 10 (or whenever a caller 
 
 ## Signing flow
 
-Under the v0.1.2 architecture, Vault Transit operates as an envelope-encryption layer, not a signer — Vault holds an `aes256-gcm96` master key (`fwd-master`) that wraps each wallet's externally-generated secp256k1 private key. At signing time, `fwd` decrypts via `transit/decrypt/fwd-master`, signs in-process with `eth-account` (which returns Ethereum-shaped output directly — no DER parsing or v-recovery needed in v1), and zeroizes the plaintext buffer immediately. DER parsing and v-recovery return only when Phase 10 introduces a hardware-backed `Signer` implementation that emits raw `(r, s)` ASN.1.
+Under the v1.0.0a1 architecture (Vault retired — `decisions.md` D1), `SealedMaster` is an in-process AES-256-GCM envelope: a 32-byte master key loaded once at startup from a mode-0600 host file wraps each wallet's externally-generated secp256k1 private key. At signing time, `fwd` decrypts the `seal:v1:` ciphertext in-process, signs with `eth-account` (which returns Ethereum-shaped output directly — no DER parsing or v-recovery needed in v1), and zeroizes the plaintext buffer immediately. DER parsing and v-recovery return only when Phase 10 introduces a hardware-backed `Signer` implementation that emits raw `(r, s)` ASN.1. (The signing-flow steps below still read "Vault decrypt" in places — mechanical-mirror wording, phase-marked for the in-Phase-8 doctrine tail; the substantive path is sealed-master decrypt.)
 
 The `/v1/sign-and-send` happy path:
 
@@ -492,38 +492,20 @@ The HTTP API is versioned via path prefix (`/v1/*`).
 - When `/v2/*` ships, `/v1/*` is supported for at least 6 months and ≥1 reward epoch on every chain `fwd` serves.
 - Deprecation of `/v1/*` is announced via a `Deprecation: true` header on `/v1/*` responses for at least 30 days before removal.
 
-## Vault configuration
+## Master key (v1.0.0a1 — replaced § Vault configuration)
+
+Vault was retired at v1.0.0a1 (`decisions.md` D1; asset-class rationale). Custody is a sealed local master:
 
 | Setting | Value | Why |
 |---|---|---|
-| Storage backend | Raft (single-node, file-based) | Simplest backend that supports Transit |
-| Auto-unseal | None in v1 | Manual Shamir unseal; auto-unseal is Phase 10 |
-| Shamir threshold | 3 of 5 | Survives loss of any 2 share locations |
-| Engines mounted | `transit/` | Only Transit; no KV needed in v1 |
-| Key type | `aes256-gcm96` | Symmetric AES-256-GCM; Vault encrypts/decrypts arbitrary 32-byte plaintext (the secp256k1 privkey) |
-| Key flags | `exportable=false`, `derived=false`, `allow_plaintext_backup=false` | Keys cannot be extracted via API |
-| Auth methods | `approle` (for `fwd` itself) | One AppRole per `fwd` deployment; role ID + secret ID via env |
-| Listener | TCP 8200 on `fwd-internal` only | Not reachable from host |
-| TLS | Internal CA, self-signed | TLS within Docker network for defense-in-depth |
-| Audit device | `file` → `/vault/logs/audit.log` | Vault's own audit (separate from `fwd`'s audit) |
+| Backend | `SealedMaster` (`src/fwd/infra/sealed_master.py`) | In-process AES-256-GCM envelope; no external service |
+| Cipher | AES-256-GCM (`cryptography` AESGCM), 12-byte random nonce per op | Mirrors the retired Vault `aes256-gcm96` exactly |
+| Master key | 32 bytes; mode-0600 host file owned by the `fwd` user; path `FWD_MASTER_KEY_FILE` (default `/run/fwd/master.key`) | Loaded once at startup into an `mlock`'d `bytearray`; `policy.yaml`-class private config (Core #12), provisioned via `clifwd master generate` |
+| Ciphertext | `seal:v1:<base64(nonce‖ct‖tag)>` in `wallets.privkey_ciphertext` (`vault_master_key` column retained, value `local:v1`) | Column name kept to avoid a needless Alembic migration |
+| Unseal | None — fully unattended on restart | No Vault, no Shamir, no `docker exec` step (Core invariant #8) |
+| Audit device | N/A | The retired Vault audit-device property was never enabled (v0.5.5 OE-2) and is worthless at this asset class; `fwd`'s own hash-chained audit log is the record |
 
-`fwd`'s Vault policy:
-
-```hcl
-path "transit/encrypt/fwd-master" {
-  capabilities = ["update"]
-}
-
-path "transit/decrypt/fwd-master" {
-  capabilities = ["update"]
-}
-
-path "transit/keys/fwd-master" {
-  capabilities = ["read"]
-}
-
-# NO transit/sign/*, NO transit/keys/+/export, NO transit/keys/+/rotate, NO transit/keys/+/config
-```
+Blast radius: a compromised running `fwd`, OR host read of BOTH the master-key file AND the SQLite ciphertexts, recovers all keys; offline theft of ciphertexts WITHOUT the master file yields ciphertext only — the deliberate v1.0.0a1 trade-off for low-value automation keys on a never-public host (`threat-model.md` A4). The `fwd` Vault AppRole/policy is gone; there is no `transit/*` surface.
 
 ## Auth lifecycle
 

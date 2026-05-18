@@ -20,10 +20,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore", case_sensitive=False)
 
-    # Vault
-    vault_addr: str = Field(default="http://vault:8200")
-    fwd_vault_role_id: str = Field(default="")
-    fwd_vault_secret_id: str = Field(default="")
+    # Sealed master (v1.0.0a1; replaces Vault)
+    fwd_master_key_file: str = Field(default="/run/fwd/master.key")
 
     # State
     database_url: str = Field(default="sqlite+aiosqlite:////data/state.db")

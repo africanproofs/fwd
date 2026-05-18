@@ -39,6 +39,7 @@ fwd-state/
 secrets/
 scratch/
 config/policy.yaml
+config/master.key
 config/callers.yaml
 # Phase 7 policy file — operator-controlled per D14; whatever path the
 # operator mounts via FWD_POLICY_PATH (default /etc/fwd/policy.yaml).

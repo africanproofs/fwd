@@ -1,15 +1,13 @@
-"""End-to-end Phase 4 caller-auth: real Vault + real argon2id + mock RPC.
+"""End-to-end Phase 4 caller-auth: real SealedMaster + real argon2id + mock RPC (v1.0.0a1).
 
-Skipped when dev Vault unreachable (per tests/conftest.py::needs_vault).
-The test exercises the full Phase 4 flow with real cryptographic
-primitives:
+The test exercises the full Phase 4 flow with real cryptographic primitives:
   - generate_api_key produces an actual base64url token + argon2id hash.
   - CallerRepo.create persists the hash + prefix to a real (tmp) SQLite.
-  - resolve_caller round-trips: prefix lookup → argon2id verify → match.
+  - resolve_caller round-trips: prefix lookup -> argon2id verify -> match.
   - sign_and_send uses the resolved Caller's policy_path (stored only;
     enforcement is Phase 7 per D13).
-  - Real Vault encrypts the wallet privkey; real Vault decrypts at sign
-    time; mock RPC accepts the broadcast.
+  - Real SealedMaster encrypts the wallet privkey; real SealedMaster decrypts
+    at sign time; mock RPC accepts the broadcast.
 
 v0.5.0a6 update: sign_and_send now requires caller, wallet, policy,
 registry, rate_repo, and audit_repo keyword args (policy gate integrated).
@@ -55,12 +53,11 @@ from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonce_metadata
 from fwd.infra.rate_repo import RateRepo, rate_metadata
 from fwd.infra.rpc import RpcClient
+from fwd.infra.sealed_master import SealedMaster
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as transaction_metadata
-from fwd.infra.vault_client import VaultClient
 from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallet_metadata
-from tests.conftest import needs_vault
 
 _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 
@@ -166,16 +163,16 @@ def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-u
     return handler, captured
 
 
-@needs_vault
 @pytest.mark.asyncio
 async def test_caller_create_resolve_and_sign_e2e(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Full Phase 4 round-trip: argon2id + real Vault + mock RPC."""
-    if not os.environ.get("FWD_VAULT_ROLE_ID") or not os.environ.get("FWD_VAULT_SECRET_ID"):
-        pytest.skip("FWD_VAULT_ROLE_ID/SECRET_ID not in env")
-
-    monkeypatch.setenv("VAULT_ADDR", os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200"))
+    """Full Phase 4 round-trip: argon2id + real SealedMaster + mock RPC."""
+    # Set up a temporary 0600 master key file.
+    key_file = tmp_path / "master.key"
+    key_file.write_bytes(os.urandom(32))
+    os.chmod(key_file, 0o600)
+    monkeypatch.setenv("FWD_MASTER_KEY_FILE", str(key_file))
     settings_mod.get_settings.cache_clear()
 
     # Build a single tmp DB with all tables.
@@ -195,14 +192,14 @@ async def test_caller_create_resolve_and_sign_e2e(
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    async with VaultClient() as vault, AsyncSession(engine) as session:
+    async with SealedMaster() as master, AsyncSession(engine) as session:
         wallet_repo = WalletRepo(session)
         caller_repo = CallerRepo(session)
         tx_repo = TransactionRepo(session)
         nonce_repo = NonceRepo(session)
         rate_repo = RateRepo(session)
         audit_repo = AuditRepo(session)
-        signer = EnvelopeSigner(vault, wallet_repo)
+        signer = EnvelopeSigner(master, wallet_repo)
 
         # 1. Real argon2id key generation.
         generated = generate_api_key()
@@ -230,16 +227,16 @@ async def test_caller_create_resolve_and_sign_e2e(
         assert resolved.policy_path == "perm/integ"
         assert resolved.api_key_prefix == generated.key_prefix
 
-        # 4. Forged key with the same prefix → resolve returns None.
+        # 4. Forged key with the same prefix -> resolve returns None.
         forged_key = "fwd_live_" + generated.key_prefix + ("x" * (43 - len(generated.key_prefix)))
         forged_resolved = await resolve_caller(forged_key, caller_repo)
         assert forged_resolved is None, "argon2id false-positive: forged key resolved"
 
-        # 5. Malformed key → resolve returns None.
+        # 5. Malformed key -> resolve returns None.
         assert await resolve_caller("not-a-key", caller_repo) is None
         assert await resolve_caller("fwd_live_short", caller_repo) is None
 
-        # 6. Create a wallet via the real Vault path (Phase 3b).
+        # 6. Create a wallet via the real SealedMaster path (Phase 3b).
         wallet = await signer.create_wallet(name="integ-caller-wallet", policy_path="perm/integ")
         await session.commit()
 
@@ -247,7 +244,7 @@ async def test_caller_create_resolve_and_sign_e2e(
         policy = _make_integ_policy("integ-caller-wallet", "integ-caller-test")
         rpc = RpcClient(114, "http://mock-rpc", mock_http)
 
-        # 8. sign_and_send through the real signer (decrypt via real Vault) and
+        # 8. sign_and_send through the real signer (decrypt via real SealedMaster) and
         #    mock RPC, with real policy gate (v0.5.0a6). Uses ERC-20 transfer
         #    calldata so the policy engine can decode intent at step 3.
         request = SignAndSendRequest(

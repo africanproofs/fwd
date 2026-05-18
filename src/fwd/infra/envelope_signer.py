@@ -26,7 +26,7 @@ from eth_utils import to_checksum_address  # type: ignore[attr-defined]
 from fwd.domain.signer import SignedTransaction
 
 if TYPE_CHECKING:
-    from fwd.infra.vault_client import VaultClient
+    from fwd.infra.sealed_master import SealedMaster
     from fwd.infra.wallet_repo import Wallet, WalletRepo
 
 
@@ -50,7 +50,7 @@ class WalletAddressMismatch(Exception):  # noqa: N818
 
 
 class EnvelopeSigner:
-    def __init__(self, vault: VaultClient, repo: WalletRepo) -> None:
+    def __init__(self, vault: SealedMaster, repo: WalletRepo) -> None:
         self._vault = vault
         self._repo = repo
 
@@ -130,7 +130,7 @@ class EnvelopeSigner:
                 name=name,
                 address=derived_address,
                 privkey_ciphertext=ciphertext,
-                vault_master_key="fwd-master",
+                vault_master_key="local:v1",
                 policy_path=policy_path,
             )
             return wallet
@@ -161,7 +161,7 @@ class EnvelopeSigner:
                 name=name,
                 address=address,
                 privkey_ciphertext=ciphertext,
-                vault_master_key="fwd-master",
+                vault_master_key="local:v1",
                 policy_path=policy_path,
             )
             return wallet

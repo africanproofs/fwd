@@ -1,8 +1,9 @@
 """Test fixtures.
 
-The integration test (test_wallet_create_integration.py) consumes Vault
-+ SQLite fixtures from here. Unit tests (everything else under tests/)
-do not touch this file.
+v1.0.0a1: Vault removed; integration tests no longer require a live Vault.
+The `needs_vault` marker and `_vault_reachable()` helper are deleted.
+Integration tests run unconditionally using a SealedMaster over a tmp master
+file (constructed per-test via the `tmp_master_file` fixture).
 """
 
 from __future__ import annotations
@@ -10,24 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path  # noqa: TC003
 
-import httpx
 import pytest
-
-
-def _vault_reachable() -> bool:
-    addr = os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200")
-    try:
-        httpx.get(f"{addr}/v1/sys/health", timeout=2.0)
-    except Exception:
-        return False
-    return True
-
-
-# Skip the integration tests if the dev Vault isn't up.
-needs_vault = pytest.mark.skipif(
-    not _vault_reachable(),
-    reason="dev Vault not reachable at VAULT_ADDR; integration test skipped",
-)
 
 
 @pytest.fixture()
@@ -42,3 +26,16 @@ def tmp_state_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db_mod.get_engine.cache_clear()
     db_mod._session_factory.cache_clear()
     return db
+
+
+@pytest.fixture()
+def tmp_master_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Write a fresh 32-byte master key to a tmp 0600 file and point settings at it."""
+    key_file = tmp_path / "master.key"
+    key_file.write_bytes(os.urandom(32))
+    os.chmod(key_file, 0o600)
+    monkeypatch.setenv("FWD_MASTER_KEY_FILE", str(key_file))
+    from fwd import settings as settings_mod
+
+    settings_mod.get_settings.cache_clear()
+    return key_file

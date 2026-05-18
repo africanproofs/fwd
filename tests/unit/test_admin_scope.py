@@ -3,8 +3,8 @@
 Verifies that AdminScopeCM yields an AdminScope with signer, caller_repo,
 and audit_repo all backed by the same session (D16 atomicity requirement).
 
-We mock VaultClient to avoid needing a live Vault in unit tests — the same
-pattern used by test_sign_and_send.py for RequestScopeCM.
+We mock SealedMaster to avoid needing a real master key file in unit tests —
+the same pattern used by test_sign_and_send.py for RequestScopeCM.
 """
 
 from __future__ import annotations
@@ -17,12 +17,12 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from fwd.app.dependencies import AdminScope, AdminScopeCM
 
 
-def _make_mock_vault_client() -> MagicMock:
-    """Return a mock VaultClient that acts as a working async context manager."""
-    vault = MagicMock()
-    vault.__aenter__ = AsyncMock(return_value=vault)
-    vault.__aexit__ = AsyncMock(return_value=None)
-    return vault
+def _make_mock_sealed_master() -> MagicMock:
+    """Return a mock SealedMaster that acts as a working async context manager."""
+    master = MagicMock()
+    master.__aenter__ = AsyncMock(return_value=master)
+    master.__aexit__ = AsyncMock(return_value=None)
+    return master
 
 
 @pytest.mark.asyncio
@@ -30,10 +30,10 @@ async def test_admin_scope_cm_yields_admin_scope(tmp_path) -> None:  # type: ign
     """AdminScopeCM yields an AdminScope dataclass with the three expected fields."""
     db = tmp_path / "test_admin_scope.db"
 
-    mock_vault = _make_mock_vault_client()
+    mock_master = _make_mock_sealed_master()
 
     with (
-        patch("fwd.app.dependencies.VaultClient", return_value=mock_vault),
+        patch("fwd.app.dependencies.SealedMaster", return_value=mock_master),
         patch(
             "fwd.app.dependencies.session_scope",
             return_value=_make_mock_session_cm(db),
@@ -75,10 +75,10 @@ async def test_admin_scope_caller_repo_and_audit_repo_share_session(
         captured_sessions.append(("audit_repo", session))
         original_audit_repo_init(self, session)  # type: ignore[arg-type]
 
-    mock_vault = _make_mock_vault_client()
+    mock_master = _make_mock_sealed_master()
 
     with (
-        patch("fwd.app.dependencies.VaultClient", return_value=mock_vault),
+        patch("fwd.app.dependencies.SealedMaster", return_value=mock_master),
         patch("fwd.app.dependencies.session_scope", return_value=_make_mock_session_cm(db)),
         patch.object(CallerRepo, "__init__", _capturing_caller_repo_init),
         patch.object(AuditRepo, "__init__", _capturing_audit_repo_init),

@@ -6,9 +6,47 @@ Decisions are numbered for reference. Format: **Decision** / **Alternatives cons
 
 ---
 
-## D1. Custody: Vault Transit envelope encryption + in-process secp256k1 signing
+## D1. Custody backend
 
-**Decision.** AP runs HashiCorp Vault on the same Docker host as `fwd`, with the Transit secrets engine providing one `aes256-gcm96` master key (`exportable=false`). Each wallet's secp256k1 private key is generated externally (secure RNG via `coincurve` or `eth-account.create()`), envelope-encrypted by Vault (`transit/encrypt/fwd-master`), and stored as a `vault:v1:<ciphertext>` blob in SQLite. At signing time, `fwd` calls `transit/decrypt/fwd-master` to recover plaintext, signs the transaction with `eth-account`, and zeroizes the plaintext buffer immediately. Plaintext private keys never persist on disk and exist in `fwd`'s process memory only during the bounded signing operation.
+**SUPERSEDED at v1.0.0a1 — current decision: sealed local master (no Vault).**
+`fwd` envelope-encrypts each wallet's secp256k1 private key with
+AES-256-GCM (`cryptography` AESGCM, mirroring the retired Vault
+`aes256-gcm96`) under a single 32-byte master key held in a mode-0600
+host file owned by the `fwd` user (`SealedMaster`,
+`src/fwd/infra/sealed_master.py`; ciphertext `seal:v1:<b64(nonce||ct)>`
+in SQLite). The master is loaded once at startup (fully unattended; no
+unseal ceremony). Decrypt-on-demand + zeroize + `mlock` are unchanged
+(Core invariants #1/#16). **Rationale:** the operator confirmed the
+asset class — low-value Flare automation keys (~1000 FLR ≈ tens of USD
+per key; FTSO-claim/registration/gas wallets, never treasury) on a host
+never publicly exposed. Two independent audits
+(`docs/reviews/v0.5.4-stack-and-overengineering-audit-report.md`,
+`docs/reviews/v0.5.5-second-independent-audit-report.md`) found the full
+HashiCorp Vault apparatus (Transit, 3-of-5 Shamir-across-failure-domains,
+AppRole lifecycle, Raft snapshots, the vault-snapshot sidecar, the Core
+#17 production wipe-and-redo) disproportionate to that asset class; its
+only differentiator over a sealed master — an independent
+decrypt-audit-trail against a track-covering attacker — is worthless at
+this value/exposure and, per v0.5.5 audit OE-2, was never even enabled.
+A sealed master gives equivalent at-rest protection (ciphertext-only on
+disk theft absent the master file) and equivalent runtime blast radius
+(a compromised running `fwd` decrypts everything either way), at a
+fraction of the operational and dependency surface. **Disaster
+recovery** is regenerate-the-wallet + on-chain `setClaimRecipient`
+rotation (≈ free), not a share ceremony. **Operator decision recorded
+2026-05-17.** Alternatives weighed: keep Vault (rejected — pays the full
+ops tax for a benefit that does not apply here); passphrase/Shamir-sealed
+master (rejected — restart friction with no real marginal security for
+this asset class on a private host); env-var master (rejected — same
+boundary as the host file, less manageable). The everything below is
+**honest history of the v0.1.2–v0.5.6 Vault era** (kept per Core #18 /
+the v0.4.3 honest-history precedent — do not delete).
+
+---
+
+## D1 (historical, v0.1.2–v0.5.6). Custody: Vault Transit envelope encryption + in-process secp256k1 signing
+
+**Decision (SUPERSEDED — see the v1.0.0a1 block above).** AP runs HashiCorp Vault on the same Docker host as `fwd`, with the Transit secrets engine providing one `aes256-gcm96` master key (`exportable=false`). Each wallet's secp256k1 private key is generated externally (secure RNG via `coincurve` or `eth-account.create()`), envelope-encrypted by Vault (`transit/encrypt/fwd-master`), and stored as a `vault:v1:<ciphertext>` blob in SQLite. At signing time, `fwd` calls `transit/decrypt/fwd-master` to recover plaintext, signs the transaction with `eth-account`, and zeroizes the plaintext buffer immediately. Plaintext private keys never persist on disk and exist in `fwd`'s process memory only during the bounded signing operation.
 
 **Background.** v0.2.0's Phase 1 spike discovered (and the Reviewer independently verified) that Vault Transit — in OSS, OpenBao, and Vault Enterprise's native engine — supports only NIST curves (`ecdsa-p256`, `ecdsa-p384`, `ecdsa-p521`) for ECDSA signing. **secp256k1 (Ethereum's curve) is not a supported Transit key type.** The original D1 (Vault Transit signing of ECDSA secp256k1 keys) is technically impossible with the chosen substrate. This decision documents the pivot.
 

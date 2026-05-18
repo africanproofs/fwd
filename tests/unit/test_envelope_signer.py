@@ -25,7 +25,7 @@ from fwd.infra.wallet_repo import Wallet
 @pytest.mark.asyncio
 async def test_create_wallet_happy() -> None:
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
 
     repo = MagicMock()
     captured_kwargs: dict[str, Any] = {}
@@ -49,8 +49,8 @@ async def test_create_wallet_happy() -> None:
     assert wallet.name == "w1"
     assert wallet.address.startswith("0x")
     assert len(wallet.address) == 42  # 0x + 40 hex
-    assert wallet.privkey_ciphertext == "vault:v1:abc"
-    assert captured_kwargs["vault_master_key"] == "fwd-master"
+    assert wallet.privkey_ciphertext == "seal:v1:abc"
+    assert captured_kwargs["vault_master_key"] == "local:v1"
     vault.encrypt.assert_awaited_once()
     # First positional arg to encrypt was 32 bytes.
     args, _ = vault.encrypt.await_args
@@ -84,8 +84,8 @@ async def test_sign_transaction_round_trip() -> None:
         return_value=Wallet(
             name="w1",
             address=expected_address,
-            privkey_ciphertext="vault:v1:abc",
-            vault_master_key="fwd-master",
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
             policy_path="p1",
             created_at=datetime.now(UTC),
         )
@@ -141,7 +141,7 @@ async def test_create_wallet_buffer_is_all_zero_after_zeroize() -> None:
     buffer contains only zeros AND that type(buf) is bytearray.'
     """
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
     repo = MagicMock()
 
     async def _create(**kwargs: Any) -> Wallet:
@@ -189,8 +189,8 @@ async def test_sign_transaction_buffer_is_all_zero_after_zeroize() -> None:
         return_value=Wallet(
             name="w1",
             address=real.address,
-            privkey_ciphertext="vault:v1:abc",
-            vault_master_key="fwd-master",
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
             policy_path="p1",
             created_at=datetime.now(UTC),
         )
@@ -234,7 +234,7 @@ async def test_no_32byte_state_after_create_wallet() -> None:
     attribute on the signer instance is a bytes or bytearray of length 32.'
     """
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
     repo = MagicMock()
 
     async def _create(**kwargs: Any) -> Wallet:
@@ -268,8 +268,8 @@ async def test_no_32byte_state_after_sign_transaction() -> None:
         return_value=Wallet(
             name="w1",
             address=real.address,
-            privkey_ciphertext="vault:v1:abc",
-            vault_master_key="fwd-master",
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
             policy_path="p1",
             created_at=datetime.now(UTC),
         )
@@ -333,7 +333,7 @@ async def test_import_wallet_buffer_is_all_zero_after_zeroize() -> None:
     privkey_bytes = bytes(real.key)
 
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
     repo = MagicMock()
 
     async def _create(**kwargs: Any) -> Wallet:
@@ -381,7 +381,7 @@ async def test_import_wallet_buffer_zero_on_address_mismatch() -> None:
     wrong_address = "0x" + "00" * 20
 
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
     repo = MagicMock()
 
     captured_post_zeroize: list[bytes] = []
@@ -413,7 +413,7 @@ async def test_no_32byte_state_after_import_wallet() -> None:
 
     real = Account.create()
     vault = MagicMock()
-    vault.encrypt = AsyncMock(return_value="vault:v1:abc")
+    vault.encrypt = AsyncMock(return_value="seal:v1:abc")
     repo = MagicMock()
 
     async def _create(**kwargs: Any) -> Wallet:

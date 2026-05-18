@@ -1,7 +1,9 @@
 """Smoke test for /healthz.
 
-Phase 2 verification gate: response body shape is exactly
-{"vault": <str>, "rpc": <str>, "fwd": "ok"}.
+v1.0.0a1: response body shape is exactly
+{"master": <str>, "rpc": <str>, "fwd": "ok"} — the prior `vault` field
+was retired with the Vault backend (replaced by the sealed-master
+readiness probe).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ def test_healthz_returns_200_and_expected_shape() -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"vault", "rpc", "fwd"}
+    assert set(body.keys()) == {"master", "rpc", "fwd"}
     assert body["fwd"] == "ok"
     assert body["rpc"] in ("ok", "unknown", "unreachable")
-    assert body["vault"] in ("ok", "sealed", "unreachable")
+    assert body["master"] in ("ok", "unavailable")

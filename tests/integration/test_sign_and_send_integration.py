@@ -1,12 +1,11 @@
-"""End-to-end sign-and-send: real Vault + mock RPC.
+"""End-to-end sign-and-send: real SealedMaster + mock RPC (v1.0.0a1).
 
-Skipped when dev Vault unreachable (per tests/conftest.py::needs_vault).
-The test mocks only the RPC layer; the Vault round-trip (encrypt at
-wallet creation, decrypt at sign) goes through the live dev Vault.
+The test mocks only the RPC layer; the SealedMaster round-trip (encrypt at
+wallet creation, decrypt at sign) goes through a real local AESGCM operation.
 
 Verifies:
 - Wallet creation (encrypt) lands a ciphertext in SQLite.
-- sign_and_send decrypts via real Vault, signs in-process, broadcasts to
+- sign_and_send decrypts via real SealedMaster, signs in-process, broadcasts to
   the mock RPC.
 - The signed tx recovers to the wallet's address.
 - A transaction row is persisted (tx_id returned in result).
@@ -37,12 +36,11 @@ from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonces_metadata
 from fwd.infra.rate_repo import RateRepo, rate_metadata
 from fwd.infra.rpc import RpcClient
+from fwd.infra.sealed_master import SealedMaster
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as tx_metadata
-from fwd.infra.vault_client import VaultClient
 from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallets_metadata
-from tests.conftest import needs_vault
 
 _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 
@@ -145,15 +143,15 @@ def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-u
     return handler, captured
 
 
-@needs_vault
 @pytest.mark.asyncio
-async def test_sign_and_send_real_vault_mock_rpc(
+async def test_sign_and_send_real_master_mock_rpc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not os.environ.get("FWD_VAULT_ROLE_ID") or not os.environ.get("FWD_VAULT_SECRET_ID"):
-        pytest.skip("FWD_VAULT_ROLE_ID/SECRET_ID not in env")
-
-    monkeypatch.setenv("VAULT_ADDR", os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200"))
+    # Set up a temporary 0600 master key file.
+    key_file = tmp_path / "master.key"
+    key_file.write_bytes(os.urandom(32))
+    os.chmod(key_file, 0o600)
+    monkeypatch.setenv("FWD_MASTER_KEY_FILE", str(key_file))
     settings_mod.get_settings.cache_clear()
 
     db = tmp_path / "test.db"
@@ -171,15 +169,15 @@ async def test_sign_and_send_real_vault_mock_rpc(
     handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
     mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
-    async with VaultClient() as vault, AsyncSession(engine) as session:
+    async with SealedMaster() as master, AsyncSession(engine) as session:
         repo = WalletRepo(session)
-        signer = EnvelopeSigner(vault, repo)
+        signer = EnvelopeSigner(master, repo)
         tx_repo = TransactionRepo(session)
         nonce_repo = NonceRepo(session)
         rate_repo = RateRepo(session)
         audit_repo = AuditRepo(session)
 
-        # 1. Create a wallet against real Vault.
+        # 1. Create a wallet against real SealedMaster.
         wallet = await signer.create_wallet(name="integ-sign-test", policy_path="perm/integ")
         await session.commit()
 

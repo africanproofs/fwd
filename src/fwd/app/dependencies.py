@@ -27,8 +27,8 @@ from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.policy_loader import policy_path_exists as policy_path_exists  # re-export for api/
 from fwd.infra.rate_repo import RateRepo
 from fwd.infra.rpc import RpcManager
+from fwd.infra.sealed_master import SealedMaster, SealError
 from fwd.infra.transaction_repo import TransactionRepo
-from fwd.infra.vault_client import VaultClient, VaultError
 from fwd.infra.wallet_repo import WalletRepo
 
 
@@ -37,9 +37,9 @@ class SignerCM:
 
     async def __aenter__(self) -> EnvelopeSigner:
         try:
-            self._vault = VaultClient()
+            self._vault = SealedMaster()
             self._vault_entered = await self._vault.__aenter__()
-        except VaultError as exc:
+        except SealError as exc:
             raise VaultUnavailableError(str(exc)) from exc
         self._session_cm = session_scope()
         self._session = await self._session_cm.__aenter__()
@@ -205,9 +205,9 @@ class RequestScopeCM:
 
     async def __aenter__(self) -> RequestScope:
         try:
-            self._vault = VaultClient()
+            self._vault = SealedMaster()
             self._vault_entered = await self._vault.__aenter__()
-        except VaultError as exc:
+        except SealError as exc:
             raise VaultUnavailableError(str(exc)) from exc
         self._session_cm = session_scope()
         self._session = await self._session_cm.__aenter__()
@@ -263,9 +263,9 @@ class AdminScopeCM:
 
     async def __aenter__(self) -> AdminScope:
         try:
-            self._vault = VaultClient()
+            self._vault = SealedMaster()
             self._vault_entered = await self._vault.__aenter__()
-        except VaultError as exc:
+        except SealError as exc:
             raise VaultUnavailableError(str(exc)) from exc
         self._session_cm = session_scope()
         self._session = await self._session_cm.__aenter__()

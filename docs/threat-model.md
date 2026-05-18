@@ -8,11 +8,11 @@ In order of value and consequence-of-compromise:
 
 | Asset | Held in | Value at risk | Compromise consequence |
 |---|---|---|---|
-| FTSO claim recipient key (Flare mainnet) | Vault Transit | Reward-epoch revenue (recurring) | Theft of one or more epochs' rewards |
-| Songbird claim recipient key | Vault Transit | Reward-epoch revenue (recurring, smaller) | Same, smaller |
-| Coston2 test wallet keys | Vault Transit | Testnet gas (~negligible) | Test environment disruption |
-| Future automation keys (`apcli`, `fics` writes, agent wallets) | Vault Transit | Per-caller, bounded by policy | Bounded by per-caller policy |
-| Vault master key (encrypts all transit keys at rest) | Reconstructible from 3 of 5 Shamir shares | All keys, all assets | Total loss of `fwd`-managed custody |
+| FTSO claim recipient key (Flare) | Sealed (AES-256-GCM) in SQLite | ~1000 FLR / epoch automation revenue (≈ tens of USD) | Theft of one or more epochs' rewards |
+| Songbird claim recipient key | Sealed (AES-256-GCM) in SQLite | Reward-epoch revenue (recurring, smaller) | Same, smaller |
+| Coston2 test wallet keys | Sealed (AES-256-GCM) in SQLite | Testnet gas (~negligible) | Test environment disruption |
+| Future automation keys (`apcli`, `fics` writes, agent wallets) | Sealed (AES-256-GCM) in SQLite | Per-caller, bounded by policy | Bounded by per-caller policy |
+| Sealed master key (AES-256-GCM, seals all wallet keys at rest) | Mode-0600 host file owned by the `fwd` user (v1.0.0a1; no Vault/Shamir — D1) | All keys, all assets | Total loss of `fwd`-managed custody (recovery: regenerate wallets + on-chain `setClaimRecipient` rotation) |
 | Audit log integrity | SQLite + Litestream | Forensic / non-repudiation | Loss of "what happened, when" record |
 
 What is NOT held in `fwd`:
@@ -82,7 +82,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 **How.** Attacker exploits some unrelated vulnerability on the host, chains to root, and inspects `fwd`'s process memory while it's serving signing requests.
 
-**What the attacker gets.** During the bounded signing operation, `fwd` decrypts a wallet's privkey via Vault, holds the 32-byte plaintext briefly to sign with `eth-account`, and zeroizes immediately after (Core invariant #16). An attacker with `ptrace` / `gcore` access who times their dump to coincide with an active signing operation can extract that wallet's plaintext privkey. Between signing operations, no plaintext privkeys are in `fwd`'s memory (decrypt-on-demand, no caching).
+**What the attacker gets.** During the bounded signing operation, `fwd` decrypts a wallet's privkey via the sealed master (AES-256-GCM, v1.0.0a1 — D1; no Vault), holds the 32-byte plaintext briefly to sign with `eth-account`, and zeroizes immediately after (Core invariant #16). An attacker with `ptrace` / `gcore` access who times their dump to coincide with an active signing operation can extract that wallet's plaintext privkey. Between signing operations, no plaintext privkeys are in `fwd`'s memory (decrypt-on-demand, no caching).
 
 **Mitigations in place.**
 - Single-purpose host recommendation (no other services running, smallest attack surface).

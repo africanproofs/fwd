@@ -4,13 +4,15 @@ Scope: bring up the app with TestClient (lifespan fires), verify that
 _startup_policy_load ran successfully, app.state.policy is set, and a
 policy-load audit row with decision="approved" was written.
 
+v1.0.0a1: Vault removed; this test no longer requires a live Vault.
+The lifespan policy-load path does not touch SealedMaster (it only reads
+DB repos); no master key file is needed for this smoke test.
+
 Requires:
-  - dev Vault reachable (needs_vault) — the DB session_scope and CallerRepo/
-    WalletRepo writes flow through the real DB engine on startup.
   - FWD_DISABLE_MLOCK=1 (set in test so the `elif FWD_POLICY_PATH` branch
     in lifespan fires without calling mlockall or _startup_reconcile).
 
-Note: this test does NOT attempt a full sign-and-send through TestClient —
+Note: this test does NOT attempt a full sign-and-send through TestClient --
 that would require a live chain RPC. The smoke is the lifespan policy-load
 path + app.state assertion, which is sufficient for a "policy integration
 smoke" gate per the v0.5.0a6 canonical prompt.
@@ -22,14 +24,10 @@ import os
 from pathlib import Path
 
 import pytest  # noqa: TC002
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
-from tests.conftest import needs_vault
 
 _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 
-# Minimal policy.yaml content permitting one caller → one wallet → ERC-20 transfer.
+# Minimal policy.yaml content permitting one caller -> one wallet -> ERC-20 transfer.
 _POLICY_YAML = """\
 version: 1
 
@@ -57,7 +55,6 @@ wallet_constraints:
 """
 
 
-@needs_vault
 def test_lifespan_policy_load_writes_approved_audit_row(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -82,10 +79,41 @@ def test_lifespan_policy_load_writes_approved_audit_row(
     db_mod.get_engine.cache_clear()
     db_mod._session_factory.cache_clear()
 
+    # Create all tables in the tmp DB before starting the app (mirrors the
+    # Dockerfile CMD's `alembic upgrade head`). Without this, CallerRepo and
+    # WalletRepo queries in _startup_policy_load raise "no such table".
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    db_url = f"sqlite+aiosqlite:///{tmp_state_db}"
+
+    async def _create_tables() -> None:
+        from fwd.infra.audit_repo import audit_metadata
+        from fwd.infra.caller_repo import metadata as caller_metadata
+        from fwd.infra.nonce_repo import metadata as nonce_metadata
+        from fwd.infra.rate_repo import rate_metadata
+        from fwd.infra.transaction_repo import metadata as tx_metadata
+        from fwd.infra.wallet_repo import metadata as wallet_metadata
+
+        engine = _cae(db_url)
+        async with engine.begin() as conn:
+            await conn.run_sync(wallet_metadata.create_all)
+            await conn.run_sync(caller_metadata.create_all)
+            await conn.run_sync(nonce_metadata.create_all)
+            await conn.run_sync(tx_metadata.create_all)
+            await conn.run_sync(rate_metadata.create_all)
+            await conn.run_sync(audit_metadata.create_all)
+        await engine.dispose()
+
+    asyncio.get_event_loop().run_until_complete(_create_tables())
+
     # Import app AFTER env is set so the module-level settings resolve correctly.
+    from fastapi.testclient import TestClient
+
     from fwd.main import app
 
-    # Bring up app with lifespan — the elif-branch calls _startup_policy_load.
+    # Bring up app with lifespan -- the elif-branch calls _startup_policy_load.
     with TestClient(app, raise_server_exceptions=True) as client:
         # Verify app.state.policy was stashed.
         from fwd.domain.policy import Policy
@@ -97,6 +125,7 @@ def test_lifespan_policy_load_writes_approved_audit_row(
         # Verify a policy-load audit row with decision="approved" was written.
         import asyncio
 
+        from sqlalchemy import select
         from sqlalchemy.ext.asyncio import create_async_engine as _cae
 
         from fwd.infra.audit_repo import audit_log
