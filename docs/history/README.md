@@ -51,3 +51,4 @@ Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a
 - **v1.0.0a2** — sealed master verification runbook — `1.0.0a2-sealed-master-verification-runbook.md`
 - **v1.0.0a3** — sealed master verification met — `1.0.0a3-sealed-master-verification-met.md`
 - **v1.0.0** — phase 8b fwd-side; doctrine-ship freeze lifted — `1.0.0-phase-8b-fwd-side.md`
+- **v1.1.0a1** — phase 9a-i fsp signer primitive — `1.1.0a1-phase-9a-i-fsp-signer-primitive.md`

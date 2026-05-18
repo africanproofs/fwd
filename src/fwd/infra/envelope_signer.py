@@ -21,9 +21,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from eth_account import Account
+from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address  # type: ignore[attr-defined]
 
-from fwd.domain.signer import SignedTransaction
+from fwd.domain.signer import SignedDigest, SignedTransaction
 
 if TYPE_CHECKING:
     from fwd.infra.sealed_master import SealedMaster
@@ -88,6 +89,40 @@ class EnvelopeSigner:
                 r=int(signed.r),
                 s=int(signed.s),
                 v=int(signed.v),
+            )
+        finally:
+            _zeroize(privkey_buf)
+
+    async def sign_fsp_eip191(
+        self, wallet_name: str, message_hash_32: bytes
+    ) -> SignedDigest:
+        """EIP-191 personal-sign a 32-byte FSP messageHash with the wallet's privkey.
+
+        signing-tool signs FSP messages via web3.js
+        `web3.eth.accounts.sign(messageHash, key)`, which applies the EIP-191
+        prefix keccak256("\\x19Ethereum Signed Message:\\n32" || messageHash).
+        `Account.sign_message(encode_defunct(primitive=...))` is the
+        byte-equivalent. This is NOT raw-digest signing (`unsafe_sign_hash`)
+        and NOT a transaction. message_hash_32 is the PUBLIC reconstructed
+        hash (built by domain/fsp_message.py); the only secret is the
+        privkey, zeroized in finally. Same Core invariant #16 contract as
+        sign_transaction.
+        """
+        assert len(message_hash_32) == 32, "message_hash_32 must be exactly 32 bytes"
+        wallet = await self._repo.get_by_name(wallet_name)
+        assert wallet is not None  # raises WalletNotFoundError when missing_ok=False
+        plaintext_bytes = await self._vault.decrypt(wallet.privkey_ciphertext)
+        privkey_buf = bytearray(plaintext_bytes)
+        try:
+            signed = Account.from_key(bytes(privkey_buf)).sign_message(
+                encode_defunct(primitive=bytes(message_hash_32))
+            )
+            return SignedDigest(
+                message_hash=bytes(message_hash_32),
+                r=int(signed.r),
+                s=int(signed.s),
+                v=int(signed.v),
+                signature=bytes(signed.signature),
             )
         finally:
             _zeroize(privkey_buf)

@@ -12,7 +12,7 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 ## Scope (current state)
 
-**Current — v1.0.0** (shipped 2026-05-18; private `github.com/africanproofs/fwd`). The **doctrine-ship freeze is LIFTED** — released on the live Core-#14 proof (clif's real `RewardManager.claim` calldata signed through fwd, mined on Coston2 blocks 30669188 / 30669250, on-chain `from` = the fwd executor) plus the fourth-audit clif STOP-SHIP binding pass (clean). Sealed-master custody (Vault retired v1.0.0a1 — `decisions.md` D1); Phase 7 GA live; the broadcast-classification fix is live-proven. The standing rule now governs permitted ship types (see § Linear-forward versioning). The prior GitLab `origin` is blocked (`@makhosonke`) and superseded by the private GitHub remote.
+**Current — v1.1.0a1** (shipped 2026-05-19). Phase 9a-i: the EIP-191 FSP signer primitive (`sign_fsp_eip191`) + the pure preimage builder (`build_fsp_message`, UPTIME + REWARD_DISTRIBUTION), byte-verified against `signing-tool@838b87f` with frozen KATs. No endpoint yet (9a-ii); no doctrine reconciliation yet (9a-iii, gated).
 
 **Next — Phase 9**: the structured protocol-message-signing endpoint (the real remaining fwd functionality) → Phase 10 hardening (incl. the named Face-C nonce-lifecycle deferral — `decisions.md` D14). The consumer `.env PRIVATE_KEY=` deletion is clif's decoupled milestone (its fourth-audit STOP-SHIP conditions are cleared in clif `1357ebf`; the cutover itself is operator + the sibling agent, gated by Core invariant #15).
 

@@ -432,3 +432,106 @@ async def test_no_32byte_state_after_import_wallet() -> None:
     await signer.import_wallet(name="iw", privkey_buf=bytearray(bytes(real.key)), policy_path="p")
 
     _assert_no_32byte_state(signer)
+
+
+# --- v1.1.0a1: EIP-191 FSP signer primitive (sign_fsp_eip191) ------------
+# Mirrors the hazard #1/#2 contracts already enforced for sign_transaction.
+
+
+@pytest.mark.asyncio
+async def test_sign_fsp_eip191_round_trip() -> None:
+    """sign_fsp_eip191 decrypts, EIP-191-signs, zeroizes; recovers to addr."""
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+    from eth_utils import keccak
+
+    real = Account.create()
+    vault = MagicMock()
+    vault.decrypt = AsyncMock(return_value=bytes(real.key))
+    repo = MagicMock()
+    repo.get_by_name = AsyncMock(
+        return_value=Wallet(
+            name="w1",
+            address=real.address,
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
+            policy_path="p1",
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    signer = EnvelopeSigner(vault, repo)
+    message_hash = keccak(b"fsp-message-hash-fixture-32-bytes!!")[:32]
+    signed = await signer.sign_fsp_eip191("w1", message_hash)
+
+    assert signed.message_hash == message_hash
+    assert len(signed.signature) == 65
+    assert signed.v in (27, 28)
+    recovered = Account.recover_message(
+        encode_defunct(primitive=message_hash), signature=signed.signature
+    )
+    assert recovered.lower() == real.address.lower()
+
+
+@pytest.mark.asyncio
+async def test_sign_fsp_eip191_buffer_is_all_zero_after_zeroize() -> None:
+    """Hazard #2 contract for sign_fsp_eip191's privkey buffer."""
+    from eth_account import Account
+    from eth_utils import keccak
+
+    real = Account.create()
+    vault = MagicMock()
+    vault.decrypt = AsyncMock(return_value=bytes(real.key))
+    repo = MagicMock()
+    repo.get_by_name = AsyncMock(
+        return_value=Wallet(
+            name="w1",
+            address=real.address,
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
+            policy_path="p1",
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    captured_post_zeroize: list[bytes] = []
+    real_zeroize = envelope_signer_module._zeroize
+
+    def spy_zeroize(buf: bytearray) -> None:
+        real_zeroize(buf)
+        captured_post_zeroize.append(bytes(buf))
+        assert isinstance(buf, bytearray)
+
+    with patch.object(envelope_signer_module, "_zeroize", spy_zeroize):
+        signer = EnvelopeSigner(vault, repo)
+        await signer.sign_fsp_eip191("w1", keccak(b"x")[:32])
+
+    assert len(captured_post_zeroize) == 1
+    assert captured_post_zeroize[0] == b"\x00" * 32
+
+
+@pytest.mark.asyncio
+async def test_no_32byte_state_after_sign_fsp_eip191() -> None:
+    """Hazard #1 contract after sign_fsp_eip191."""
+    from eth_account import Account
+    from eth_utils import keccak
+
+    real = Account.create()
+    vault = MagicMock()
+    vault.decrypt = AsyncMock(return_value=bytes(real.key))
+    repo = MagicMock()
+    repo.get_by_name = AsyncMock(
+        return_value=Wallet(
+            name="w1",
+            address=real.address,
+            privkey_ciphertext="seal:v1:abc",
+            vault_master_key="local:v1",
+            policy_path="p1",
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    signer = EnvelopeSigner(vault, repo)
+    await signer.sign_fsp_eip191("w1", keccak(b"y")[:32])
+
+    _assert_no_32byte_state(signer)
