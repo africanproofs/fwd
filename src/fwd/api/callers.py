@@ -95,7 +95,7 @@ async def post_callers(
                 "error": "unknown_policy_path",
                 "message": (
                     f"policy_path '{body.policy_path}' is not in the "
-                    f"loaded policy (permissions)"
+                    f"loaded policy (permissions or fsp_permissions)"
                 ),
             },
         )

@@ -115,6 +115,7 @@ _VALID_ACTIONS = frozenset(
         "caller-revoke",
         "policy-load",
         "audit-verify-failure",
+        "fsp-sign-message",
     }
 )
 

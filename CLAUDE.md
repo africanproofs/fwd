@@ -12,7 +12,7 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 ## Scope (current state)
 
-**Current — v1.1.0a1** (shipped 2026-05-19). Phase 9a-i: the EIP-191 FSP signer primitive (`sign_fsp_eip191`) + the pure preimage builder (`build_fsp_message`, UPTIME + REWARD_DISTRIBUTION), byte-verified against `signing-tool@838b87f` with frozen KATs. No endpoint yet (9a-ii); no doctrine reconciliation yet (9a-iii, gated).
+**Current — v1.1.0a2** (shipped 2026-05-19). Phase 9a-ii: `POST /v1/sign-fsp-message` — EIP-191 personal-sign of the fwd-reconstructed FSP messageHash (UPTIME + REWARD_DISTRIBUTION) behind the full default-deny authorization envelope (FSP policy block + address-level key-domain segmentation enforced at the loader AND at runtime, dedicated `fsp_rate_buckets`, Core-#19 forensic-durable on the single shared session). Offline-KAT determinism clean. Live-Coston2 GATE-1 (real `FlareSystemsManager` `eth_call` + real-`signing-tool`-binary signature diff) and 9a-iii bounded doctrine reconciliation remain gated.
 
 **Next — Phase 9**: the structured protocol-message-signing endpoint (the real remaining fwd functionality) → Phase 10 hardening (incl. the named Face-C nonce-lifecycle deferral — `decisions.md` D14). The consumer `.env PRIVATE_KEY=` deletion is clif's decoupled milestone (its fourth-audit STOP-SHIP conditions are cleared in clif `1357ebf`; the cutover itself is operator + the sibling agent, gated by Core invariant #15).
 

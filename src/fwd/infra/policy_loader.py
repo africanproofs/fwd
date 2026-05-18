@@ -104,11 +104,14 @@ def check_consistency(
                 f"caller '{caller.name}' policy_path '{caller.policy_path}' "
                 f"drifts from policy binding '{binding.policy_path}'"
             )
-        # Check 1c: caller binding's policy_path not in policy.permissions.
-        if binding.policy_path not in policy.permissions:
+        # Check 1c: caller binding's policy_path not in policy.permissions or fsp_permissions.
+        if (
+            binding.policy_path not in policy.permissions
+            and binding.policy_path not in policy.fsp_permissions
+        ):
             errors.append(
                 f"caller '{caller.name}' binding policy_path "
-                f"'{binding.policy_path}' not in permissions"
+                f"'{binding.policy_path}' not in permissions or fsp_permissions"
             )
 
     # Checks 2, 3 (partial), 4: walk all permissions blocks.
@@ -144,6 +147,48 @@ def check_consistency(
                 f"not in wallet_constraints"
             )
 
+    # FSP permission validation + address-level cross-domain segmentation.
+    _valid_fsp_types = {"UPTIME", "REWARD_DISTRIBUTION"}
+    name_to_addr = {w.name: w.address.lower() for w in wallets}
+
+    for fperm_path, fperm in policy.fsp_permissions.items():
+        if fperm_path in policy.permissions:
+            errors.append(
+                f"policy_path '{fperm_path}' is in BOTH permissions and "
+                f"fsp_permissions (cross-domain key reuse forbidden)"
+            )
+        if not fperm.message_types:
+            errors.append(f"fsp_permissions '{fperm_path}' has empty message_types")
+        for mt in fperm.message_types:
+            if mt not in _valid_fsp_types:
+                errors.append(
+                    f"fsp_permissions '{fperm_path}' unknown message_type '{mt}'"
+                )
+        for wname in fperm.wallet_allowlist:
+            if wname not in known_wallet_names:
+                errors.append(
+                    f"fsp_permissions '{fperm_path}' allowlists unknown wallet '{wname}'"
+                )
+
+    evm_addrs: set[str] = set()
+    for perm in policy.permissions.values():
+        for wname in perm.wallet_allowlist:
+            a = name_to_addr.get(wname)
+            if a is not None:
+                evm_addrs.add(a)
+    fsp_addrs: set[str] = set()
+    for fperm in policy.fsp_permissions.values():
+        for wname in fperm.wallet_allowlist:
+            a = name_to_addr.get(wname)
+            if a is not None:
+                fsp_addrs.add(a)
+    for shared in sorted(evm_addrs & fsp_addrs):
+        errors.append(
+            f"address {shared} is reachable from BOTH an EVM permissions "
+            f"allowlist and an fsp_permissions allowlist (key-domain "
+            f"segmentation violation — one key must not sign in both domains)"
+        )
+
     return errors
 
 
@@ -158,7 +203,10 @@ def policy_path_exists(policy: Policy, policy_path: str, kind: str) -> bool:
     POST /v1/admin/callers and POST /v1/admin/wallets before inserting.
     """
     if kind == "caller":
-        return policy_path in policy.permissions
+        return (
+            policy_path in policy.permissions
+            or policy_path in policy.fsp_permissions
+        )
     if kind == "wallet":
         return policy_path in policy.wallet_constraints
     return False

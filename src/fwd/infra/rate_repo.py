@@ -48,6 +48,17 @@ wallet_buckets = Table(
     Column("aggregate_value_wei", String, nullable=False, default="0"),
 )
 
+fsp_rate_buckets = Table(
+    "fsp_rate_buckets",
+    rate_metadata,
+    Column("caller", String, nullable=False, primary_key=True),
+    Column("wallet", String, nullable=False, primary_key=True),
+    Column("message_type", String, nullable=False, primary_key=True),
+    Column("window_kind", String, nullable=False, primary_key=True),
+    Column("window_start", DateTime(timezone=True), nullable=False, primary_key=True),
+    Column("counter", Integer, nullable=False, default=0),
+)
+
 
 class RateRepoError(Exception):
     """Raised on value-parsing errors in rate repo (e.g. non-decimal wei strings)."""
@@ -208,6 +219,105 @@ class RateRepo:
                     rate_buckets.c.counter > 0,
                 )
                 .values(counter=rate_buckets.c.counter - 1)
+            )
+
+    async def check_and_increment_fsp_caller(
+        self,
+        *,
+        caller: str,
+        wallet: str,
+        message_type: str,
+        rate: RateLimit | None,
+        now: datetime,
+    ) -> bool:
+        """FSP analogue of check_and_increment_caller (fsp_rate_buckets).
+
+        All-or-nothing across windows; rate is None -> True without DB.
+        """
+        if rate is None:
+            return True
+
+        windows: list[tuple[str, int]] = []
+        if rate.per_hour is not None:
+            windows.append(("hour", rate.per_hour))
+        if rate.per_day is not None:
+            windows.append(("day", rate.per_day))
+
+        for wk, cap in windows:
+            ws = window_start(wk, now)
+            row = await self._session.execute(
+                select(fsp_rate_buckets.c.counter).where(
+                    fsp_rate_buckets.c.caller == caller,
+                    fsp_rate_buckets.c.wallet == wallet,
+                    fsp_rate_buckets.c.message_type == message_type,
+                    fsp_rate_buckets.c.window_kind == wk,
+                    fsp_rate_buckets.c.window_start == ws,
+                )
+            )
+            current = row.scalar()
+            counter_val = current if current is not None else 0
+            if counter_val >= cap:
+                return False
+
+        for wk, _cap in windows:
+            ws = window_start(wk, now)
+            stmt = (
+                sqlite_insert(fsp_rate_buckets)
+                .values(
+                    caller=caller,
+                    wallet=wallet,
+                    message_type=message_type,
+                    window_kind=wk,
+                    window_start=ws,
+                    counter=1,
+                )
+                .on_conflict_do_update(
+                    index_elements=[
+                        fsp_rate_buckets.c.caller,
+                        fsp_rate_buckets.c.wallet,
+                        fsp_rate_buckets.c.message_type,
+                        fsp_rate_buckets.c.window_kind,
+                        fsp_rate_buckets.c.window_start,
+                    ],
+                    set_={"counter": fsp_rate_buckets.c.counter + 1},
+                )
+            )
+            await self._session.execute(stmt)
+
+        return True
+
+    async def release_fsp_caller(
+        self,
+        *,
+        caller: str,
+        wallet: str,
+        message_type: str,
+        rate: RateLimit | None,
+        now: datetime,
+    ) -> None:
+        """FSP analogue of release_caller. No-op if rate is None."""
+        if rate is None:
+            return
+
+        windows: list[str] = []
+        if rate.per_hour is not None:
+            windows.append("hour")
+        if rate.per_day is not None:
+            windows.append("day")
+
+        for wk in windows:
+            ws = window_start(wk, now)
+            await self._session.execute(
+                update(fsp_rate_buckets)
+                .where(
+                    fsp_rate_buckets.c.caller == caller,
+                    fsp_rate_buckets.c.wallet == wallet,
+                    fsp_rate_buckets.c.message_type == message_type,
+                    fsp_rate_buckets.c.window_kind == wk,
+                    fsp_rate_buckets.c.window_start == ws,
+                    fsp_rate_buckets.c.counter > 0,
+                )
+                .values(counter=fsp_rate_buckets.c.counter - 1)
             )
 
     # ------------------------------------------------------------------
@@ -386,9 +496,9 @@ class RateRepo:
         await self._session.execute(stmt)
 
     async def delete_stale(self, *, before: datetime) -> int:
-        """Delete rows in both tables with window_start < *before*.
+        """Delete rows in all rate tables with window_start < *before*.
 
-        Returns the total number of rows deleted across both tables.
+        Returns the total number of rows deleted across all three tables.
         Called at policy-load by the a6 integration ship.
         """
         result_rb = await self._session.execute(
@@ -397,4 +507,7 @@ class RateRepo:
         result_wb = await self._session.execute(
             delete(wallet_buckets).where(wallet_buckets.c.window_start < before)
         )
-        return (result_rb.rowcount or 0) + (result_wb.rowcount or 0)  # type: ignore[attr-defined]
+        result_fsp = await self._session.execute(
+            delete(fsp_rate_buckets).where(fsp_rate_buckets.c.window_start < before)
+        )
+        return (result_rb.rowcount or 0) + (result_wb.rowcount or 0) + (result_fsp.rowcount or 0)  # type: ignore[attr-defined]

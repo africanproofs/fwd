@@ -57,6 +57,20 @@ class WalletConstraint(BaseModel):
     rate: RateLimit | None = None
 
 
+class FspPermissionBlock(BaseModel):
+    """Permissions for the FSP structured-message signing endpoint.
+
+    Caller-keyed (like PermissionBlock) but FSP-shaped: no contract/method/
+    value — only the permitted message types + wallet allowlist + rate.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    message_types: list[str]
+    wallet_allowlist: list[str]
+    rate: RateLimit | None = None
+
+
 class CallerBinding(BaseModel):
     """Binds a caller name to a policy_path (→ PermissionBlock key)."""
 
@@ -83,6 +97,7 @@ class Policy(BaseModel):
     wallets: dict[str, WalletBinding] = Field(default_factory=dict)
     permissions: dict[str, PermissionBlock] = Field(default_factory=dict)
     wallet_constraints: dict[str, WalletConstraint] = Field(default_factory=dict)
+    fsp_permissions: dict[str, FspPermissionBlock] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
         if self.version != 1:
