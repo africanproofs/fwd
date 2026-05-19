@@ -339,7 +339,8 @@ The **shipped** surface (v0.5.x, mounted in `src/fwd/main.py`) is frozen for v1.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `POST` | `/v1/sign-and-send` | caller | Build → policy → sign → broadcast |
-| `POST` | `/v1/sign-typed-data` | caller | EIP-712 signing — **(deferred — Phase 9/10; not mounted; the CLAUDE.md "What FWD IS NOT" `/sign-typed-data` mention is forward-looking, not shipped)** |
+| `POST` | `/v1/sign-fsp-message` | caller | EIP-191 `personal_sign` over a fwd-**reconstructed** FSP messageHash (UPTIME / REWARD_DISTRIBUTION) from typed fields — no caller-supplied digest. **Shipped v1.1.0a2**; live-Coston2-proven by the v1.1.0a4 drill (GATE-1 F1 + B1 EIP-191 recover; on-chain FSP-protocol *acceptance* / F2 deferred — P3=NO, `docs/reviews/v1.1.0a4-clif-fsp-live-drill-adjudication.md`) |
+| `POST` | `/v1/sign-typed-data` | caller | EIP-712 signing — **(deferred — Phase 10; not mounted; the CLAUDE.md "What FWD IS NOT" `/sign-typed-data` mention is forward-looking, not shipped)** |
 | `GET` | `/v1/wallets` | caller | List wallets accessible to caller — **(deferred — Phase 9/10; today only admin `GET /v1/admin/wallets`, v0.4.0a7)** |
 | `GET` | `/v1/transactions/{tx_id}` | caller | Status + hash history + receipt |
 | `GET` | `/v1/audit` | admin | Hash-chained audit log — **(deferred — HTTP not mounted; today the CLI walker `clifwd audit verify\|show\|tail`, shipped v0.5.0a5, is the v1 surface)** |

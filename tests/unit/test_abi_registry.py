@@ -50,7 +50,9 @@ def _minimal_fn_entry(name: str, inputs: list[dict[str, Any]] | None = None) -> 
 def test_load_real_abis_succeeds_with_correct_names() -> None:
     """Test 1: AbiRegistry.load succeeds; abi_names matches the registry."""
     registry = AbiRegistry.load(_ABIS_DIR)
-    assert registry.abi_names() == frozenset({"reward_manager", "participant_register", "erc20"})
+    assert registry.abi_names() == frozenset(
+        {"reward_manager", "participant_register", "erc20", "flare_systems_manager"}
+    )
 
 
 def test_lookup_erc20_transfer_returns_correct_method() -> None:
