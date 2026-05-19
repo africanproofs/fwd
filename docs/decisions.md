@@ -792,6 +792,21 @@ Neither type relaxes Core invariant #18 — each *narrows* it by forcing reconci
 
 **When to revisit.** If a future audit finds either bounded surface is itself a bloat vector (e.g. reconciliation ships growing speculative text despite constraint (i)), tighten the constraint and record the tightening as its own constitutional-amendment ship — the mechanism is now self-hosting.
 
+## D18. Hand-off delivery: the canonical-prompt file is embedded in the message, not pointed at
+
+**Decision.** Operator directive (explicit, 2026-05-19, clarified after two misdeliveries): every Reviewer→implementer / Reviewer→peer-agent hand-off is delivered as exactly ONE self-contained markdown file whose entire contents are the ready-to-paste message to the recipient — a 2–4 line framing preamble at the top (recipient; "the rest of this file is the authoritative spec"; operating boundary; a "Begin" line) followed by the full spec body. The Reviewer hands the operator only the file path; the operator opens it, selects all, pastes — one action. Supersedes the prior § Development workflow wrapper rule ("the wrapper points Sonnet at the canonical prompt file rather than dumping the prompt contents into chat").
+
+**Why this matters.** Three delivery forms were tried 2026-05-19; the first two failed in practice. (a) Pointer-only message (names the path, recipient opens it): fragile — it assumed the operator placed the file where the recipient expected (the clif FSP hand-off told the agent to read a file "in your working directory"). (b) Message dumped inline into the chat reply inside a fence: forced the operator to manually select it out of surrounding Reviewer prose — explicitly rejected. (c) The form that holds: the hand-off IS one file; the only thing handed over is its path; open → select-all → paste. The original anti-dump rationale (a long Reviewer-internal doc whose asides could be mis-read) is already neutralised by the standing self-contained-prompt requirement (root constitution). One file, one paste, zero extraction, zero file-placement dependency.
+
+**Consequences.**
+
+- **v1.1.0a4** (this ship — a constitutional-amendment ship per D17) amends § Development workflow accordingly; this D18 lands; § Scope current line advances; version bumped in both files. Doctrine-only — zero code change; v1.1.0a1/a2 behaviour unaffected; full suite stays 458 passed / 1 skipped.
+- The fwd Reviewer regenerates the in-flight clif FSP corrective hand-off in the embedded form immediately.
+- The former "9a-iii" bounded reconciliation re-sequences once more (it had been v1.1.0a4) → **v1.1.0a5**, still hard-gated on GATE-1 live Coston2 (linear-forward; the plan is a plan, the version invariant is the rule — same discipline as the v1.1.0a3 re-sequence of it from a3→a4).
+- Codified in fwd's CLAUDE.md. Whether to mirror it into the root `proofs.africa/CLAUDE.md` "Sonnet hand-off demarcation (CRITICAL)" section (cross-project binding) is an explicit operator decision — surfaced, not Reviewer-self-taken (scope discipline; the org constitution governs many projects).
+
+**When to revisit.** If a hand-off file ever genuinely cannot be embedded (e.g. exceeds a paste limit), the fallback is a chunked embed with explicit ordered part markers — never a silent return to the pointer-to-file form.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.
