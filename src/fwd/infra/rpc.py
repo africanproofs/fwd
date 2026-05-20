@@ -153,6 +153,11 @@ class RpcClient:
         result = await self.call("eth_getTransactionReceipt", [tx_hash])
         return dict(result) if result is not None else None
 
+    async def get_balance(self, address: str) -> int:
+        """`eth_getBalance(address, 'latest')` → int (wei)."""
+        result = await self.call("eth_getBalance", [address, "latest"])
+        return int(result, 16)
+
 
 class RpcManager:
     """Per-request RPC client manager.

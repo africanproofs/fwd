@@ -189,3 +189,92 @@ async def _run_import(request: WalletImportRequest) -> None:
         raise typer.Exit(code=6) from exc
 
     typer.echo(f"imported: {wallet.name} @ {wallet.address}")
+
+
+_CHAIN_NAME = {14: "flare", 19: "songbird", 114: "coston2"}
+
+
+@app.command()
+def balances(
+    chain: int | None = typer.Option(
+        None, "--chain", help="filter to one chain_id (14|19|114)."
+    ),
+    include_all: bool = typer.Option(
+        False, "--all",
+        help="include non-transacting wallets across all chains (broad scan).",
+    ),
+    low_water: float | None = typer.Option(
+        None, "--low-water",
+        help="highlight balances below N native units (e.g. 0.1).",
+    ),
+    output_json: bool = typer.Option(
+        False, "--json", help="emit raw JSON instead of a table.",
+    ),
+) -> None:
+    """Per-(wallet, chain) gas balance for fwd-custodied transacting wallets.
+
+    Default: only wallets reachable from any `permissions` allowlist, on
+    the chains implied by their block(s)' contracts. Requires
+    FWD_ADMIN_KEY in env. v1.1.0a7.
+    """
+    url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
+    admin = os.environ.get("FWD_ADMIN_KEY", "")
+    if not admin:
+        typer.echo("FWD_ADMIN_KEY env var not set", err=True)
+        raise typer.Exit(code=2)
+    params: dict[str, str] = {}
+    if include_all:
+        params["include_all"] = "true"
+    if chain is not None:
+        params["chain"] = str(chain)
+    try:
+        r = httpx.get(
+            f"{url}/v1/admin/wallets/balances",
+            headers={"Authorization": f"Bearer {admin}"},
+            params=params,
+            timeout=30.0,
+        )
+    except (httpx.HTTPError, OSError) as exc:
+        typer.echo(f"unreachable: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if r.status_code != 200:
+        typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
+        raise typer.Exit(code=1)
+
+    body = r.json()
+
+    if output_json:
+        typer.echo(r.text)
+        for w in body.get("warnings", []):
+            typer.echo(f"warning: {w}", err=True)
+        return
+
+    bals = body["balances"]
+    if not bals:
+        typer.echo("(no transacting wallets)", err=True)
+        for w in body.get("warnings", []):
+            typer.echo(f"warning: {w}", err=True)
+        return
+
+    typer.echo(
+        f"{'wallet':<34}  {'network':<9}  {'address':<44}  balance"
+    )
+    typer.echo(f"{'-' * 34}  {'-' * 9}  {'-' * 44}  {'-' * 16}")
+    for e in bals:
+        net = _CHAIN_NAME.get(e["chain"], str(e["chain"]))
+        if e.get("error"):
+            bal_col = f"(rpc error: {e['error'][:40]})"
+        else:
+            bal_col = e["balance_native"]
+            if low_water is not None:
+                try:
+                    if float(e["balance_native"]) < low_water:
+                        bal_col = f"{bal_col}  ⚠ low"
+                except ValueError:
+                    pass
+        typer.echo(
+            f"{e['wallet']:<34}  {net:<9}  {e['address']:<44}  {bal_col}"
+        )
+    for w in body.get("warnings", []):
+        typer.echo(f"warning: {w}", err=True)
