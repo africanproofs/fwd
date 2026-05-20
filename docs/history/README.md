@@ -56,3 +56,4 @@ Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a
 - **v1.1.0a3** — constitutional amendment: bounded non-feature ship-types — `1.1.0a3-constitutional-amendment-shiptypes.md`
 - **v1.1.0a4** — constitutional amendment: hand-off embeds the file in the message — `1.1.0a4-handoff-embed-amendment.md`
 - **v1.1.0a5** — bounded post-verification reconciliation: FSP doctrine ⇄ byte-verified code (GATE-1 F1 cleared; F2 honestly deferred — P3=NO) — `1.1.0a5-bounded-reconciliation-fsp.md`
+- **v1.1.0a6** — bounded key-domain segmentation carve-out: FSP signer self-submit (default-off opt-in; constrained FSM-only-zero-value; invariant *text* reconciliation deferred to Ship E post-GATE-2) — `1.1.0a6-segmentation-carveout-fsp-self-submit.md`

@@ -98,6 +98,15 @@ class Policy(BaseModel):
     permissions: dict[str, PermissionBlock] = Field(default_factory=dict)
     wallet_constraints: dict[str, WalletConstraint] = Field(default_factory=dict)
     fsp_permissions: dict[str, FspPermissionBlock] = Field(default_factory=dict)
+    # Wallet names explicitly authorized to be the FSP signing-policy wallet
+    # (in an fsp_permissions allowlist) AND that same key's own Leg-2 tx
+    # sender (in an EVM permissions allowlist) — the narrow "signer pays gas"
+    # carve-out to the key-domain segmentation invariant. Empty by default:
+    # absent this opt-in the segmentation fail-fast is unchanged. The carve-out
+    # is only honoured under the strict constraint enforced in
+    # policy_loader.check_consistency (FSM signUptimeVote/signRewards,
+    # max_value_wei == "0", nothing else). v1.1.0a6.
+    fsp_self_submit: list[str] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:
         if self.version != 1:

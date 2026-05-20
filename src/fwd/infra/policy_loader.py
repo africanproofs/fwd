@@ -27,6 +27,19 @@ if TYPE_CHECKING:
     from fwd.infra.wallet_repo import Wallet
 
 
+# The two canonical FlareSystemsManager method signatures that are allowed
+# under the fsp_self_submit carve-out (signer pays its own gas — Leg-2 tx).
+# These are the only EVM methods that an FSP signing-policy key may appear in
+# when also listed in an fsp_permissions allowlist, subject to the full
+# constraint set in check_consistency. v1.1.0a6.
+_FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
+    {
+        "signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))",
+        "signRewards(uint24,(uint256,uint256)[],bytes32,(uint8,bytes32,bytes32))",
+    }
+)
+
+
 class PolicyLoadError(Exception):
     """Raised when policy.yaml cannot be loaded or fails schema validation."""
 
@@ -182,7 +195,60 @@ def check_consistency(
             a = name_to_addr.get(wname)
             if a is not None:
                 fsp_addrs.add(a)
-    for shared in sorted(evm_addrs & fsp_addrs):
+    # v1.1.0a6 bounded carve-out: an explicitly opted-in FSP signing-policy
+    # wallet may be in BOTH domains iff its EVM authority is provably the
+    # zero-value FlareSystemsManager signUptimeVote/signRewards path only.
+    exempt_addrs: set[str] = set()
+    fsp_allowlisted_names = {
+        wn for fp in policy.fsp_permissions.values() for wn in fp.wallet_allowlist
+    }
+    for wname in policy.fsp_self_submit:
+        if wname not in known_wallet_names:
+            errors.append(
+                f"fsp_self_submit names unknown wallet '{wname}'"
+            )
+            continue
+        if wname not in fsp_allowlisted_names:
+            errors.append(
+                f"fsp_self_submit wallet '{wname}' is not in any "
+                f"fsp_permissions allowlist (meaningless carve-out)"
+            )
+            continue
+        # Every permissions block that allowlists this wallet MUST be the
+        # constrained FSM self-submit shape, or the carve-out is refused.
+        ok = True
+        appeared = False
+        for _pp, perm in policy.permissions.items():
+            if wname not in perm.wallet_allowlist:
+                continue
+            appeared = True
+            for _caddr, crule in perm.contracts.items():
+                if crule.abi != "flare_systems_manager":
+                    ok = False
+                for msig, mrule in crule.methods.items():
+                    if msig not in _FSP_SELF_SUBMIT_METHODS:
+                        ok = False
+                    if str(mrule.max_value_wei) != "0":
+                        ok = False
+        if not appeared:
+            errors.append(
+                f"fsp_self_submit wallet '{wname}' is not in any EVM "
+                f"permissions allowlist (carve-out declared but unused)"
+            )
+            continue
+        if not ok:
+            errors.append(
+                f"fsp_self_submit wallet '{wname}' is allowlisted in an EVM "
+                f"permissions block that is NOT the constrained "
+                f"FlareSystemsManager signUptimeVote/signRewards "
+                f"max_value_wei=0 self-submit shape — carve-out refused"
+            )
+            continue
+        a = name_to_addr.get(wname)
+        if a is not None:
+            exempt_addrs.add(a)
+
+    for shared in sorted((evm_addrs & fsp_addrs) - exempt_addrs):
         errors.append(
             f"address {shared} is reachable from BOTH an EVM permissions "
             f"allowlist and an fsp_permissions allowlist (key-domain "
