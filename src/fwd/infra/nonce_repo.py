@@ -184,6 +184,19 @@ class NonceRepo:
             last_reconciled_at=row.last_reconciled_at,
         )
 
+    async def set_next_nonce(self, wallet: str, chain: int, value: int) -> None:
+        """Directly set next_nonce to *value* and last_confirmed to value - 1.
+
+        Admin-only use: called by POST /v1/admin/nonce-sync after bounds check.
+        Does not validate that *value* > current next_nonce — the caller is
+        responsible for the bounded-monotonic-advance guard.
+        """
+        await self._session.execute(
+            update(nonces)
+            .where(nonces.c.wallet == wallet, nonces.c.chain == chain)
+            .values(next_nonce=value, last_confirmed=value - 1)
+        )
+
     async def list_all(self) -> list[Nonce]:
         """List every nonces row. Used by app/nonce_reconcile.py."""
         result = await self._session.execute(select(nonces))

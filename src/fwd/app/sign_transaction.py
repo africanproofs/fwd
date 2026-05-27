@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from fwd.infra.envelope_signer import EnvelopeSigner
     from fwd.infra.nonce_repo import NonceRepo
     from fwd.infra.rate_repo import RateRepo
-    from fwd.infra.transaction_repo import TransactionRepo
+    from fwd.infra.transaction_repo import TransactionAttemptRepo, TransactionRepo
     from fwd.infra.wallet_repo import Wallet
 
 logger = structlog.get_logger(__name__)
@@ -130,6 +130,7 @@ async def sign_transaction(
     registry: AbiRegistry,
     rate_repo: RateRepo,
     audit_repo: AuditRepo,
+    attempt_repo: TransactionAttemptRepo | None = None,
 ) -> SignTransactionResult:
     # Defense-in-depth: caller must be a non-empty string <= 64 chars.
     if not request.caller or len(request.caller) > 64:
@@ -344,8 +345,20 @@ async def sign_transaction(
         status="pending",           # post-sign / pre-broadcast (NOT "submitted")
         submitted_at=None,          # the client has not broadcast yet
         idempotency_key=request.idempotency_key,
+        reserved_at=now,            # set at sign time for orphan-lease detection (a13)
     )
     await tx_repo.add_hash(tx_id, tx_hash, sequence_num=1)
+    if attempt_repo is not None:
+        await attempt_repo.add_attempt(
+            tx_id=tx_id,
+            sequence_num=1,
+            gas=request.gas,
+            max_fee_per_gas=request.max_fee_per_gas,
+            max_priority_fee_per_gas=request.max_priority_fee_per_gas,
+            signed_raw=signed_raw_hex,
+            hash=tx_hash,
+            created_at=now,
+        )
     await rate_repo.add_committed_value(wallet=wallet.name, value_wei=int(request.value_wei), now=now)
     await _audit(
         audit_repo,

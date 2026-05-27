@@ -1,4 +1,5 @@
-"""Async repository for the transactions and transaction_hashes tables.
+"""Async repository for the transactions, transaction_hashes, and
+transaction_attempts tables.
 
 Schema mirrors architecture.md § SQLite schema.
 """
@@ -35,6 +36,7 @@ transactions = Table(
     Column("confirmed_at", DateTime(timezone=True), nullable=True),
     Column("receipt_json", String, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("reserved_at", DateTime(timezone=True), nullable=True),
 )
 
 transaction_hashes = Table(
@@ -44,6 +46,19 @@ transaction_hashes = Table(
     Column("sequence_num", Integer, nullable=False, primary_key=True),
     Column("hash_hex", String, nullable=False),
     Column("submitted_at", DateTime(timezone=True), nullable=False),
+)
+
+transaction_attempts = Table(
+    "transaction_attempts",
+    metadata,
+    Column("tx_id", String, nullable=False, primary_key=True),
+    Column("sequence_num", Integer, nullable=False, primary_key=True),
+    Column("gas", Integer, nullable=False),
+    Column("max_fee_per_gas", Integer, nullable=False),
+    Column("max_priority_fee_per_gas", Integer, nullable=False),
+    Column("signed_raw", String, nullable=False),
+    Column("hash", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 _VALID_STATUSES = frozenset({"pending", "submitted", "mined", "replaced", "failed", "dropped", "reverted"})
@@ -67,6 +82,7 @@ class Transaction:
     confirmed_at: datetime | None
     receipt_json: str | None
     created_at: datetime
+    reserved_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +91,18 @@ class TransactionHash:
     sequence_num: int
     hash_hex: str
     submitted_at: datetime
+
+
+@dataclass(frozen=True)
+class TransactionAttempt:
+    tx_id: str
+    sequence_num: int
+    gas: int
+    max_fee_per_gas: int
+    max_priority_fee_per_gas: int
+    signed_raw: str
+    hash: str
+    created_at: datetime
 
 
 class TransactionExistsError(Exception):
@@ -105,6 +133,7 @@ class TransactionRepo:
         status: str,
         submitted_at: datetime | None,
         idempotency_key: str | None = None,
+        reserved_at: datetime | None = None,
     ) -> Transaction:
         assert status in _VALID_STATUSES, f"invalid status: {status}"
         existing = await self.get_by_id(tx_id, missing_ok=True)
@@ -129,6 +158,7 @@ class TransactionRepo:
                 confirmed_at=None,
                 receipt_json=None,
                 created_at=now,
+                reserved_at=reserved_at,
             )
         )
         return Transaction(
@@ -148,6 +178,7 @@ class TransactionRepo:
             confirmed_at=None,
             receipt_json=None,
             created_at=now,
+            reserved_at=reserved_at,
         )
 
     async def get_by_idempotency_key(
@@ -187,6 +218,7 @@ class TransactionRepo:
             confirmed_at=row.confirmed_at,
             receipt_json=row.receipt_json,
             created_at=row.created_at,
+            reserved_at=row.reserved_at,
         )
 
     async def add_hash(
@@ -242,6 +274,7 @@ class TransactionRepo:
             confirmed_at=row.confirmed_at,
             receipt_json=row.receipt_json,
             created_at=row.created_at,
+            reserved_at=row.reserved_at,
         )
 
     async def list_hashes_by_tx(self, tx_id: str) -> list[TransactionHash]:
@@ -290,6 +323,44 @@ class TransactionRepo:
                 confirmed_at=row.confirmed_at,
                 receipt_json=row.receipt_json,
                 created_at=row.created_at,
+                reserved_at=row.reserved_at,
+            )
+            for row in result
+        ]
+
+    async def list_stale_reservations(self, older_than: datetime) -> list[Transaction]:
+        """Return pending transactions whose reserved_at is older than *older_than*.
+
+        These are orphan candidates: signed but never reported broadcast.
+        """
+        result = await self._session.execute(
+            select(transactions)
+            .where(
+                transactions.c.status == "pending",
+                transactions.c.reserved_at.isnot(None),
+                transactions.c.reserved_at < older_than,
+            )
+            .order_by(transactions.c.reserved_at)
+        )
+        return [
+            Transaction(
+                tx_id=row.tx_id,
+                wallet=row.wallet,
+                chain=row.chain,
+                caller=row.caller,
+                nonce=row.nonce,
+                contract_address=row.contract_address,
+                method_name=row.method_name,
+                value_wei=row.value_wei,
+                idempotency_key=row.idempotency_key,
+                request_json=row.request_json,
+                signed_raw=row.signed_raw,
+                status=row.status,
+                submitted_at=row.submitted_at,
+                confirmed_at=row.confirmed_at,
+                receipt_json=row.receipt_json,
+                created_at=row.created_at,
+                reserved_at=row.reserved_at,
             )
             for row in result
         ]
@@ -317,3 +388,91 @@ class TransactionRepo:
         await self._session.execute(
             update(transactions).where(transactions.c.tx_id == tx_id).values(**values)
         )
+
+
+class TransactionAttemptRepo:
+    """Repository for the transaction_attempts table.
+
+    Records every signed attempt (original = seq 1, each replacement = seq N+1).
+    Mirrors the transaction_hashes style (same file, same session).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add_attempt(
+        self,
+        tx_id: str,
+        sequence_num: int,
+        gas: int,
+        max_fee_per_gas: int,
+        max_priority_fee_per_gas: int,
+        signed_raw: str,
+        hash: str,
+        created_at: datetime,
+    ) -> TransactionAttempt:
+        await self._session.execute(
+            transaction_attempts.insert().values(
+                tx_id=tx_id,
+                sequence_num=sequence_num,
+                gas=gas,
+                max_fee_per_gas=max_fee_per_gas,
+                max_priority_fee_per_gas=max_priority_fee_per_gas,
+                signed_raw=signed_raw,
+                hash=hash,
+                created_at=created_at,
+            )
+        )
+        return TransactionAttempt(
+            tx_id=tx_id,
+            sequence_num=sequence_num,
+            gas=gas,
+            max_fee_per_gas=max_fee_per_gas,
+            max_priority_fee_per_gas=max_priority_fee_per_gas,
+            signed_raw=signed_raw,
+            hash=hash,
+            created_at=created_at,
+        )
+
+    async def latest_attempt(self, tx_id: str) -> TransactionAttempt | None:
+        """Return the attempt with the highest sequence_num for tx_id, or None."""
+        result = await self._session.execute(
+            select(transaction_attempts)
+            .where(transaction_attempts.c.tx_id == tx_id)
+            .order_by(transaction_attempts.c.sequence_num.desc())
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return TransactionAttempt(
+            tx_id=row.tx_id,
+            sequence_num=row.sequence_num,
+            gas=row.gas,
+            max_fee_per_gas=row.max_fee_per_gas,
+            max_priority_fee_per_gas=row.max_priority_fee_per_gas,
+            signed_raw=row.signed_raw,
+            hash=row.hash,
+            created_at=row.created_at,
+        )
+
+    async def list_attempts(self, tx_id: str) -> list[TransactionAttempt]:
+        """Return all attempts for tx_id in ascending sequence_num order."""
+        result = await self._session.execute(
+            select(transaction_attempts)
+            .where(transaction_attempts.c.tx_id == tx_id)
+            .order_by(transaction_attempts.c.sequence_num)
+        )
+        return [
+            TransactionAttempt(
+                tx_id=row.tx_id,
+                sequence_num=row.sequence_num,
+                gas=row.gas,
+                max_fee_per_gas=row.max_fee_per_gas,
+                max_priority_fee_per_gas=row.max_priority_fee_per_gas,
+                signed_raw=row.signed_raw,
+                hash=row.hash,
+                created_at=row.created_at,
+            )
+            for row in result
+        ]

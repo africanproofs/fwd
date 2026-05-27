@@ -31,7 +31,7 @@ from fwd.infra.nonce_repo import (
 from fwd.infra.policy_loader import policy_path_exists as policy_path_exists  # re-export for api/
 from fwd.infra.rate_repo import RateRepo
 from fwd.infra.sealed_master import SealedMaster, SealError
-from fwd.infra.transaction_repo import TransactionRepo
+from fwd.infra.transaction_repo import TransactionAttemptRepo, TransactionRepo
 from fwd.infra.wallet_repo import WalletRepo
 
 
@@ -167,6 +167,7 @@ class RequestScope:
     path shares ONE session for all DB mutations (nonce + tx + rate + audit)
     under the single BEGIN IMMEDIATE per D16 atomicity requirement.
     v1.1.0a9 removes rpc_mgr (zero-egress: no RPC calls from the daemon).
+    v1.1.0a13 adds attempt_repo (TransactionAttemptRepo) for attempt recording.
     """
 
     signer: EnvelopeSigner
@@ -175,6 +176,7 @@ class RequestScope:
     rate_repo: RateRepo
     audit_repo: AuditRepo
     wallet_repo: WalletRepo
+    attempt_repo: TransactionAttemptRepo
 
 
 class RequestScopeCM:
@@ -206,6 +208,7 @@ class RequestScopeCM:
             rate_repo=RateRepo(self._session),
             audit_repo=AuditRepo(self._session),
             wallet_repo=wallet_repo,
+            attempt_repo=TransactionAttemptRepo(self._session),
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
@@ -296,3 +299,48 @@ class ReportScopeCM:
 
 def get_report_scope() -> ReportScopeCM:
     return ReportScopeCM()
+
+
+@dataclass(frozen=True)
+class ReplacementScope:
+    """signer + tx_repo + attempt_repo + nonce_repo + audit_repo on ONE shared
+    session for the sign-replacement endpoint (a13).
+
+    Needs the Vault (signs a replacement tx); does not need rate_repo
+    (replacement re-signs the same intent at the same nonce — no new rate tick).
+    """
+
+    signer: EnvelopeSigner
+    tx_repo: TransactionRepo
+    attempt_repo: TransactionAttemptRepo
+    nonce_repo: NonceRepo
+    audit_repo: AuditRepo
+
+
+class ReplacementScopeCM:
+    """Single-session scope for the sign-replacement path."""
+
+    async def __aenter__(self) -> ReplacementScope:
+        try:
+            self._vault = SealedMaster()
+            self._vault_entered = await self._vault.__aenter__()
+        except SealError as exc:
+            raise VaultUnavailableError(str(exc)) from exc
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        wallet_repo = WalletRepo(self._session)
+        return ReplacementScope(
+            signer=EnvelopeSigner(self._vault_entered, wallet_repo),
+            tx_repo=TransactionRepo(self._session),
+            attempt_repo=TransactionAttemptRepo(self._session),
+            nonce_repo=NonceRepo(self._session),
+            audit_repo=AuditRepo(self._session),
+        )
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+        await self._vault.__aexit__(exc_type, exc, tb)
+
+
+def get_replacement_scope() -> ReplacementScopeCM:
+    return ReplacementScopeCM()

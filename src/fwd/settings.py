@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     fwd_max_gas: int = Field(default=15_000_000, ge=21_000)
     fwd_max_fee_per_gas: int = Field(default=500_000_000_000, ge=1)  # 500 gwei
 
+    # Nonce-sync bounded advance (v1.1.0a13). Max forward jump allowed by
+    # POST /v1/admin/nonce-sync before refusing (prevents large runaway jumps).
+    fwd_nonce_sync_max_advance: int = Field(default=64, ge=1)
+
+    # Orphan reservation lease (v1.1.0a13). A pending tx whose reserved_at is
+    # older than this many seconds is surfaced by GET /v1/admin/nonce/holes.
+    fwd_reservation_lease_sec: int = Field(default=900, ge=1)  # 15 minutes
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

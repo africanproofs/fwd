@@ -103,6 +103,7 @@ async def post_sign_transaction(
                 request, scope.signer, scope.tx_repo, scope.nonce_repo,
                 caller=caller, wallet=wallet_obj, policy=policy, registry=registry,
                 rate_repo=scope.rate_repo, audit_repo=scope.audit_repo,
+                attempt_repo=scope.attempt_repo,
             )
     except PolicyDenied as exc:
         raise HTTPException(status_code=403, detail={"error": "policy_denied", "message": str(exc)}) from exc
