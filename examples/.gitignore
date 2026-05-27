@@ -1,5 +1,8 @@
 demo-state.db*
-fwd-demo.log
+drill-state.db*
 *.db
 *.db-shm
 *.db-wal
+fwd-demo.log
+*-policy.yaml
+!demo-policy.yaml
