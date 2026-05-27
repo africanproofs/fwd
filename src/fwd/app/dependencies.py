@@ -267,3 +267,32 @@ class AdminScopeCM:
 
 def get_admin_scope() -> AdminScopeCM:
     return AdminScopeCM()
+
+
+@dataclass(frozen=True)
+class ReportScope:
+    """tx_repo + nonce_repo + audit_repo on ONE shared session for the
+    client report-back endpoints (broadcast-result, receipt). No Vault, no RPC —
+    these paths never sign."""
+
+    tx_repo: TransactionRepo
+    nonce_repo: NonceRepo
+    audit_repo: AuditRepo
+
+
+class ReportScopeCM:
+    async def __aenter__(self) -> ReportScope:
+        self._session_cm = session_scope()
+        self._session = await self._session_cm.__aenter__()
+        return ReportScope(
+            tx_repo=TransactionRepo(self._session),
+            nonce_repo=NonceRepo(self._session),
+            audit_repo=AuditRepo(self._session),
+        )
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        await self._session_cm.__aexit__(exc_type, exc, tb)
+
+
+def get_report_scope() -> ReportScopeCM:
+    return ReportScopeCM()

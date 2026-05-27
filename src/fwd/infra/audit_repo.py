@@ -119,6 +119,8 @@ _VALID_ACTIONS = frozenset(
         "audit-verify-failure",
         "fsp-sign-message",
         "nonce-init",
+        "tx-broadcast-result",
+        "tx-receipt",
     }
 )
 

@@ -46,7 +46,7 @@ transaction_hashes = Table(
     Column("submitted_at", DateTime(timezone=True), nullable=False),
 )
 
-_VALID_STATUSES = frozenset({"pending", "submitted", "mined", "replaced", "failed", "dropped"})
+_VALID_STATUSES = frozenset({"pending", "submitted", "mined", "replaced", "failed", "dropped", "reverted"})
 
 
 @dataclass(frozen=True)

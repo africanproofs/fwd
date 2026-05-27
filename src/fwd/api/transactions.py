@@ -1,21 +1,48 @@
-"""GET /v1/transactions/{tx_id} — caller-gated transaction status lookup.
+"""Transaction endpoints — GET status lookup + client report-back.
 
-Per architecture.md § API surface. Cross-caller isolation: a caller
-querying another caller's tx_id receives 404 (NOT 403) so we don't leak
-the existence of other callers' transactions.
+GET  /v1/transactions/{tx_id}                   — caller-gated status
+POST /v1/transactions/{tx_id}/broadcast-result  — client reports broadcast outcome
+POST /v1/transactions/{tx_id}/receipt           — client reports on-chain receipt
+
+Per architecture.md § API surface. Cross-caller isolation: a caller querying
+another caller's tx_id receives 404 (NOT 403) so we don't leak the existence
+of other callers' transactions.
+
+Trust boundary (§4.1):
+1. Caller ownership — 404 on miss or mismatch.
+2. tx_hash validation — 409 + forensic audit row on mismatch.
+3. Legal transition guard — 409 + forensic audit row on illegal source status.
+
+Core invariant #5/#19: on denied paths (tx_hash mismatch, illegal transition),
+append the audit row then `await scope.audit_repo.commit()` BEFORE raising so the
+forensic row survives the session rollback on exception.
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from fwd.api.caller_auth import require_caller
-from fwd.app.dependencies import Caller, TransactionRepoCM, get_transaction_repo
+from fwd.app.dependencies import (
+    Caller,
+    ReportScope,
+    ReportScopeCM,
+    TransactionRepoCM,
+    _canonical_json,
+    get_report_scope,
+    get_transaction_repo,
+)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Response / request models
+# ---------------------------------------------------------------------------
 
 
 class TxHashItem(BaseModel):
@@ -36,6 +63,114 @@ class TxStatusResponse(BaseModel):
     submitted_at: str | None
     confirmed_at: str | None
     hashes: list[TxHashItem]
+
+
+class TxReportResponse(BaseModel):
+    tx_id: str
+    status: str
+
+
+class BroadcastResultBody(BaseModel):
+    tx_hash: str = Field(..., min_length=66, max_length=66)  # 0x + 64 hex
+    outcome: Literal["accepted", "rejected_releaseable", "rejected_nonce_too_low"]
+    error_class: str | None = Field(default=None, max_length=128)
+
+
+class ReceiptBody(BaseModel):
+    tx_hash: str = Field(..., min_length=66, max_length=66)
+    outcome: Literal["mined_success", "mined_reverted"]
+    block_number: int = Field(..., ge=0)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+async def _ownership_check(
+    tx_id: str,
+    caller: Caller,
+    scope: ReportScope,
+) -> Any:
+    """Load tx and enforce caller ownership. Returns the Transaction dataclass.
+
+    Raises HTTP 404 if not found or belongs to a different caller.
+    No audit row — a 404 is a non-event.
+    """
+    tx = await scope.tx_repo.get_by_id(tx_id, missing_ok=True)
+    if tx is None or tx.caller != caller.name:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "transaction_not_found", "message": f"tx_id={tx_id} not found"},
+        )
+    return tx
+
+
+async def _hash_check(
+    tx_id: str,
+    reported_hash: str,
+    action: str,
+    caller_name: str,
+    scope: ReportScope,
+) -> None:
+    """Verify reported tx_hash is one fwd recorded for this tx_id.
+
+    On mismatch: append denied forensic audit row, commit (Core #5/#19), then raise 409.
+    """
+    known_hashes = await scope.tx_repo.list_hashes_by_tx(tx_id)
+    known_hex = {h.hash_hex for h in known_hashes}
+    if reported_hash not in known_hex:
+        await scope.audit_repo.append(
+            action=action,
+            decision="denied",
+            caller=caller_name,
+            request_json=_canonical_json({"tx_id": tx_id, "tx_hash": reported_hash}),
+            decision_reason="tx_hash_mismatch",
+        )
+        await scope.audit_repo.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "tx_hash_mismatch",
+                "message": "tx_hash not recorded for this tx_id",
+            },
+        )
+
+
+async def _transition_check(
+    tx_id: str,
+    current_status: str,
+    required_status: str,
+    intent: str,
+    action: str,
+    caller_name: str,
+    scope: ReportScope,
+) -> None:
+    """Guard legal source status for a transition.
+
+    On mismatch: append denied forensic audit row, commit, then raise 409.
+    """
+    if current_status != required_status:
+        await scope.audit_repo.append(
+            action=action,
+            decision="denied",
+            caller=caller_name,
+            request_json=_canonical_json({"tx_id": tx_id}),
+            decision_reason=f"illegal_transition:{current_status}->{intent}",
+        )
+        await scope.audit_repo.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "illegal_transition",
+                "message": f"tx is {current_status!r}; expected {required_status!r}",
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("/v1/transactions/{tx_id}", response_model=TxStatusResponse)
@@ -73,3 +208,151 @@ async def get_transaction(
             for h in hashes
         ],
     )
+
+
+@router.post("/v1/transactions/{tx_id}/broadcast-result", response_model=TxReportResponse)
+async def post_broadcast_result(
+    tx_id: str,
+    body: BroadcastResultBody,
+    caller: Annotated[Caller, Depends(require_caller)],
+    scope_cm: ReportScopeCM = Depends(get_report_scope),  # noqa: B008
+) -> TxReportResponse:
+    """Report the broadcast outcome for a signed tx back to fwd.
+
+    Trust boundary: caller ownership + tx_hash validation + legal transition guard.
+    On approved path: ReportScopeCM.__aexit__ commits the session (state mutation +
+    audit row atomic). Do NOT call commit() on the approved path.
+    """
+    async with scope_cm as scope:
+        tx = await _ownership_check(tx_id, caller, scope)
+        await _hash_check(tx_id, body.tx_hash, "tx-broadcast-result", caller.name, scope)
+        await _transition_check(
+            tx_id,
+            tx.status,
+            "pending",
+            body.outcome,
+            "tx-broadcast-result",
+            caller.name,
+            scope,
+        )
+
+        now = datetime.now(UTC)
+
+        if body.outcome == "accepted":
+            await scope.tx_repo.update_status(tx_id, "submitted", submitted_at=now)
+            await scope.audit_repo.append(
+                action="tx-broadcast-result",
+                decision="approved",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id, "tx_hash": body.tx_hash}),
+                decision_reason="broadcast_accepted",
+                outcome=_canonical_json({"tx_hash": body.tx_hash}),
+            )
+            new_status = "submitted"
+
+        elif body.outcome == "rejected_releaseable":
+            released = await scope.nonce_repo.release_if_unused(
+                tx.wallet,
+                tx.chain,
+                tx.nonce,
+            )
+            await scope.tx_repo.update_status(tx_id, "failed")
+            await scope.audit_repo.append(
+                action="tx-broadcast-result",
+                decision="approved",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id, "tx_hash": body.tx_hash}),
+                decision_reason="broadcast_rejected_releaseable",
+                outcome=_canonical_json(
+                    {
+                        "tx_hash": body.tx_hash,
+                        "error_class": body.error_class,
+                        "released": released,
+                    }
+                ),
+            )
+            new_status = "failed"
+
+        else:  # rejected_nonce_too_low
+            await scope.tx_repo.update_status(tx_id, "failed")
+            await scope.audit_repo.append(
+                action="tx-broadcast-result",
+                decision="approved",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id, "tx_hash": body.tx_hash}),
+                decision_reason="broadcast_rejected_nonce_too_low",
+                outcome=_canonical_json(
+                    {
+                        "tx_hash": body.tx_hash,
+                        "error_class": body.error_class,
+                        "hint": "chain ahead of fwd; admin nonce-sync required (ship a11+)",
+                    }
+                ),
+            )
+            new_status = "failed"
+
+    return TxReportResponse(tx_id=tx_id, status=new_status)
+
+
+@router.post("/v1/transactions/{tx_id}/receipt", response_model=TxReportResponse)
+async def post_receipt(
+    tx_id: str,
+    body: ReceiptBody,
+    caller: Annotated[Caller, Depends(require_caller)],
+    scope_cm: ReportScopeCM = Depends(get_report_scope),  # noqa: B008
+) -> TxReportResponse:
+    """Report on-chain receipt for a submitted tx back to fwd.
+
+    Trust boundary: caller ownership + tx_hash validation + legal transition guard.
+    On approved path: ReportScopeCM.__aexit__ commits atomically.
+    """
+    async with scope_cm as scope:
+        tx = await _ownership_check(tx_id, caller, scope)
+        await _hash_check(tx_id, body.tx_hash, "tx-receipt", caller.name, scope)
+        await _transition_check(
+            tx_id,
+            tx.status,
+            "submitted",
+            body.outcome,
+            "tx-receipt",
+            caller.name,
+            scope,
+        )
+
+        now = datetime.now(UTC)
+
+        if body.outcome == "mined_success":
+            receipt = _canonical_json(
+                {"block_number": body.block_number, "tx_hash": body.tx_hash, "status": 1}
+            )
+            await scope.tx_repo.update_status(
+                tx_id, "mined", confirmed_at=now, receipt_json=receipt
+            )
+            await scope.nonce_repo.mark_confirmed(tx.wallet, tx.chain, tx.nonce)
+            await scope.audit_repo.append(
+                action="tx-receipt",
+                decision="approved",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id, "tx_hash": body.tx_hash}),
+                decision_reason="receipt_mined_success",
+            )
+            new_status = "mined"
+
+        else:  # mined_reverted
+            receipt = _canonical_json(
+                {"block_number": body.block_number, "tx_hash": body.tx_hash, "status": 0}
+            )
+            await scope.tx_repo.update_status(
+                tx_id, "reverted", confirmed_at=now, receipt_json=receipt
+            )
+            await scope.nonce_repo.mark_confirmed(tx.wallet, tx.chain, tx.nonce)
+            await scope.audit_repo.append(
+                action="tx-receipt",
+                decision="approved",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id, "tx_hash": body.tx_hash}),
+                decision_reason="receipt_mined_reverted",
+            )
+            new_status = "reverted"
+
+    return TxReportResponse(tx_id=tx_id, status=new_status)
