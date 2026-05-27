@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import structlog
+from eth_utils.address import to_checksum_address
 
 from fwd.app.policy_gate import PolicyDenied as PolicyDenied  # re-export for api/sign.py
 from fwd.app.policy_gate import gate, release_rate_after_failure
@@ -254,7 +255,12 @@ async def sign_transaction(
             "type": 2,
             "chainId": request.chain,
             "nonce": nonce,
-            "to": request.to,
+            # eth_account requires an EIP-55 checksummed address and raises
+            # TypeError on a non-checksummed `to` (clients commonly send
+            # lowercase — the AP frontend standard is even lowercase). Normalize
+            # here so any valid-hex casing signs. `to` already passed the
+            # 0x-20-byte-hex validator, so to_checksum_address cannot fail.
+            "to": to_checksum_address(request.to),
             "value": int(request.value_wei),
             "data": request.data,
             "gas": request.gas,
@@ -266,8 +272,14 @@ async def sign_transaction(
         except SealError as exc:
             raise VaultUnavailableError(str(exc)) from exc
 
-    except (VaultUnavailableError, ValueError):
-        # Pre-sign failure: release the reservation.
+    except (VaultUnavailableError, ValueError, TypeError):
+        # Pre-sign failure: release the reservation. TypeError is included
+        # because eth_account raises it (not ValueError) on an invalid tx field
+        # — the v1.1.0a12 live drill found a non-checksummed `to` raised
+        # TypeError, which previously escaped this arm, leaked a 500, AND left
+        # the reserved nonce wedged (a permanent gap). The deeper rule: ANY
+        # error between nonce reservation and a persisted signed tx MUST release
+        # the nonce, never wedge it (Core invariant #11 spirit; partners #14/#19).
         released = await nonce_repo.release_if_unused(request.wallet, request.chain, nonce)
         logger.warning(
             "sign_transaction.pre_sign_failure",

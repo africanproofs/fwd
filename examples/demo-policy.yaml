@@ -1,0 +1,35 @@
+# Demo policy — zero-egress signing demonstration.
+# Caller: demo-client (perm/demo).
+# Wallet: demo-wallet (wc/demo).
+# Contract: placeholder ERC-20 on Coston2 (WC2FLR token address).
+# Method: transfer(address,uint256) from erc20.json.
+# max_value_wei: '0' — no ETH value transfer allowed.
+# Core inv #12: this file is not private config (no real keys); safe in examples/.
+version: 1
+callers:
+  demo-client:
+    policy_path: perm/demo
+wallets:
+  demo-wallet:
+    policy_path: wc/demo
+permissions:
+  perm/demo:
+    contracts:
+      # WC2FLR token on Coston2 (a real ERC-20 at this address)
+      '0x5db27d33e5c0f1375c5b53f0ba5c3fa684c1e0c7':
+        abi: erc20
+        methods:
+          transfer(address,uint256):
+            max_value_wei: '0'
+            arg_predicates: {}
+    wallet_allowlist:
+      - demo-wallet
+    rate:
+      per_hour: 20
+      per_day: 100
+wallet_constraints:
+  wc/demo:
+    max_aggregate_value_wei_per_day: '0'
+    rate:
+      per_hour: 20
+      per_day: 100

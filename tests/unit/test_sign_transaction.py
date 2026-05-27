@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from eth_utils import to_checksum_address
 
 from fwd.app.sign_transaction import (
     NonceNotInitialized,
@@ -240,6 +241,42 @@ async def test_vault_failure_releases_nonce() -> None:
     ):
         await sign_transaction(_request(), signer, _tx_repo(), nonce_repo, **_policy_kwargs())
     nonce_repo.release_if_unused.assert_awaited_once_with("test-wallet", 114, 3)
+
+
+# ---------------------------------------------------------------------------
+# Tests: v1.1.0a12 live-drill fixes (checksum `to`; TypeError releases nonce)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_to_address_checksummed_before_sign() -> None:
+    """Live-drill regression: a lowercase `to` must be EIP-55 checksummed before
+    signing — eth_account raises TypeError on a non-checksummed address."""
+    lower_to = "0x" + "ab" * 20  # valid hex, lowercase
+    signer = _signer()
+    with patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())):
+        await sign_transaction(
+            _request(to=lower_to), signer, _tx_repo(), _nonce_repo(), **_policy_kwargs()
+        )
+    signer.sign_transaction.assert_awaited_once()
+    tx_dict = signer.sign_transaction.call_args.args[1]
+    assert tx_dict["to"] == to_checksum_address(lower_to)
+
+
+@pytest.mark.asyncio
+async def test_sign_typeerror_releases_nonce() -> None:
+    """Live-drill class fix: eth_account raises TypeError (not ValueError) on a
+    bad tx field; the pre-sign arm MUST catch it and release the reserved nonce,
+    else a permanent nonce-wedge (Core #11 spirit; partners #14/#19)."""
+    nonce_repo = _nonce_repo(nonce=5)
+    signer = _signer()
+    signer.sign_transaction = AsyncMock(side_effect=TypeError("invalid fields"))
+    with (
+        patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(TypeError),
+    ):
+        await sign_transaction(_request(), signer, _tx_repo(), nonce_repo, **_policy_kwargs())
+    nonce_repo.release_if_unused.assert_awaited_once_with("test-wallet", 114, 5)
 
 
 # ---------------------------------------------------------------------------

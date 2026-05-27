@@ -1,0 +1,5 @@
+demo-state.db*
+fwd-demo.log
+*.db
+*.db-shm
+*.db-wal
