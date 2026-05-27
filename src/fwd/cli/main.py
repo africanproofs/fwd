@@ -14,6 +14,7 @@ from fwd.cli.audit import app as audit_app
 from fwd.cli.callers import app as callers_app
 from fwd.cli.fsp import app as fsp_app
 from fwd.cli.master import app as master_app
+from fwd.cli.nonce import app as nonce_app
 from fwd.cli.wallets import app as wallets_app
 from fwd.version import __version__
 
@@ -28,6 +29,7 @@ app.add_typer(callers_app, name="callers")
 app.add_typer(audit_app, name="audit")
 app.add_typer(master_app, name="master")
 app.add_typer(fsp_app, name="fsp")
+app.add_typer(nonce_app, name="nonce")
 
 
 @app.command()

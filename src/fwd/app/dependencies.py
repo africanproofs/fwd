@@ -19,11 +19,15 @@ from dataclasses import dataclass
 
 from fwd.app.wallet_create import VaultUnavailableError
 from fwd.infra.audit_repo import AuditRepo
+from fwd.infra.audit_repo import _canonical_json as _canonical_json  # re-export for api/
 from fwd.infra.caller_repo import Caller as Caller  # re-export for api/caller_auth.py
 from fwd.infra.caller_repo import CallerRepo
 from fwd.infra.db import session_scope
 from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.nonce_repo import NonceRepo
+from fwd.infra.nonce_repo import (
+    NonceWalletNotFoundError as NonceWalletNotFoundError,  # re-export for api/
+)
 from fwd.infra.policy_loader import policy_path_exists as policy_path_exists  # re-export for api/
 from fwd.infra.rate_repo import RateRepo
 from fwd.infra.rpc import RpcManager
@@ -240,14 +244,15 @@ class AdminScope:
     """Bundle of components built atop a single session for admin operations.
 
     Mirrors RequestScope but omits RpcManager (admin actions don't touch chain).
-    Provides signer + caller_repo + audit_repo on ONE shared session so that
-    admin-action mutations and the D16 audit row commit atomically under one
-    BEGIN IMMEDIATE (per AdminScopeCM below).
+    Provides signer + caller_repo + audit_repo + nonce_repo on ONE shared session
+    so that admin-action mutations and the D16 audit row commit atomically under
+    one BEGIN IMMEDIATE (per AdminScopeCM below).
     """
 
     signer: EnvelopeSigner
     caller_repo: CallerRepo
     audit_repo: AuditRepo
+    nonce_repo: NonceRepo
 
 
 class AdminScopeCM:
@@ -274,6 +279,7 @@ class AdminScopeCM:
             signer=EnvelopeSigner(self._vault_entered, wallet_repo),
             caller_repo=CallerRepo(self._session),
             audit_repo=AuditRepo(self._session),
+            nonce_repo=NonceRepo(self._session),
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]

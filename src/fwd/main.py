@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 from fwd.api.callers import router as callers_router
 from fwd.api.health import router as health_router
+from fwd.api.nonce import router as nonce_router
 from fwd.api.sign import router as sign_router
 from fwd.api.sign_fsp_message import router as sign_fsp_router
 from fwd.api.transactions import router as transactions_router
@@ -356,6 +357,7 @@ app = FastAPI(
 
 app.include_router(health_router)
 app.include_router(wallets_router)
+app.include_router(nonce_router)
 app.include_router(sign_router)
 app.include_router(sign_fsp_router)
 app.include_router(callers_router)

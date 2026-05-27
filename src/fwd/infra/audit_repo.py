@@ -116,6 +116,7 @@ _VALID_ACTIONS = frozenset(
         "policy-load",
         "audit-verify-failure",
         "fsp-sign-message",
+        "nonce-init",
     }
 )
 
