@@ -30,8 +30,21 @@ services:
       # Defaults in src/fwd/settings.py match these; set here for clarity.
       FWD_POLICY_PATH: /etc/fwd/policy.yaml
       FWD_ABIS_DIR: /app/config/abis
-    ports:
-      - "127.0.0.1:8080:8080"
+    # NO host port. The `fwd-callers` network is `internal: true` (see below),
+    # which removes the network's gateway — and with it host→container port
+    # publishing (verified v1.1.0a15: a `ports:` mapping is silently ineffective;
+    # `docker port fwd` is empty; host curl → connection refused). This was an
+    # a11 doctrine error ("published ports still work") that the a14 production
+    # cutover surfaced. Consequences + access pattern:
+    #   • CLIENTS (clif, …) reach fwd intra-network at `http://fwd:8080` — they
+    #     attach to `fwd-callers` (and a normal bridge of their own for egress).
+    #   • ADMIN ops (clifwd nonce-init / callers / nonce-sync / nonce/holes,
+    #     healthchecks) run INSIDE the container: `docker exec fwd clifwd <cmd>`
+    #     (localhost:8080 inside the container is the daemon; FWD_ADMIN_KEY is in
+    #     the container env via env_file).
+    #   • If host-port access is ever required, use an override compose that drops
+    #     `internal: true` AND blocks the container's egress at the host firewall
+    #     — do not silently re-add a `ports:` line under internal:true.
     volumes:
       - fwd-state:/data
       # Phase 7: operator-controlled policy.yaml (Core invariant #12 —
@@ -77,9 +90,11 @@ networks:
   # cannot reach the internet. This is the network-level enforcement of the
   # v1.1.0a9 zero-egress architecture (a code-level grep already shows no RPC/httpx
   # in the daemon): fwd
-  # signs and never broadcasts, so it needs no egress. Published ports
-  # (127.0.0.1:8080) still work — DNAT to a published port is independent of the
-  # container's (absent) egress route.
+  # signs and never broadcasts, so it needs no egress. NOTE (corrected v1.1.0a15):
+  # `internal: true` ALSO removes host→container port publishing — there is NO
+  # host port; admin runs via `docker exec fwd clifwd …` (see the fwd service's
+  # no-host-port comment above). The earlier a11 claim that published ports still
+  # work was wrong and was surfaced by the a14 production cutover.
   #
   # CLIENTS (clif, etc.) are DUAL-HOMED: they attach to `fwd-callers` to reach
   # `fwd:8080`, AND to a normal (non-internal) bridge of their own for their
