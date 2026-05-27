@@ -69,8 +69,25 @@ services:
     restart: unless-stopped
 
 networks:
+  # fwd attaches to THIS network only. `internal: true` gives the network no
+  # gateway to the host's external network → the fwd container has NO route to
+  # the internet. Verified (v1.1.0a11): a container on an `internal: true` bridge
+  # cannot resolve/connect to `flare-api.flare.network:443` (gaierror / no route),
+  # while the same image on a normal bridge connects — so fwd, attached only here,
+  # cannot reach the internet. This is the network-level enforcement of the
+  # v1.1.0a9 zero-egress architecture (a code-level grep already shows no RPC/httpx
+  # in the daemon): fwd
+  # signs and never broadcasts, so it needs no egress. Published ports
+  # (127.0.0.1:8080) still work — DNAT to a published port is independent of the
+  # container's (absent) egress route.
+  #
+  # CLIENTS (clif, etc.) are DUAL-HOMED: they attach to `fwd-callers` to reach
+  # `fwd:8080`, AND to a normal (non-internal) bridge of their own for their
+  # internet/RPC egress (they broadcast the signed tx fwd returns). A client's
+  # own compose declares both networks; fwd's compose declares only this one.
   fwd-callers:
     driver: bridge
+    internal: true
 
 volumes:
   fwd-state:
