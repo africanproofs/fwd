@@ -825,6 +825,47 @@ Neither type relaxes Core invariant #18 — each *narrows* it by forcing reconci
 
 **When to revisit.** When AP registers an FSP signing-policy entity on a target network (Coston2 or, more consequentially, Flare/Songbird mainnet — a separate, larger operator decision): a follow-up bounded reconciliation lands the on-chain-acceptance clause (the F2 text), per the same D17 ship-type, no re-authorization needed.
 
+## D20. Zero egress — fwd is a sign-only signer; clients broadcast (constitutional amendment)
+
+**Decision (operator-directed + operator-authorized 2026-05-27).** fwd makes **no
+outbound network connection at all.** It signs ABI-decoded EVM transactions and FSP
+messages, allocates nonces, enforces policy, keeps the audit log — but never
+broadcasts and never calls an RPC. Each **client** fetches gas/fees, broadcasts the
+signed tx, polls the receipt, and reports the outcome back. Shipped a8 (nonce-init)
+→ a9 (sign-only excision: `rpc.py`/receipt-watcher/nonce-reconcile/wallet-balances
+deleted; `sign_and_send`→`sign_transaction`; `/v1/sign-and-send`→`/v1/sign-transaction`)
+→ a10 (report-back) → a11 (network lockdown `internal: true`) → a13
+(replacement/reclaim/admin nonce-sync). Proven on real Coston2 (a12 funded drill,
+tx `0x14440b…95cbd`, block 31,028,196).
+
+**Constitutional-amendment ship (D17 — operator-authorized, never a Reviewer
+self-grant).** Reconciles Core #3 (endpoint rename + no-broadcast clarifier), #4
+(local nonce reservation only; client-fed seed/reconcile; no startup RPC reconcile),
+#11 (client-triggered replacement; no receipt watcher), #14 (validation boundary →
+client↔fwd↔chain integration; a12 = canonical instance), and "What FWD IS NOT"
+("Not a broadcaster"; "No network egress at all") to the shipped a9–a13 code. Full
+prepared proposal: `docs/zero-egress-D20-amendment-DRAFT.md`.
+
+**Why (the two answers that fixed the shape).** (1) The whole stack must make zero
+internet calls — a compromised fwd then has no channel to exfiltrate keys (threat-
+model A4 network-exfil channel eliminated). (2) The only RPC is public internet, so
+broadcasting cannot stay inside the stack and moves to clients. Nonce *allocation*
+stays in fwd (pure-local SQLite reservation), preserving the single-coherence-
+boundary property across many clients with zero fwd egress.
+
+**Reclaim mechanic (open question, decided on the operator's behalf):** **same-intent
+replacement + operator alarm — never cross-intent auto-reissue.** An orphaned
+reservation is re-driven only for its exact recorded intent (`sign-replacement`) or
+surfaced as an unresolved hole (`GET /v1/admin/nonce/holes`).
+
+**Rejected alternatives:** a keyless egress *relay* sidecar; a LAN-only network lock
+— both moot once "whole-stack zero egress" + "only public internet" were chosen.
+
+**Consumer:** `clif` migrated to the sign-only API (v0.5.2 — signs via fwd,
+broadcasts + reports back itself) + reward-Merkle root/proof verification (v0.5.1).
+**New operational risk:** orphaned nonce reservation; mitigated as above. **Pending:**
+the production cutover (live claim/FSP through migrated clif) remains operator-gated.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

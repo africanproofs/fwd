@@ -101,6 +101,17 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 ### A4. `fwd` process itself is compromised (bug or supply chain)
 
+> **v1.1.0a9/a11 zero-egress update (D20):** the **network-exfil channel is
+> eliminated.** fwd now makes no outbound connection (no RPC/`httpx` client in the
+> daemon; the `internal: true` compose network gives the container no internet
+> route). A compromised `fwd` can still sign with recovered keys *during* the
+> compromise (and an attacker with host access could still copy ciphertext +
+> master), but it **cannot phone home / exfiltrate keys over the network** from the
+> fwd process itself — the "Exfiltrate the plaintext privkeys offline" item below
+> now requires separate host-level egress the attacker must obtain elsewhere, not a
+> capability fwd hands them. The text below is the pre-egress-removal analysis,
+> retained as honest history (Core invariant #18).
+
 **How.** Bug in `fwd`'s policy engine or signing path, or malicious dependency, lets an attacker execute code in the running `fwd` process.
 
 **What the attacker gets.** Under Path 2 (v0.1.2 architecture), this is materially worse than the originally-intended design. A compromised `fwd` can:
