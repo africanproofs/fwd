@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from fwd.app.policy_gate import PolicyDenied, gate, release_rate_after_failure
-from fwd.app.sign_and_send import SignAndSendRequest
+from fwd.app.sign_transaction import SignTransactionRequest
 from fwd.domain.policy import MethodRule, Policy
 from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.caller_repo import Caller
@@ -133,14 +133,17 @@ def _transfer_calldata(amount: int = 100) -> str:
     return "0x" + raw.hex()
 
 
-def _make_request(value_wei: str = "0") -> SignAndSendRequest:
-    return SignAndSendRequest(
+def _make_request(value_wei: str = "0") -> SignTransactionRequest:
+    return SignTransactionRequest(
         wallet=WALLET_NAME,
         caller=CALLER_NAME,
         chain=114,
         to=ERC20_CONTRACT,
         value_wei=value_wei,
         data=_transfer_calldata(),
+        gas=21_000,
+        max_fee_per_gas=3_000_000_000,
+        max_priority_fee_per_gas=1_000_000_000,
     )
 
 

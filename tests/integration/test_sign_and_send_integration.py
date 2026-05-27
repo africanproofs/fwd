@@ -1,32 +1,30 @@
-"""End-to-end sign-and-send: real SealedMaster + mock RPC (v1.0.0a1).
+"""End-to-end sign-transaction: real SealedMaster, NO RPC (v1.1.0a9 zero-egress).
 
-The test mocks only the RPC layer; the SealedMaster round-trip (encrypt at
-wallet creation, decrypt at sign) goes through a real local AESGCM operation.
-
-Verifies:
+fwd is now sign-only. This test verifies:
 - Wallet creation (encrypt) lands a ciphertext in SQLite.
-- sign_and_send decrypts via real SealedMaster, signs in-process, broadcasts to
-  the mock RPC.
-- The signed tx recovers to the wallet's address.
-- A transaction row is persisted (tx_id returned in result).
-- GET /v1/transactions/{tx_id} (via repo) returns the expected row shape.
+- sign_transaction decrypts via real SealedMaster, signs in-process,
+  returns signed_raw_tx (hex) for the client to broadcast.
+- The signed tx recovers to the wallet's address (eth_account sanity).
+- A transaction row is persisted with status="pending" (not "submitted").
+- tx_id is a valid UUIDv7.
+- No RPC is called anywhere in the path.
+
+Previously: mock-RPC broadcast was tested here; removed at v1.1.0a9.
 """
 
 from __future__ import annotations
 
-import json as _json
 import os
 import uuid
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import eth_abi
-import httpx
 import pytest
 from eth_account import Account
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from fwd import settings as settings_mod
-from fwd.app.sign_and_send import SignAndSendRequest, sign_and_send
+from fwd.app.sign_transaction import SignTransactionRequest, sign_transaction
 from fwd.domain.policy import Policy
 from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.audit_repo import AuditRepo, audit_metadata
@@ -35,7 +33,6 @@ from fwd.infra.envelope_signer import EnvelopeSigner
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonces_metadata
 from fwd.infra.rate_repo import RateRepo, rate_metadata
-from fwd.infra.rpc import RpcClient
 from fwd.infra.sealed_master import SealedMaster
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.transaction_repo import metadata as tx_metadata
@@ -48,6 +45,7 @@ _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 _ERC20_CONTRACT = "0x" + "11" * 20
 _TRANSFER_SELECTOR = "0xa9059cbb"
 _RECIPIENT = "0x" + "22" * 20
+_CHAIN_ID = 114
 
 
 def _transfer_calldata(to: str = _RECIPIENT, amount: int = 0) -> str:
@@ -90,61 +88,8 @@ def _make_integ_policy(wallet_name: str, caller_name: str) -> Policy:
     )
 
 
-def _mock_rpc_handler(chain_id: int = 114, nonce: int = 0):  # type: ignore[no-untyped-def]
-    captured: dict[str, str] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = request.read()
-        rpc_call = _json.loads(body)
-        method = rpc_call["method"]
-        if method == "eth_chainId":
-            return httpx.Response(
-                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(chain_id)}
-            )
-        if method == "eth_getTransactionCount":
-            return httpx.Response(
-                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(nonce)}
-            )
-        if method == "eth_feeHistory":
-            return httpx.Response(
-                200,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": rpc_call["id"],
-                    "result": {
-                        "baseFeePerGas": [hex(1_000_000_000)] * 6,
-                        "gasUsedRatio": [0.5] * 5,
-                    },
-                },
-            )
-        if method == "eth_estimateGas":
-            return httpx.Response(
-                200, json={"jsonrpc": "2.0", "id": rpc_call["id"], "result": hex(21000)}
-            )
-        if method == "eth_sendRawTransaction":
-            captured["raw_tx_hex"] = rpc_call["params"][0]
-            return httpx.Response(
-                200,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": rpc_call["id"],
-                    "result": "0x" + "ab" * 32,
-                },
-            )
-        return httpx.Response(
-            500,
-            json={
-                "jsonrpc": "2.0",
-                "id": rpc_call["id"],
-                "error": {"code": -32601, "message": "not handled"},
-            },
-        )
-
-    return handler, captured
-
-
 @pytest.mark.asyncio
-async def test_sign_and_send_real_master_mock_rpc(
+async def test_sign_transaction_real_master_no_rpc(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Set up a temporary 0600 master key file.
@@ -166,9 +111,6 @@ async def test_sign_and_send_real_master_mock_rpc(
     # Load the real ABI registry.
     registry = AbiRegistry.load(_ABIS_DIR)
 
-    handler, captured = _mock_rpc_handler(chain_id=114, nonce=0)
-    mock_http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
     async with SealedMaster() as master, AsyncSession(engine) as session:
         repo = WalletRepo(session)
         signer = EnvelopeSigner(master, repo)
@@ -177,25 +119,16 @@ async def test_sign_and_send_real_master_mock_rpc(
         rate_repo = RateRepo(session)
         audit_repo = AuditRepo(session)
 
-        # 1. Create a wallet against real SealedMaster.
+        # 1. Create a wallet via real SealedMaster.
         wallet = await signer.create_wallet(name="integ-sign-test", policy_path="perm/integ")
         await session.commit()
 
-        # 2. Build policy + RpcClient using the mock transport.
-        policy = _make_integ_policy("integ-sign-test", "integration-test-caller")
-        rpc = RpcClient(114, "http://mock-rpc", mock_http)
+        # 2. Seed the nonce manually (zero-egress: fwd cannot call the chain).
+        await nonce_repo.init_for_wallet("integ-sign-test", _CHAIN_ID, 0)
+        await session.commit()
 
-        # 3. sign_and_send with real policy gate (v0.5.0a6). Uses ERC-20 calldata.
-        request = SignAndSendRequest(
-            wallet="integ-sign-test",
-            caller="integration-test-caller",
-            chain=114,
-            to=_ERC20_CONTRACT,
-            value_wei="0",
-            data=_transfer_calldata(),
-            gas=21000,
-        )
-        # Build a Caller object for the policy gate (mirrors what require_caller returns).
+        # 3. Build policy + Caller.
+        policy = _make_integ_policy("integ-sign-test", "integration-test-caller")
         from datetime import UTC, datetime
 
         integ_caller = Caller(
@@ -206,10 +139,22 @@ async def test_sign_and_send_real_master_mock_rpc(
             created_at=datetime.now(UTC),
             revoked_at=None,
         )
-        result = await sign_and_send(
+
+        # 4. sign_transaction — no RPC, client-supplied gas + fee params.
+        request = SignTransactionRequest(
+            wallet="integ-sign-test",
+            caller="integration-test-caller",
+            chain=_CHAIN_ID,
+            to=_ERC20_CONTRACT,
+            value_wei="0",
+            data=_transfer_calldata(),
+            gas=21_000,
+            max_fee_per_gas=3_000_000_000,
+            max_priority_fee_per_gas=1_000_000_000,
+        )
+        result = await sign_transaction(
             request,
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=integ_caller,
@@ -220,33 +165,32 @@ async def test_sign_and_send_real_master_mock_rpc(
             audit_repo=audit_repo,
         )
 
-        assert result.hash == "0x" + "ab" * 32
         assert result.nonce == 0
-        assert "raw_tx_hex" in captured
+        assert result.hash.startswith("0x")
+        assert result.signed_raw_tx.startswith("0x")
 
-        # 4. Verify tx_id is a valid UUIDv7.
+        # 5. Verify tx_id is a valid UUIDv7.
         assert len(result.tx_id) == 36
         assert uuid.UUID(result.tx_id).version == 7
 
-        # 5. Round-trip: decode the signed raw tx, recover sender, must match wallet.address.
-        raw_bytes = bytes.fromhex(captured["raw_tx_hex"][2:])
+        # 6. Round-trip: decode the signed raw tx, recover sender, must match wallet.address.
+        raw_bytes = bytes.fromhex(result.signed_raw_tx[2:])
         recovered = Account.recover_transaction(raw_bytes)
         assert recovered.lower() == wallet.address.lower()
 
-        # 6. Verify the transaction row was persisted.
+        # 7. Verify the transaction row was persisted with status="pending".
         await session.commit()
         tx = await tx_repo.get_by_id(result.tx_id)
         assert tx is not None
-        assert tx.status == "submitted"
+        assert tx.status == "pending"      # NOT "submitted" — zero-egress
         assert tx.wallet == "integ-sign-test"
         assert tx.caller == "integration-test-caller"
-        assert tx.chain == 114
+        assert tx.chain == _CHAIN_ID
 
-        # 7. Verify the transaction_hash row was persisted.
+        # 8. Verify the transaction_hash row was persisted.
         hashes = await tx_repo.list_hashes_by_tx(result.tx_id)
         assert len(hashes) == 1
         assert hashes[0].sequence_num == 1
-        assert hashes[0].hash_hex == "0x" + "ab" * 32
+        assert hashes[0].hash_hex == result.hash
 
-    await mock_http.aclose()
     await engine.dispose()

@@ -1,4 +1,4 @@
-"""Tests for D14 idempotency-replay path in sign_and_send.
+"""Tests for D14 idempotency-replay path in sign_transaction.
 
 App-layer. Real tmp-sqlite (audit+rate+tx+nonce); signer and rpc are
 AsyncMock. Uses real policy+registry for the first (normal) call; the
@@ -10,14 +10,14 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import eth_abi
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from fwd.app.sign_and_send import SignAndSendRequest, SignAndSendResult, sign_and_send
+from fwd.app.sign_transaction import SignTransactionRequest, SignTransactionResult, sign_transaction
 from fwd.domain.policy import Policy
 from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
@@ -142,36 +142,34 @@ def _transfer_calldata(amount: int = 100) -> str:
 def _make_request(
     idempotency_key: str | None = None,
     caller: str = CALLER_NAME,
-) -> SignAndSendRequest:
-    return SignAndSendRequest(
+) -> SignTransactionRequest:
+    return SignTransactionRequest(
         wallet=WALLET_NAME,
         caller=caller,
         chain=CHAIN_ID,
         to=ERC20_CONTRACT,
         value_wei="0",
         data=_transfer_calldata(),
-        gas=21000,
+        gas=21_000,
+        max_fee_per_gas=3_000_000_000,
+        max_priority_fee_per_gas=1_000_000_000,
         idempotency_key=idempotency_key,
     )
 
 
 def _mock_signer(address: str = WALLET_ADDR) -> AsyncMock:
+    from fwd.domain.signer import SignedTransaction
+
     signer = AsyncMock()
     signer.address.return_value = address
-    signed = MagicMock()
-    signed.raw_transaction = bytes(32)
-    signer.sign_transaction.return_value = signed
+    signer.sign_transaction.return_value = SignedTransaction(
+        raw_transaction=bytes(32),
+        hash=bytes(32),
+        r=1,
+        s=2,
+        v=27,
+    )
     return signer
-
-
-def _mock_rpc(tx_hash: str = "0x" + "ab" * 32) -> AsyncMock:
-    rpc = AsyncMock()
-    rpc.verify_chain_id.return_value = None
-    rpc.fee_history.return_value = {"baseFeePerGas": ["0x1"]}
-    rpc.estimate_gas.return_value = 21000
-    rpc.transaction_count.return_value = 0
-    rpc.send_raw_transaction.return_value = tx_hash
-    return rpc
 
 
 async def _sign(
@@ -180,18 +178,19 @@ async def _sign(
     idempotency_key: str | None = None,
     caller_name: str = CALLER_NAME,
     policy: Policy | None = None,
-    rpc: AsyncMock | None = None,
-) -> SignAndSendResult:
+) -> SignTransactionResult:
     if policy is None:
         policy = _make_policy()
-    if rpc is None:
-        rpc = _mock_rpc()
-    return await sign_and_send(
+    # Ensure a nonce row exists for (WALLET_NAME, CHAIN_ID) — idempotent.
+    # In sign_transaction (zero-egress) fwd cannot seed from chain; the row
+    # must be pre-seeded by the operator (POST /v1/admin/nonce-init).
+    nonce_repo = NonceRepo(session)
+    await nonce_repo.init_for_wallet(WALLET_NAME, CHAIN_ID, 0)
+    return await sign_transaction(
         _make_request(idempotency_key=idempotency_key, caller=caller_name),
         _mock_signer(),
-        rpc,
         TransactionRepo(session),
-        NonceRepo(session),
+        nonce_repo,
         caller=_make_caller(name=caller_name),
         wallet=_make_wallet(),
         policy=policy,
@@ -236,17 +235,14 @@ async def test_replay_returns_same_tx_id_and_hash(
     registry: AbiRegistry,
 ) -> None:
     """Replay with same caller+key returns the cached tx_id and hash."""
-    rpc1 = _mock_rpc(tx_hash="0x" + "aa" * 32)
-    first = await _sign(session, registry, idempotency_key="key-replay", rpc=rpc1)
+    first = await _sign(session, registry, idempotency_key="key-replay")
     await session.commit()  # flush so next read sees the row
 
-    rpc2 = _mock_rpc(tx_hash="0x" + "bb" * 32)  # different hash — should NOT be used
-    replay = await _sign(session, registry, idempotency_key="key-replay", rpc=rpc2)
+    replay = await _sign(session, registry, idempotency_key="key-replay")
 
     assert replay.tx_id == first.tx_id
-    assert replay.hash == first.hash  # cached hash, not rpc2's hash
-    # rpc2.send_raw_transaction was NOT called (no new broadcast on replay)
-    rpc2.send_raw_transaction.assert_not_awaited()
+    assert replay.hash == first.hash  # cached hash, not a fresh signing
+    # No broadcast occurs — zero-egress; no RPC to assert against.
     await session.rollback()
 
 
@@ -282,7 +278,7 @@ async def test_replay_writes_duplicate_audit_row(
 
     await _sign(session, registry, idempotency_key="key-dup-audit")
 
-    dup_rows = await _audit_rows_by_action(session, "sign-and-send-duplicate")
+    dup_rows = await _audit_rows_by_action(session, "sign-transaction-duplicate")
     assert len(dup_rows) == 1
     r = dup_rows[0]
     assert r["decision"] == "approved"
@@ -334,9 +330,8 @@ async def test_different_caller_same_key_is_not_replay(
     registry: AbiRegistry,
 ) -> None:
     """Same idempotency_key from a DIFFERENT caller is a distinct, normal call."""
-    rpc1 = _mock_rpc(tx_hash="0x" + "11" * 32)
     first = await _sign(
-        session, registry, idempotency_key="shared-key", rpc=rpc1, caller_name=CALLER_NAME
+        session, registry, idempotency_key="shared-key", caller_name=CALLER_NAME
     )
     await session.commit()
 
@@ -367,20 +362,20 @@ async def test_different_caller_same_key_is_not_replay(
         }
     )
 
-    rpc2 = _mock_rpc(tx_hash="0x" + "22" * 32)
-    second = await sign_and_send(
-        SignAndSendRequest(
+    second = await sign_transaction(
+        SignTransactionRequest(
             wallet=WALLET_NAME,
             caller=other_caller,
             chain=CHAIN_ID,
             to=ERC20_CONTRACT,
             value_wei="0",
             data=_transfer_calldata(),
-            gas=21000,
+            gas=21_000,
+            max_fee_per_gas=3_000_000_000,
+            max_priority_fee_per_gas=1_000_000_000,
             idempotency_key="shared-key",
         ),
         _mock_signer(),
-        rpc2,
         TransactionRepo(session),
         NonceRepo(session),
         caller=_make_caller(name=other_caller),
@@ -391,9 +386,9 @@ async def test_different_caller_same_key_is_not_replay(
         audit_repo=AuditRepo(session),
     )
 
-    # Different caller → new tx_id, rpc2 was called.
+    # Different caller → new tx_id, no broadcast (zero-egress).
     assert second.tx_id != first.tx_id
-    rpc2.send_raw_transaction.assert_awaited_once()
+    assert second.signed_raw_tx.startswith("0x")
     await session.rollback()
 
 
@@ -424,16 +419,16 @@ async def test_get_by_idempotency_key_miss_returns_none(
 
 
 @pytest.mark.asyncio
-async def test_find_sign_and_send_seq_returns_seq(
+async def test_find_sign_transaction_seq_returns_seq(
     session: AsyncSession,
     registry: AbiRegistry,
 ) -> None:
-    """find_sign_and_send_seq returns the approved row's seq for a known tx_id."""
+    """find_sign_transaction_seq returns the approved row's seq for a known tx_id."""
     result = await _sign(session, registry, idempotency_key="key-seq-test")
     await session.commit()
 
     audit_repo = AuditRepo(session)
-    seq = await audit_repo.find_sign_and_send_seq(result.tx_id)
+    seq = await audit_repo.find_sign_transaction_seq(result.tx_id)
     assert seq is not None
     assert isinstance(seq, int)
     assert seq >= 1
@@ -441,8 +436,8 @@ async def test_find_sign_and_send_seq_returns_seq(
 
 
 @pytest.mark.asyncio
-async def test_find_sign_and_send_seq_none_for_unknown(session: AsyncSession) -> None:
-    """find_sign_and_send_seq returns None for an unknown tx_id."""
+async def test_find_sign_transaction_seq_none_for_unknown(session: AsyncSession) -> None:
+    """find_sign_transaction_seq returns None for an unknown tx_id."""
     audit_repo = AuditRepo(session)
-    seq = await audit_repo.find_sign_and_send_seq("nonexistent-tx-id")
+    seq = await audit_repo.find_sign_transaction_seq("nonexistent-tx-id")
     assert seq is None

@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from fwd.app.policy_engine import AllowDecision, DenyDecision, evaluate
-from fwd.app.sign_and_send import SignAndSendRequest
+from fwd.app.sign_transaction import SignTransactionRequest
 from fwd.domain.policy import (
     MethodRule,
     Policy,
@@ -191,16 +191,19 @@ def _make_request(
     value_wei: str = "0",
     wallet: str = WALLET_NAME,
     to: str = ERC20_CONTRACT,
-) -> SignAndSendRequest:
+) -> SignTransactionRequest:
     if data is None:
         data = _transfer_calldata()
-    return SignAndSendRequest(
+    return SignTransactionRequest(
         wallet=wallet,
         caller=CALLER_NAME,
         chain=114,
         to=to,
         value_wei=value_wei,
         data=data,
+        gas=21_000,
+        max_fee_per_gas=3_000_000_000,
+        max_priority_fee_per_gas=1_000_000_000,
     )
 
 

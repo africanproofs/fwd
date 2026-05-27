@@ -2,7 +2,7 @@
 
 Implements the D14 10-step evaluation order for signing requests.
 Takes a loaded Policy, ABI registry, RateRepo, Caller, Wallet, and
-SignAndSendRequest; returns AllowDecision or DenyDecision.
+SignTransactionRequest; returns AllowDecision or DenyDecision.
 
 Default-deny: the ONLY exit that returns Allow is step 10. Every other
 evaluation path returns a DenyDecision. Unexpected exceptions are caught
@@ -22,7 +22,7 @@ from fwd.domain.intent import DecodedIntent, decode_intent
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from fwd.app.sign_and_send import SignAndSendRequest
+    from fwd.app.sign_transaction import SignTransactionRequest
     from fwd.domain.policy import Policy
     from fwd.infra.abi_registry import AbiRegistry
     from fwd.infra.caller_repo import Caller
@@ -50,7 +50,7 @@ async def evaluate(
     *,
     caller: Caller,
     wallet: Wallet,
-    request: SignAndSendRequest,
+    request: SignTransactionRequest,
     policy: Policy,
     registry: AbiRegistry,
     rate_repo: RateRepo,
@@ -80,7 +80,7 @@ async def _evaluate_inner(
     *,
     caller: Caller,
     wallet: Wallet,
-    request: SignAndSendRequest,
+    request: SignTransactionRequest,
     policy: Policy,
     registry: AbiRegistry,
     rate_repo: RateRepo,

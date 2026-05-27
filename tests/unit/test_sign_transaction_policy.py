@@ -1,18 +1,16 @@
-"""Synthetic-attack default-deny matrix for sign_and_send (v0.5.0a6).
+"""Synthetic-attack default-deny matrix for sign_transaction (v1.1.0a9).
 
 App-layer. Real policy_engine + decode_intent + AuditRepo against tmp-sqlite;
-signer and rpc are AsyncMock. All DB metadata (audit + rate + tx + nonce) on
-ONE engine/session.
+signer is AsyncMock. All DB metadata (audit + rate + tx + nonce) on ONE engine/session.
+No RPC object — zero-egress.
 
 For each attack scenario the test asserts:
-  - sign_and_send raises PolicyDenied.
-  - An audit row exists with action="sign-and-send", decision="denied", and
+  - sign_transaction raises PolicyDenied.
+  - An audit row exists with action="sign-transaction", decision="denied", and
     the expected D14 step in decision_reason.
-  - rpc.send_raw_transaction was NOT awaited (default-deny never signs or broadcasts).
 
-Plus one happy-path test: a permitting policy → SignAndSendResult returned,
-rpc.send_raw_transaction WAS awaited, audit row decision="approved" exists with
-outcome containing the tx_id.
+Plus one happy-path test: a permitting policy → SignTransactionResult returned,
+audit row decision="approved" exists with outcome containing the tx_id.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import eth_abi
 import pytest
@@ -28,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from fwd.app.policy_gate import PolicyDenied
-from fwd.app.sign_and_send import SignAndSendRequest, SignAndSendResult, sign_and_send
+from fwd.app.sign_transaction import SignTransactionRequest, SignTransactionResult, sign_transaction
 from fwd.domain.policy import MethodRule, Policy, WalletConstraint
 from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
@@ -193,39 +191,36 @@ def _make_request(
     data: str | None = None,
     wallet: str = WALLET_NAME,
     caller: str = CALLER_NAME,
-) -> SignAndSendRequest:
+) -> SignTransactionRequest:
     if data is None:
         data = _transfer_calldata()
-    return SignAndSendRequest(
+    return SignTransactionRequest(
         wallet=wallet,
         caller=caller,
         chain=CHAIN_ID,
         to=to,
         value_wei=value_wei,
         data=data,
-        gas=21000,
+        gas=21_000,
+        max_fee_per_gas=3_000_000_000,
+        max_priority_fee_per_gas=1_000_000_000,
     )
 
 
 def _mock_signer(address: str = WALLET_ADDR) -> AsyncMock:
     """AsyncMock for EnvelopeSigner: address() + sign_transaction()."""
+    from fwd.domain.signer import SignedTransaction
+
     signer = AsyncMock()
     signer.address.return_value = address
-    signed = MagicMock()
-    signed.raw_transaction = bytes(32)  # 32 zero bytes as dummy raw tx
-    signer.sign_transaction.return_value = signed
+    signer.sign_transaction.return_value = SignedTransaction(
+        raw_transaction=bytes(32),  # 32 zero bytes as dummy raw tx
+        hash=bytes(32),
+        r=1,
+        s=2,
+        v=27,
+    )
     return signer
-
-
-def _mock_rpc(tx_hash: str = "0x" + "ab" * 32) -> AsyncMock:
-    """AsyncMock for RpcClient: verify_chain_id, fee_history, estimate_gas, etc."""
-    rpc = AsyncMock()
-    rpc.verify_chain_id.return_value = None
-    rpc.fee_history.return_value = {"baseFeePerGas": ["0x1"]}
-    rpc.estimate_gas.return_value = 21000
-    rpc.transaction_count.return_value = 0
-    rpc.send_raw_transaction.return_value = tx_hash
-    return rpc
 
 
 async def _get_audit_rows(session: AsyncSession) -> list[dict[str, object]]:
@@ -246,17 +241,15 @@ async def test_attack1_caller_not_in_policy(session: AsyncSession, registry: Abi
     caller = _make_caller(name="unknown-caller")
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(caller="unknown-caller"),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -267,12 +260,11 @@ async def test_attack1_caller_not_in_policy(session: AsyncSession, registry: Abi
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 1
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
     assert len(denied) >= 1
-    assert denied[-1]["action"] == "sign-and-send"
+    assert denied[-1]["action"] == "sign-transaction"
     assert "1" in str(denied[-1]["decision_reason"])
     await session.rollback()
 
@@ -288,17 +280,15 @@ async def test_attack2_caller_policy_path_drift(
     caller = _make_caller(name=CALLER_NAME, policy_path="some-other-path")
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -309,7 +299,6 @@ async def test_attack2_caller_policy_path_drift(
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 1
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -326,7 +315,6 @@ async def test_attack3_contract_not_in_permission(
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
@@ -334,10 +322,9 @@ async def test_attack3_contract_not_in_permission(
 
     other_contract = "0x" + "de" * 20
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(to=other_contract),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -348,7 +335,6 @@ async def test_attack3_contract_not_in_permission(
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 2
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -365,17 +351,15 @@ async def test_attack4_unknown_selector_non_hex_data(
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(data="0xdeadbeef" + "00" * 32),  # unknown selector
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -386,7 +370,6 @@ async def test_attack4_unknown_selector_non_hex_data(
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 3
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -404,7 +387,6 @@ async def test_attack5_method_not_in_policy(session: AsyncSession, registry: Abi
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
@@ -416,10 +398,9 @@ async def test_attack5_method_not_in_policy(session: AsyncSession, registry: Abi
     approve_data = "0x" + bytes.fromhex(approve_selector[2:]).hex() + encoded.hex()
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(data=approve_data),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -430,7 +411,6 @@ async def test_attack5_method_not_in_policy(session: AsyncSession, registry: Abi
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 4
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -445,17 +425,15 @@ async def test_attack6_value_exceeds_max(session: AsyncSession, registry: AbiReg
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(value_wei="9999"),  # > 1000 max
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -466,7 +444,6 @@ async def test_attack6_value_exceeds_max(session: AsyncSession, registry: AbiReg
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 5
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -489,7 +466,6 @@ async def test_attack7_arg_predicate_mismatch(session: AsyncSession, registry: A
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
@@ -498,10 +474,9 @@ async def test_attack7_arg_predicate_mismatch(session: AsyncSession, registry: A
     # Send to a DIFFERENT address → predicate fails.
     wrong_recipient = "0x" + "ff" * 20
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(data=_transfer_calldata(to=wrong_recipient)),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -512,7 +487,6 @@ async def test_attack7_arg_predicate_mismatch(session: AsyncSession, registry: A
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 6
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -530,17 +504,15 @@ async def test_attack8_wallet_not_in_allowlist(
     caller = _make_caller()
     wallet = _make_wallet()  # name = WALLET_NAME
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(),
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -551,7 +523,6 @@ async def test_attack8_wallet_not_in_allowlist(
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 7
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -566,18 +537,18 @@ async def test_attack9_caller_rate_exceeded(session: AsyncSession, registry: Abi
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
+    # Seed the nonce row (zero-egress: fwd cannot call the chain).
+    await nonce_repo.init_for_wallet(WALLET_NAME, CHAIN_ID, 0)
+
     # First call: must succeed (consumes the 1-per-hour slot).
-    # But sign_and_send goes all the way through; we need the full mock chain.
-    result1 = await sign_and_send(
+    result1 = await sign_transaction(
         _make_request(),
         signer,
-        rpc,
         tx_repo,
         nonce_repo,
         caller=caller,
@@ -587,16 +558,14 @@ async def test_attack9_caller_rate_exceeded(session: AsyncSession, registry: Abi
         rate_repo=rate_repo,
         audit_repo=audit_repo,
     )
-    assert isinstance(result1, SignAndSendResult)
+    assert isinstance(result1, SignTransactionResult)
     await session.commit()
 
     # Second call: rate bucket is full → Deny step 8.
-    rpc2 = _mock_rpc()
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(),
             signer,
-            rpc2,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -607,7 +576,6 @@ async def test_attack9_caller_rate_exceeded(session: AsyncSession, registry: Abi
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 8
-    rpc2.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -628,17 +596,15 @@ async def test_attack10_wallet_aggregate_cap_exceeded(
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc()
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
     with pytest.raises(PolicyDenied) as exc_info:
-        await sign_and_send(
+        await sign_transaction(
             _make_request(value_wei="1"),  # 1 > 0 cap
             signer,
-            rpc,
             tx_repo,
             nonce_repo,
             caller=caller,
@@ -649,7 +615,6 @@ async def test_attack10_wallet_aggregate_cap_exceeded(
             audit_repo=audit_repo,
         )
     assert exc_info.value.step == 9
-    rpc.send_raw_transaction.assert_not_awaited()
 
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
@@ -664,22 +629,22 @@ async def test_attack10_wallet_aggregate_cap_exceeded(
 
 @pytest.mark.asyncio
 async def test_happy_path_permitting_policy(session: AsyncSession, registry: AbiRegistry) -> None:
-    """Happy path: permitting policy → SignAndSendResult, broadcast called, audit approved."""
-    tx_hash = "0x" + "fe" * 32
+    """Happy path: permitting policy → SignTransactionResult, signed_raw_tx returned, audit approved."""
     policy = _make_policy()
     caller = _make_caller()
     wallet = _make_wallet()
     signer = _mock_signer()
-    rpc = _mock_rpc(tx_hash=tx_hash)
     tx_repo = TransactionRepo(session)
     nonce_repo = NonceRepo(session)
     rate_repo = RateRepo(session)
     audit_repo = AuditRepo(session)
 
-    result = await sign_and_send(
+    # Seed the nonce row (zero-egress: fwd cannot call the chain).
+    await nonce_repo.init_for_wallet(WALLET_NAME, CHAIN_ID, 0)
+
+    result = await sign_transaction(
         _make_request(),
         signer,
-        rpc,
         tx_repo,
         nonce_repo,
         caller=caller,
@@ -690,17 +655,17 @@ async def test_happy_path_permitting_policy(session: AsyncSession, registry: Abi
         audit_repo=audit_repo,
     )
 
-    assert isinstance(result, SignAndSendResult)
-    assert result.hash == tx_hash
-    rpc.send_raw_transaction.assert_awaited_once()
+    assert isinstance(result, SignTransactionResult)
+    assert result.signed_raw_tx.startswith("0x")
+    assert result.hash.startswith("0x")
 
     rows = await _get_audit_rows(session)
     approved = [r for r in rows if r["decision"] == "approved"]
     assert len(approved) >= 1
     last_approved = approved[-1]
-    assert last_approved["action"] == "sign-and-send"
+    assert last_approved["action"] == "sign-transaction"
     # outcome must contain the tx_id.
     outcome = json.loads(str(last_approved["outcome"]))
     assert outcome["tx_id"] == result.tx_id
-    assert outcome["hash"] == tx_hash
+    assert outcome["hash"] == result.hash
     await session.rollback()

@@ -15,7 +15,7 @@ from fwd.app.policy_engine import AllowDecision, DenyDecision, evaluate
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from fwd.app.sign_and_send import SignAndSendRequest
+    from fwd.app.sign_transaction import SignTransactionRequest
     from fwd.domain.policy import Policy
     from fwd.infra.abi_registry import AbiRegistry
     from fwd.infra.caller_repo import Caller
@@ -36,7 +36,7 @@ async def gate(
     *,
     caller: Caller,
     wallet: Wallet,
-    request: SignAndSendRequest,
+    request: SignTransactionRequest,
     policy: Policy,
     registry: AbiRegistry,
     rate_repo: RateRepo,
@@ -62,7 +62,7 @@ async def release_rate_after_failure(
     allow: AllowDecision,
     caller: Caller,
     wallet: Wallet,
-    request: SignAndSendRequest,
+    request: SignTransactionRequest,
     policy: Policy,
     rate_repo: RateRepo,
     now: datetime,

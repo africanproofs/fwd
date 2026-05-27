@@ -30,7 +30,6 @@ from fwd.infra.nonce_repo import (
 )
 from fwd.infra.policy_loader import policy_path_exists as policy_path_exists  # re-export for api/
 from fwd.infra.rate_repo import RateRepo
-from fwd.infra.rpc import RpcManager
 from fwd.infra.sealed_master import SealedMaster, SealError
 from fwd.infra.transaction_repo import TransactionRepo
 from fwd.infra.wallet_repo import WalletRepo
@@ -55,23 +54,8 @@ class SignerCM:
         await self._vault.__aexit__(exc_type, exc, tb)
 
 
-class RpcManagerCM:
-    """Async context manager. Yields an RpcManager; closes httpx pool on exit."""
-
-    async def __aenter__(self) -> RpcManager:
-        self._mgr = RpcManager()
-        return self._mgr
-
-    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
-        await self._mgr.aclose()
-
-
 def get_signer() -> SignerCM:
     return SignerCM()
-
-
-def get_rpc_manager() -> RpcManagerCM:
-    return RpcManagerCM()
 
 
 class CallerRepoCM:
@@ -179,13 +163,13 @@ def get_wallet_repo() -> WalletRepoCM:
 class RequestScope:
     """Bundle of components built atop a single session — see RequestScopeCM.
 
-    v0.5.0a6 adds rate_repo, audit_repo, wallet_repo so the sign-and-send
+    v0.5.0a6 adds rate_repo, audit_repo, wallet_repo so the sign-transaction
     path shares ONE session for all DB mutations (nonce + tx + rate + audit)
     under the single BEGIN IMMEDIATE per D16 atomicity requirement.
+    v1.1.0a9 removes rpc_mgr (zero-egress: no RPC calls from the daemon).
     """
 
     signer: EnvelopeSigner
-    rpc_mgr: RpcManager
     tx_repo: TransactionRepo
     nonce_repo: NonceRepo
     rate_repo: RateRepo
@@ -198,10 +182,9 @@ class RequestScopeCM:
 
     Opens ONE session_scope and constructs signer + tx_repo + nonce_repo
     + rate_repo + audit_repo + wallet_repo against that shared session.
-    Also opens Vault + RpcManager. Designed for api/sign.py and
-    app/receipt_watcher.py — both flows need all components, and pre-v0.4.5
-    each opened its own session_scope, causing SQLite writer-lock contention
-    under our BEGIN IMMEDIATE event handler.
+    Also opens Vault. Designed for api/sign.py — all flows need all
+    components, and pre-v0.4.5 each opened its own session_scope, causing
+    SQLite writer-lock contention under our BEGIN IMMEDIATE event handler.
 
     Sharing one session means one BEGIN IMMEDIATE per request/tick.
     Reads and writes from all repos cooperate cleanly.
@@ -215,11 +198,9 @@ class RequestScopeCM:
             raise VaultUnavailableError(str(exc)) from exc
         self._session_cm = session_scope()
         self._session = await self._session_cm.__aenter__()
-        self._rpc_mgr = RpcManager()
         wallet_repo = WalletRepo(self._session)
         return RequestScope(
             signer=EnvelopeSigner(self._vault_entered, wallet_repo),
-            rpc_mgr=self._rpc_mgr,
             tx_repo=TransactionRepo(self._session),
             nonce_repo=NonceRepo(self._session),
             rate_repo=RateRepo(self._session),
@@ -228,9 +209,6 @@ class RequestScopeCM:
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
-        # Close RPC manager first (no DB state); then session (commits/rolls
-        # back the shared transaction); then Vault.
-        await self._rpc_mgr.aclose()
         await self._session_cm.__aexit__(exc_type, exc, tb)
         await self._vault.__aexit__(exc_type, exc, tb)
 

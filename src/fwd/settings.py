@@ -30,25 +30,16 @@ class Settings(BaseSettings):
     fwd_policy_path: str = Field(default="/etc/fwd/policy.yaml")
     fwd_abis_dir: str = Field(default="/app/config/abis")
 
-    # RPC URLs (Phase 3c). Defaults match .env.example public Flare endpoints.
-    # In production AP swaps these to ap-ftso-01 / ap-ftso-02 internal RPCs.
-    rpc_url_flare: str = Field(default="https://flare-api.flare.network/ext/C/rpc")
-    rpc_url_songbird: str = Field(default="https://songbird-api.flare.network/ext/C/rpc")
-    rpc_url_coston2: str = Field(default="https://coston2-api.flare.network/ext/C/rpc")
-
     # Admin auth
     fwd_admin_key: str = Field(default="")
 
     # Logging
     fwd_log_level: str = Field(default="INFO")
 
-    # Receipt watcher (v0.4.0a6). Gated by fwd_watcher_disabled so tests can
-    # exercise the rest of the app without the background task running.
-    fwd_watcher_disabled: bool = Field(default=False)
-    fwd_watcher_poll_interval_sec: float = Field(default=2.0, ge=0.1)
-    fwd_watcher_stuck_threshold_sec: float = Field(default=30.0, ge=1.0)
-    fwd_watcher_max_retries: int = Field(default=5, ge=1, le=20)
-    fwd_watcher_tip_multiplier: float = Field(default=1.125, gt=1.0, le=2.0)
+    # Zero-egress sanity caps (v1.1.0a9). Client supplies gas + fees; fwd bounds
+    # them so a compromised/buggy client cannot drain a wallet via fee overspend.
+    fwd_max_gas: int = Field(default=15_000_000, ge=21_000)
+    fwd_max_fee_per_gas: int = Field(default=500_000_000_000, ge=1)  # 500 gwei
 
 
 @lru_cache(maxsize=1)

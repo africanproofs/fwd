@@ -1,17 +1,15 @@
-"""GET /healthz — liveness + sealed-master readiness + RPC reachability.
+"""GET /healthz — liveness + sealed-master readiness.
 
 Reports:
   master: "ok" | "unavailable"   (the sealed master key file passes the
           same gate SealedMaster.__init__ enforces: regular file, mode
           0600, owned by this uid, exactly 32 bytes — a pure stat probe;
           no key material is loaded into the health path)
-  rpc:    "unknown"              (Phase 3 wires real RPC checks)
   fwd:    "ok"                   (the service is responding)
 
 v1.0.0a1: the prior `vault` field (Vault /sys/health probe) is retired
-with the Vault backend — replaced by `master`. The Reviewer added this
-at commit (the v1.0.0a1 canonical prompt scoped docker-compose but not
-this app healthcheck; v0.4.0a5 Reviewer-correction precedent).
+with the Vault backend — replaced by `master`.
+v1.1.0a9: the `rpc` field is retired (zero-egress; no RPC calls from daemon).
 """
 
 from __future__ import annotations
@@ -30,7 +28,6 @@ router = APIRouter()
 
 class HealthResponse(BaseModel):
     master: Literal["ok", "unavailable"]
-    rpc: Literal["ok", "unknown", "unreachable"]
     fwd: Literal["ok"]
 
 
@@ -60,6 +57,5 @@ def _master_status() -> Literal["ok", "unavailable"]:
 async def healthz() -> HealthResponse:
     return HealthResponse(
         master=_master_status(),
-        rpc="unknown",
         fwd="ok",
     )

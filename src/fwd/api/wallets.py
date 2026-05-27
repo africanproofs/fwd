@@ -23,14 +23,11 @@ from pydantic import BaseModel, Field
 from fwd.api.admin_auth import admin_required
 from fwd.app.dependencies import (
     AdminScopeCM,
-    RpcManagerCM,
     WalletRepoCM,
     get_admin_scope,
-    get_rpc_manager,
     get_wallet_repo,
     policy_path_exists,
 )
-from fwd.app.wallet_balances import list_balances
 from fwd.app.wallet_create import (
     VaultUnavailableError,
     WalletCreateRequest,
@@ -147,71 +144,3 @@ async def list_wallets_endpoint(
     )
 
 
-class BalanceEntryModel(BaseModel):
-    """One (wallet, chain) balance reading for the API response."""
-
-    wallet: str
-    address: str
-    chain: int
-    balance_wei: str
-    balance_native: str
-    error: str | None = None
-
-
-class ListBalancesResponse(BaseModel):
-    """GET /v1/admin/wallets/balances response: per-(wallet, chain) entries
-    + per-wallet warnings (e.g. policy contracts not in the contract->chain
-    table; never silently dropped)."""
-
-    balances: list[BalanceEntryModel]
-    warnings: list[str]
-
-
-@router.get(
-    "/v1/admin/wallets/balances",
-    response_model=ListBalancesResponse,
-    dependencies=[admin_required],
-)
-async def list_balances_endpoint(
-    http_request: Request,
-    wallet_repo_cm: Annotated[WalletRepoCM, Depends(get_wallet_repo)],
-    rpc_mgr_cm: Annotated[RpcManagerCM, Depends(get_rpc_manager)],
-    include_all: bool = False,
-    chain: int | None = None,
-) -> ListBalancesResponse:
-    """Per-(wallet, chain) gas balance for fwd-custodied transacting wallets.
-
-    Default scope: wallets reachable from any `permissions` allowlist, on
-    the chains implied by their block(s)' contracts. `include_all=true`
-    returns every DB wallet x ALLOWED_CHAINS (operator scan). `chain`
-    filters to one chain_id (14|19|114). Admin-only (FWD_ADMIN_KEY).
-    Observational; no audit row. v1.1.0a7.
-    """
-    policy = getattr(http_request.app.state, "policy", None)
-    if policy is None:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "policy_not_loaded",
-                "message": "policy not yet loaded; cannot derive per-wallet chains",
-            },
-        )
-    async with wallet_repo_cm as repo, rpc_mgr_cm as rpc_mgr:
-        result = await list_balances(
-            policy, repo, rpc_mgr,
-            include_all=include_all, chain_filter=chain,
-        )
-    return ListBalancesResponse(
-        balances=[
-            BalanceEntryModel(
-                wallet=e.wallet,
-                address=e.address,
-                chain=e.chain,
-                balance_wei=e.balance_wei,
-                balance_native=e.balance_native,
-                error=e.error,
-            )
-            for e in result.balances
-        ],
-        warnings=result.warnings,
-    )

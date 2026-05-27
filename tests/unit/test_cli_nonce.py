@@ -10,13 +10,16 @@ asyncio_mode = "auto" (set in pyproject.toml).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 from typer.testing import CliRunner
 
 from fwd.cli.main import app
+
+if TYPE_CHECKING:
+    import pytest
 
 runner = CliRunner()
 

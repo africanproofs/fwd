@@ -12,9 +12,9 @@ asyncio_mode = "auto" (set in pyproject.toml).
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -26,10 +26,11 @@ from fwd.app.dependencies import AdminScope, get_admin_scope
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonces_metadata
-from fwd.infra.wallet_repo import WalletRepo
 from fwd.infra.wallet_repo import metadata as wallets_metadata
 from fwd.infra.wallet_repo import wallets
 
+if TYPE_CHECKING:
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -137,7 +138,6 @@ class _RealAdminScopeCM:
     async def __aenter__(self) -> AdminScope:
         nonce_repo = NonceRepo(self._session)
         audit_repo = AuditRepo(self._session)
-        wallet_repo = WalletRepo(self._session)
         signer = MagicMock()
         caller_repo = MagicMock()
         self._scope = AdminScope(

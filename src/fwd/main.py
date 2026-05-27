@@ -14,8 +14,6 @@ v0.3.2 adds:
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import ctypes
 import ctypes.util
 import hashlib
@@ -39,7 +37,6 @@ from fwd.api.sign import router as sign_router
 from fwd.api.sign_fsp_message import router as sign_fsp_router
 from fwd.api.transactions import router as transactions_router
 from fwd.api.wallets import router as wallets_router
-from fwd.app.receipt_watcher import WatcherConfig, watch_receipts
 from fwd.settings import get_settings
 from fwd.version import __version__
 
@@ -274,32 +271,9 @@ async def _startup_policy_load(_app: FastAPI) -> None:
     )
 
 
-async def _startup_reconcile() -> None:
-    """Best-effort startup nonce reconciliation.
-
-    Compares DB next_nonce to chain transaction count for each (wallet, chain)
-    and logs drift. Never raises — fwd boots even if RPC is degraded.
-    The receipt watcher (v0.4.0a6) will retry continuously.
-    """
-    from fwd.app.dependencies import RpcManagerCM
-    from fwd.app.nonce_reconcile import reconcile_all
-    from fwd.infra.db import session_scope
-    from fwd.infra.nonce_repo import NonceRepo
-    from fwd.infra.wallet_repo import WalletRepo
-
-    try:
-        async with session_scope() as session, RpcManagerCM() as rpc_mgr:
-            await reconcile_all(NonceRepo(session), WalletRepo(session), rpc_mgr)
-    except Exception as exc:
-        structlog.get_logger(__name__).warning(
-            "lifespan.reconcile_failed",
-            error=str(exc),
-        )
-
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """ASGI lifespan: lock process memory, reconcile nonces, run receipt watcher.
+    """ASGI lifespan: lock process memory + load policy.
 
     Runs when uvicorn boots the app, NOT when pytest imports `fwd.main`
     without context-managing TestClient. This means tests that do
@@ -308,42 +282,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     `FWD_DISABLE_MLOCK=1` will trigger mlockall and fail without
     CAP_IPC_LOCK; gate via env when needed.
 
-    Production: docker-compose.yml grants CAP_IPC_LOCK; FWD_DISABLE_MLOCK
-    is unset; mlockall + reconcile + receipt watcher fire.
-
-    The receipt watcher is gated independently by FWD_WATCHER_DISABLED so
-    integration tests can exercise the rest of the app without the
-    background task polling. On shutdown the watcher task is cancelled
-    and awaited; CancelledError is absorbed here.
+    v1.1.0a9: receipt watcher, nonce reconcile, and RPC egress removed.
     """
     if os.environ.get("FWD_DISABLE_MLOCK") != "1":
         _mlockall()
-        await _startup_reconcile()
         await _startup_policy_load(_app)
     elif os.environ.get("FWD_POLICY_PATH"):
         await _startup_policy_load(_app)
 
-    watcher_task: asyncio.Task[None] | None = None
-    s = get_settings()
-    if not s.fwd_watcher_disabled:
-        watcher_task = asyncio.create_task(
-            watch_receipts(
-                WatcherConfig(
-                    poll_interval_sec=s.fwd_watcher_poll_interval_sec,
-                    stuck_threshold_sec=s.fwd_watcher_stuck_threshold_sec,
-                    max_retries=s.fwd_watcher_max_retries,
-                    tip_multiplier=s.fwd_watcher_tip_multiplier,
-                    enabled=True,
-                )
-            )
-        )
-
     yield
-
-    if watcher_task is not None:
-        watcher_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher_task
 
 
 app = FastAPI(

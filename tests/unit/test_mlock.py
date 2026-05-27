@@ -23,7 +23,6 @@ async def test_lifespan_calls_mlockall_when_not_disabled(
     monkeypatch.delenv("FWD_POLICY_PATH", raising=False)
     with (
         patch("fwd.main._mlockall") as mock_mlock,
-        patch("fwd.main._startup_reconcile"),
         patch("fwd.main._startup_policy_load"),
     ):
         from fwd.main import lifespan
@@ -61,7 +60,6 @@ async def test_lifespan_skip_only_on_exact_match(
         monkeypatch.delenv("FWD_POLICY_PATH", raising=False)
         with (
             patch("fwd.main._mlockall") as mock_mlock,
-            patch("fwd.main._startup_reconcile"),
             patch("fwd.main._startup_policy_load"),
         ):
             from fwd.main import lifespan
