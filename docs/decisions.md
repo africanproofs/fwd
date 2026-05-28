@@ -93,7 +93,7 @@ the v0.4.3 honest-history precedent — do not delete).
 
 ## D3. State: SQLite + Litestream
 
-**Decision.** `fwd` persists state (nonces, transactions, audit log, callers, wallets) in a single SQLite file in WAL mode, replicated continuously to Scaleway Object Storage by a Litestream sidecar.
+**Decision.** `fwd` persists state (nonces, transactions, audit log, callers, wallets) in a single SQLite file in WAL mode, replicated continuously by a Litestream sidecar to a **local `backup` volume** (the Scaleway Object Storage destination this record originally named was reverted at v0.4.3 — "no outside dependencies"; off-host transport is operator-driven. The SQLite + Litestream decision itself stands).
 
 **Alternatives considered.**
 - **Postgres** in a sidecar container.
@@ -114,6 +114,8 @@ the v0.4.3 honest-history precedent — do not delete).
 ---
 
 ## D4. Vault distribution: HashiCorp Vault OSS, BSL-licensed
+
+> **MOOT at v1.0.0a1 — Vault was retired entirely (D1); there is no Vault to distribute.** Record kept as honest history of why Vault OSS was chosen when it was the custody backend (Phase 3a–7).
 
 **Decision.** Use HashiCorp Vault OSS (Business Source License). Pin the version. Write `fwd`'s Vault client against the stable Transit API contract.
 
@@ -152,6 +154,8 @@ the v0.4.3 honest-history precedent — do not delete).
 ---
 
 ## D6. Vault unseal: 3-of-5 Shamir, distributed across 5 failure domains
+
+> **MOOT at v1.0.0a1 — Vault was retired (D1); the sealed local master requires NO unseal ceremony** (Core invariant #8 — fully unattended on restart). No Shamir shares, no paper/GPG distribution. Record kept as honest history of the Phase 3a–7 Vault operational model.
 
 **Decision.** Initialize Vault with 5 unseal shares, threshold 3. Distribute as: 2 paper at distinct physical locations + 3 GPG-encrypted on (laptop, private GitLab repo, USB at a third location).
 
@@ -274,6 +278,8 @@ the v0.4.3 honest-history precedent — do not delete).
 - **HTTP import endpoint** if an automation use case surfaces (e.g., a future bulk-migration tool). Re-introducing HTTP import requires explicit operator authorization AND a new threat-model section for the new exposure surface.
 
 ## D10. Token lifecycle: re-auth on 403 (v1), proactive renewal at Phase 7, periodic tokens at Phase 8
+
+> **MOOT at v1.0.0a1 — Vault was retired (D1); the sealed local master authenticates to nothing, so there is no token, no lease, no renewal, and no AppRole.** Record kept as honest history of the Phase 3a–7 Vault auth model. (See `architecture.md` § Auth lifecycle: "There is none.")
 
 **Decision.** `fwd` authenticates against Vault via AppRole at process startup (`POST /v1/auth/approle/login` with `(role_id, secret_id)` from env), caches the resulting client token in `mlock`-protected memory, and uses a single defensive fallback for token expiry: on any 403 response from a Vault API call, re-authenticate and retry the failed call exactly once. **No background renewal task in v1; no periodic-token configuration in v1.** AppRole role TTL stays at the v0.3.0a1 defaults: `token_ttl=24h, token_max_ttl=72h`. The strategy is staged: a proactive `auth/token/renew-self` background task lands in Phase 7 (alongside policy + audit hardening); periodic-token migration (`token_period`) lands at Phase 8 (first production migration), if and only if a real high-volume consumer materializes.
 

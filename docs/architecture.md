@@ -1,77 +1,72 @@
 # Architecture
 
-This document is the canonical design for `fwd`. Decisions are recorded in `decisions.md`; threats in `threat-model.md`; the phased build-out in `implementation-plan.md`. This file describes *what `fwd` is at v1.0.0* — the steady-state design once Phase 8 lands.
+This document is the canonical design for `fwd`. Decisions are recorded in `decisions.md`; threats in `threat-model.md`; the phased build-out in `implementation-plan.md`. This file describes *what `fwd` is at v1.1.0a16* — the zero-egress, sign-only signer (custody = sealed local master; clients broadcast).
 
 ## One-paragraph summary
 
-`fwd` is an HTTP signing service. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce, retrieves the wallet's Vault-wrapped private-key ciphertext from SQLite, asks HashiCorp Vault Transit to decrypt it via `aes256-gcm96` envelope encryption, signs the EIP-1559 transaction in-process with `eth-account`, zeroizes the plaintext key buffer immediately, broadcasts the signed transaction, and writes a hash-chained audit row recording the entire decision. Private keys are generated externally (secure RNG), envelope-encrypted at rest by Vault, and exist as plaintext in `fwd`'s process memory only during the bounded signing operation. State (nonces, transactions, audit log) lives in SQLite, replicated continuously by Litestream to a local `backup` volume (v0.4.3 — "no outside dependencies"; off-host transport is operator-driven). Deployment is a single-host `docker compose up`.
+`fwd` is an HTTP **signing-only** service that makes **no outbound network connection**. Callers (AP backend apps, Claude agents) submit a signing request; `fwd` authenticates the caller, decodes the requested transaction's calldata against a known ABI, evaluates declarative policy, reserves a nonce (a purely local SQLite operation — fwd does not read the chain), retrieves the wallet's sealed-master-wrapped private-key ciphertext from SQLite, decrypts it **in-process** via `SealedMaster` (AES-256-GCM under a 32-byte mode-0600 host-file master — HashiCorp Vault was retired at v1.0.0a1, `decisions.md` D1), signs the EIP-1559 transaction in-process with `eth-account`, zeroizes the plaintext key buffer immediately, writes a hash-chained audit row, and **returns the signed raw transaction to the caller — it does not broadcast** (v1.1.0a9 / D20). The **caller** broadcasts the signed tx to its own RPC and reports the outcome back (`POST /v1/transactions/{id}/broadcast-result` + `/receipt`); a stuck tx is replaced via `/sign-replacement`. Private keys are generated externally (secure RNG), envelope-encrypted at rest under the sealed master, and exist as plaintext in `fwd`'s process memory only during the bounded signing operation. State (nonces, transactions, audit log) lives in SQLite, replicated continuously by Litestream to a local `backup` volume (v0.4.3 — "no outside dependencies"; off-host transport is operator-driven). Deployment is a single-host `docker compose up` on an `internal: true` network (no egress, no host port).
 
 ## Component topology
 
 ```
-                    ┌─────────────────────────────────────────┐
-   caller pods ───▶ │ fwd-callers Docker bridge network       │
-   (ftso-claimer,   └────────────────┬────────────────────────┘
-    apregister-e2e,                  │  HTTP + bearer API key
-    fics-worker,                     ▼
-    Claude agents)    ┌──────────────────────────────────┐
-                      │  fwd (FastAPI + asyncio)         │
-                      │  - caller auth (API key lookup)  │
-                      │  - intent decoder (ABI parse)    │
-                      │  - policy engine (YAML)          │
-                      │  - nonce manager (SQLite)        │
-                      │  - signing client (Vault HTTP)   │
-                      │  - envelope decrypt + eth-account│
-                      │  - RPC broadcast                 │
-                      │  - receipt watcher (asyncio task)│
-                      │  - audit log (hash-chained)      │
-                      └────┬─────────────┬───────────┬───┘
-                           │             │           │
-                           ▼             ▼           ▼
-              ┌────────────────┐  ┌──────────────┐  ┌─────────────────┐
-              │ Vault          │  │ state.db     │  │ Flare RPC       │
-              │ (Raft, Transit)│  │ (SQLite, WAL)│  │ Songbird RPC    │
-              │ ClusterIP only │  │              │  │ Coston2 RPC     │
-              └────────────────┘  └──────┬───────┘  └─────────────────┘
-                                         │
-                              ┌──────────▼───────────┐
-                              │ litestream sidecar   │
-                              │ → local backup vol   │
-                              │ vault-snapshot sidecar│
-                              │ → local backup vol   │
-                              └──────────────────────┘
+                    ┌─────────────────────────────────────────────┐
+   caller pods ───▶ │ fwd-callers Docker bridge (internal: true)   │
+   (clif, apcli,    └────────────────┬────────────────────────────┘
+    fics-worker,                     │  HTTP + bearer API key (INBOUND only)
+    Claude agents)                   ▼
+                      ┌────────────────────────────────────┐
+                      │  fwd (FastAPI + asyncio)            │
+                      │  - caller auth (API key lookup)     │
+                      │  - intent decoder (ABI parse)       │
+                      │  - policy engine (YAML)             │
+                      │  - nonce manager (local SQLite)     │
+                      │  - sealed-master decrypt (AES-GCM)  │
+                      │  - sign (eth-account), zeroize      │
+                      │  - audit log (hash-chained)         │
+                      │  NO RPC client · NO broadcast ·     │
+                      │  NO receipt watcher · NO egress     │
+                      └────┬───────────────────┬────────────┘
+                           │                   │
+                           ▼                   ▼
+              ┌──────────────────┐  ┌──────────────────────────┐
+              │ state.db         │  │ master.key (mode 0600)   │
+              │ (SQLite, WAL)    │  │ sealed master, host file │
+              └──────┬───────────┘  └──────────────────────────┘
+                     │
+          ┌──────────▼───────────┐
+          │ litestream sidecar   │
+          │ → local backup vol   │
+          └──────────────────────┘
+
+   The caller — NOT fwd — broadcasts the signed tx to its OWN Flare/Songbird/
+   Coston2 RPC on its own egress network, then reports the outcome back to fwd
+   via POST /v1/transactions/{id}/broadcast-result + /receipt.
 ```
 
-Four Docker services, two Docker networks, three named volumes (v0.4.3 reversed the earlier Scaleway-S3 direction — backups go to a local volume; off-host transport is the operator's job):
+Two Docker services, one Docker network, two named volumes (Vault retired at v1.0.0a1 — D1; v0.4.3 reversed the earlier Scaleway-S3 direction — backups go to a local volume; off-host transport is the operator's job):
 
 | Service | Image | Role |
 |---|---|---|
-| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway. FastAPI on port 8080, bound to `127.0.0.1`. |
-| `vault` | `hashicorp/vault:<pinned>` | Custody. Raft storage, Transit engine. Reachable only on `fwd-internal` network. |
+| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The signer. FastAPI on port 8080, reachable only intra-network (`internal: true` — no host port; admin via `docker exec`). |
 | `litestream` | `litestream/litestream:<pinned>` | SQLite continuous replication to the local `backup` volume (v0.4.3 — no cloud). |
-| `vault-snapshot` | `fwd-vault-snapshot` (vault CLI + ca-certs) | Periodic `vault operator raft snapshot save` → local `backup` volume (v0.4.3 — no aws-cli, no S3). |
 
 | Network | Purpose |
 |---|---|
-| `fwd-internal` | `fwd` ↔ `vault` ↔ `litestream`. Marked `internal: true`; not reachable from host or external. |
-| `fwd-callers` | Bridge that caller containers attach to in order to reach `fwd` on the same host. |
+| `fwd-callers` | The only network `fwd` attaches to. `internal: true` — no internet route AND no host→container port publishing (v1.1.0a15). Caller containers attach to reach `fwd` at `http://fwd:8080`; admin runs via `docker exec fwd clifwd`. |
 
 | Volume | Contents |
 |---|---|
-| `vault-data` | Vault Raft storage (encrypted at rest with master key) |
 | `fwd-state` | SQLite `state.db` + audit log + WAL files |
-| `backup` | Litestream replica of `state.db` + `vault-snapshots/*.snap` (v0.4.3; operator transports off-host) |
+| `backup` | Litestream replica of `state.db` (v0.4.3 local volume; operator transports off-host) |
 
 ## Trust boundaries
 
 | Boundary | Mechanism | Failure if breached |
 |---|---|---|
-| caller → `fwd` | Bearer API key over HTTP on `fwd-callers` Docker network | Attacker can submit requests within that caller's policy scope |
+| caller → `fwd` | Bearer API key over HTTP on the `fwd-callers` Docker network (inbound only) | Attacker can submit requests within that caller's policy scope |
 | `fwd` → sealed master | AES-256-GCM under a 32-byte mode-0600 host-file master loaded once at startup (v1.0.0a1; no Vault, no `transit/*`, no AppRole — D1) | A compromised running `fwd`, OR host read of BOTH the master-key file AND the SQLite ciphertexts, recovers EVERY wallet plaintext key — the deliberate v1.0.0a1 trade-off for low-value automation keys on a never-public host (threat-model A4, Core inv #1). Offline theft of ciphertexts WITHOUT the master file = ciphertext only. |
-| Vault → key material | AES-256-GCM at rest; memory-locked (`mlock`) at runtime; Raft data on encrypted volume | Attacker with host root can extract key from Vault memory while unsealed |
-| `fwd` → RPC | HTTPS/JSON-RPC | Compromised RPC could censor or fork view; signed tx still safe |
-| Operator → Vault unseal | Shamir 3-of-5, 2 paper + 3 GPG-encrypted, geographically distributed | Attacker with 3 shares + host access can use the keys |
-| Operator → `fwd` admin CLI | SSH to host + admin API key | Attacker can issue/revoke caller keys, modify policy, view audit |
+| caller → chain | The caller broadcasts the fwd-signed tx to its own RPC; `fwd` has no RPC client and no egress (v1.1.0a9 / D20) | A compromised caller-side RPC could censor or fork the caller's view; the signed tx and `fwd`'s custody are unaffected, and `fwd` cannot be a network-exfil pivot (no outbound connection) |
+| Operator → `fwd` admin CLI | `docker exec` on the host + admin API key (no host port — v1.1.0a15) | Attacker can issue/revoke caller keys, modify policy, view audit |
 
 ## Caller authentication
 
@@ -92,14 +87,18 @@ mTLS / SPIFFE / workload identity is deferred to Phase 10 (or whenever a caller 
 
 ## Signing flow
 
-Under the v1.0.0a1 architecture (Vault retired — `decisions.md` D1), `SealedMaster` is an in-process AES-256-GCM envelope: a 32-byte master key loaded once at startup from a mode-0600 host file wraps each wallet's externally-generated secp256k1 private key. At signing time, `fwd` decrypts the `seal:v1:` ciphertext in-process, signs with `eth-account` (which returns Ethereum-shaped output directly — no DER parsing or v-recovery needed in v1), and zeroizes the plaintext buffer immediately. DER parsing and v-recovery return only when Phase 10 introduces a hardware-backed `Signer` implementation that emits raw `(r, s)` ASN.1. (The signing-flow steps below still read "Vault decrypt" in places — mechanical-mirror wording, phase-marked for the in-Phase-8 doctrine tail; the substantive path is sealed-master decrypt.)
+Under the v1.0.0a1 architecture (Vault retired — `decisions.md` D1), `SealedMaster` is an in-process AES-256-GCM envelope: a 32-byte master key loaded once at startup from a mode-0600 host file wraps each wallet's externally-generated secp256k1 private key. At signing time, `fwd` decrypts the `seal:v1:` ciphertext in-process, signs with `eth-account` (which returns Ethereum-shaped output directly — no DER parsing or v-recovery needed in v1), and zeroizes the plaintext buffer immediately. DER parsing and v-recovery return only when Phase 10 introduces a hardware-backed `Signer` implementation that emits raw `(r, s)` ASN.1.
 
-The `/v1/sign-and-send` happy path:
+Under v1.1.0a9 / D20, `fwd` is **sign-only and zero-egress**: it neither queries the chain for fees/nonces nor broadcasts. The caller supplies gas + fees, `fwd` reserves a nonce from its own local SQLite ledger (seeded by the admin `nonce-init`), signs, and returns the raw tx; the **caller broadcasts and reports the outcome back**.
+
+The `POST /v1/sign-transaction` happy path:
 
 ```
-1.  Caller submits POST /v1/sign-and-send
-    Body: { wallet, chain, to, value, data, gas? }
+1.  Caller submits POST /v1/sign-transaction
+    Body: { wallet, chain, to, value_wei, data,
+            gas, max_fee_per_gas, max_priority_fee_per_gas }
     Header: Authorization: Bearer fwd_live_...
+            Idempotency-Key: <uuid>   (optional, recommended)
 
 2.  fwd authenticates caller
     - Lookup API key hash in callers table
@@ -122,13 +121,16 @@ The `/v1/sign-and-send` happy path:
     - Decoded args within bounds (max_value_wei, recipient pattern)?
     - Rate within window (per_hour, per_day)?
     - Sum of pending + confirmed value below daily cap?
+    - Caller-supplied gas / max_fee_per_gas within FWD_MAX_GAS /
+      FWD_MAX_FEE_PER_GAS sanity caps (v1.1.0a9 — fwd no longer queries
+      a fee oracle, so it caps the client-supplied values instead)?
     Default-deny on any failure.
 
-6.  fwd reserves nonce
+6.  fwd reserves nonce (PURELY LOCAL — no chain read)
     BEGIN IMMEDIATE;
     SELECT next_nonce FROM nonces
       WHERE wallet = :w AND chain = :c;
-    -- returns current N
+    -- returns current N (seeded by admin `nonce-init`; fwd cannot probe chain)
     UPDATE nonces SET next_nonce = next_nonce + 1
       WHERE wallet = :w AND chain = :c;
     COMMIT;
@@ -148,93 +150,80 @@ The `/v1/sign-and-send` happy path:
     is set to `None` in the connect-event PRAGMA handler — this disables
     sqlite3's implicit BEGIN (DEFERRED) wrap so SQLAlchemy's `begin` event
     is the sole transaction start. AND `busy_timeout` is set to 30000ms
-    to absorb concurrent-writer queueing during sign-and-send bursts
-    (each request holds the writer lock for the duration of its session;
-    Vault decrypt + RPC fee_history + estimate_gas + broadcast + INSERT
-    is ~1s; 10 concurrent at 1s/each = 10s, comfortably within 30s).
-    **Critically:** signing-flow components (signer, tx_repo, nonce_repo)
-    MUST share a single session per request/tick — see `RequestScopeCM`
-    in `app/dependencies.py`. The pre-v0.4.5 multi-CM pattern opened 3+
-    concurrent sessions per request, each grabbing the writer lock,
-    causing in-request self-contention manifest as "database is locked".
-    A future Phase 5 follow-up may split the writer-lock critical section
-    (reserve-then-commit + work-outside-lock + insert-then-commit) to
-    drop writer-lock holding time from ~1s to ~ms; until then, the
-    single-session + 30s busy_timeout combo absorbs the concurrency.
+    to absorb concurrent-writer queueing during sign bursts (each request
+    holds the writer lock for the duration of its session; sealed-master
+    decrypt + sign + INSERT is sub-millisecond now that there is no RPC in
+    the path, so the 30s headroom is ample). **Critically:** signing-flow
+    components (signer, tx_repo, nonce_repo) MUST share a single session
+    per request/tick — see `RequestScopeCM` in `app/dependencies.py`. The
+    pre-v0.4.5 multi-CM pattern opened 3+ concurrent sessions per request,
+    each grabbing the writer lock, causing in-request self-contention
+    manifest as "database is locked".
 
-7.  fwd queries fee oracle
-    - eth_feeHistory for last 5 blocks
-    - base_fee + tip suggestion (chain-specific tip floor)
-
-8.  fwd builds EIP-1559 unsigned transaction
+7.  fwd builds the EIP-1559 unsigned transaction from caller-supplied fields
     - type 0x02
     - chain_id, nonce, maxPriorityFeePerGas, maxFeePerGas, gas, to, value, data, accessList
+    - `to` is checksummed (eth_utils) before building (v1.1.0a12 fix)
+    - NO eth_feeHistory / estimate_gas call — the caller supplies gas + fees
 
-9.  fwd retrieves the wallet's wrapped privkey
+8.  fwd retrieves the wallet's sealed-master ciphertext
     - SELECT privkey_ciphertext, vault_master_key FROM wallets WHERE name = :w
-    - Result: vault:v1:<ciphertext> blob plus the master-key name
+    - Result: seal:v1:<ciphertext> blob (the vault_master_key column holds 'local:v1')
 
-10. fwd asks Vault to decrypt
-    POST /v1/transit/decrypt/<vault_master_key>
-    Body: { "ciphertext": "vault:v1:<...>" }
-    Response: { "data": { "plaintext": "<base64-32-bytes>" } }
+9.  fwd decrypts in-process via SealedMaster (NO Vault, NO network)
+    - plaintext = SealedMaster.decrypt(seal:v1:<...>)   # AES-256-GCM, 32 bytes
 
-11. fwd signs in-process
-    - privkey_bytes = base64.b64decode(plaintext)   # 32 bytes
-    - signed = Account.from_key(privkey_bytes).sign_transaction(tx_dict)
-    - tx_hash = signed.hash
-    - signed_raw = signed.raw_transaction
+10. fwd signs in-process
+    - privkey_bytes = bytearray(plaintext)              # 32 bytes, mutable
+    - signed = Account.from_key(bytes(privkey_bytes)).sign_transaction(tx_dict)
+    - signed_raw = signed.raw_transaction; tx_hash = signed.hash
 
-12. fwd zeroizes the plaintext buffer immediately
-    - Overwrite privkey_bytes in memory before any further I/O
-    - The cached `Account` object (if eth-account caches anything) is discarded
+11. fwd zeroizes the plaintext buffer immediately
+    - Overwrite privkey_bytes in-place before any further I/O
 
-13. fwd broadcasts via JSON-RPC eth_sendRawTransaction
-
-14. fwd records:
+12. fwd records (status='pending' — signed, not yet broadcast):
     - INSERT INTO transactions (tx_id, wallet, chain, caller, nonce,
                                 contract_address, method_name, value_wei,
                                 idempotency_key, request_json,
-                                signed_raw, status='submitted')
-    - (Phase 8) INSERT INTO transaction_args (tx_id, arg_name, arg_type,
-        arg_value) — one row per decoded argument. NOT wired in v0.5.x:
-        the decoder feeds the policy gate and the audit log
-        (`request_json`/`decision_reason` carry the full decoded intent,
-        so forensics are not blind); the `transactions` row persists
-        selector-only `method_name` (`request.data[:10]`) +
-        `contract_address` (`request.to`). Populating `transaction_args`
-        from `DecodedIntent.args` comes due at Phase 8 (Core invariant
-        #18 deferral — explicit phase marker, not silent drift).
+                                signed_raw, status='pending')
     - INSERT INTO transaction_hashes (tx_id, sequence_num=1, hash_hex)
-    - INSERT INTO audit_log (caller, action='sign-and-send',
+    - INSERT INTO audit_log (caller, action='sign-transaction',
                              request_json, decision='approved',
                              outcome=tx_id, prev_hash, row_hash)
 
-15. fwd returns { tx_id, hash, nonce } to caller
+13. fwd returns { tx_id, signed_raw_tx, nonce } to caller
+    — fwd does NOT broadcast (zero-egress, D20)
 
-16. Receipt watcher (asyncio task, runs every block):
-    - Poll eth_getTransactionReceipt for each pending tx
-    - On confirmation: status='mined', call nonce_repo.mark_confirmed(wallet, chain, nonce)
-    - On stuck (N blocks elapsed): replace with bumped tip,
-      append a new row to transaction_hashes (tx_id, sequence_num=N+1, hash_hex), audit row
-    - On final failure (5 retries): status='failed', surface alert
+14. Caller broadcasts the signed_raw_tx to its own RPC, then reports back:
+    POST /v1/transactions/{tx_id}/broadcast-result
+      { tx_hash, outcome: accepted | rejected_releaseable | rejected_nonce_too_low }
+    - accepted              → status='submitted'
+    - rejected_releaseable  → nonce released (tail-only); status='failed'
+    - rejected_nonce_too_low→ nonce kept (chain ahead → operator nonce-sync)
+
+15. Caller polls the chain for the receipt, then reports back:
+    POST /v1/transactions/{tx_id}/receipt
+      { tx_hash, outcome: mined_success | mined_reverted, block_number }
+    - On stuck tx, caller calls POST /v1/transactions/{tx_id}/sign-replacement
+      → fwd re-signs the SAME intent at the SAME nonce with bumped fees
+      (×1.125, ≤5 retries), appends transaction_hashes (sequence_num=N+1)
 ```
 
 ### Failure modes in the signing flow
 
-The v0.1.2 envelope-encryption design introduces `transit/decrypt/fwd-master` as a new failure point in the critical path. The principle: **if the failure occurs before broadcast (steps 1–12), the reserved nonce is released back to the pool in the same SQLite transaction; if at or after broadcast (steps 13+), the nonce stays committed and the receipt watcher reconciles.**
+Because `fwd` no longer broadcasts (v1.1.0a9 / D20), every failure mode `fwd` itself can hit occurs **before** the signed tx leaves the building. The principle: **any pre-return failure (steps 1–11) releases the reserved nonce in the same SQLite transaction; once `fwd` has returned the signed tx (step 13), the on-chain outcome is the caller's to report back, and the nonce lifecycle is driven by `/broadcast-result` + `/receipt`.**
 
 | Step | Failure | Response | Nonce |
 |---|---|---|---|
+| 5 | Policy denies (caller/contract/method/value/rate/gas-cap) | 403 `policy_denied` / `rate_exceeded` | Never reserved (gate runs before reservation) |
 | 6 | SQLite busy / lock timeout on nonce reservation | 409 `nonce_unavailable`; caller may retry | Not committed |
-| 7 | RPC timeout on `eth_feeHistory` | 502 `rpc_failed` (after one retry) | Not committed |
-| 9 | Wallet not found | 404 `wallet_not_found` | Not committed |
-| 10 | **Vault decrypt fails** (sealed, network failure, key version mismatch) | **503 `vault_unavailable`. Reserved nonce is RELEASED in the same SQLite transaction (`UPDATE nonces SET next_nonce = next_nonce - 1 WHERE wallet = :w AND chain = :c AND next_nonce - 1 = :reserved`).** No on-chain side effect. | Released |
-| 11 | `eth-account` rejects `tx_dict` (malformed) | 422 `intent_unparseable` | Released |
-| 13 | RPC `eth_sendRawTransaction` rejects (invalid signature, nonce too low, etc.) | 502 `rpc_failed` | **Stays committed** — the tx may have been seen by other nodes; receipt watcher decides whether to replace |
-| 13 | RPC timeout (response unknown) | Treat as committed: status='submitted' with no on-chain hash yet; receipt watcher polls `eth_getTransactionCount` to detect on-chain landing | Stays committed |
+| 8 | Wallet not found | 404 `wallet_not_found` | Released |
+| 9 | **Sealed-master decrypt fails** (master file unreadable, ciphertext/key mismatch) | **503 `vault_unavailable`** (error-class name retained from the Vault era; it now means the sealed master is unavailable). Reserved nonce is RELEASED in the same SQLite transaction. No on-chain side effect. | Released |
+| 10 | `eth-account` rejects `tx_dict` (malformed `to`, etc.) — incl. the `TypeError` class caught since v1.1.0a12 | 422 `intent_unparseable` / 500 | Released (any sign-build error releases the nonce — v1.1.0a12 fix) |
+| 14 (client-reported) | broadcast `rejected_releaseable` | recorded; tail nonce released, else surfaced via `nonce/holes` | Released (tail) / hole |
+| 14 (client-reported) | broadcast `rejected_nonce_too_low` | recorded; chain is ahead → operator `nonce-sync` | Kept |
 
-Every failure writes an audit row recording the caller, the request, the failed step, and the response code. The structlog scrubber (see `## Implementation hazards` below) ensures no plaintext privkey reaches the audit log under any failure path.
+Every failure writes an audit row recording the caller, the request, the failed step, and the response code — committed independently of the rolled-back transaction (Core invariant #19). The structlog scrubber (see `## Implementation hazards` below) ensures no plaintext privkey reaches the audit log under any failure path.
 
 ## SQLite schema
 
@@ -242,8 +231,8 @@ Every failure writes an audit row recording the caller, the request, the failed 
 CREATE TABLE wallets (
     name                 TEXT PRIMARY KEY,
     address              TEXT NOT NULL,
-    privkey_ciphertext   TEXT NOT NULL,        -- vault:v1:<base64> envelope from transit/encrypt
-    vault_master_key     TEXT NOT NULL,        -- name of the Transit key used to encrypt (e.g. "fwd-master")
+    privkey_ciphertext   TEXT NOT NULL,        -- seal:v1:<base64> envelope from SealedMaster.encrypt (v1.0.0a1)
+    vault_master_key     TEXT NOT NULL,        -- legacy column name; holds 'local:v1' (sealed master; column kept to avoid a needless migration)
     policy_path          TEXT NOT NULL,
     created_at           TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -284,7 +273,7 @@ CREATE TABLE transactions (
     idempotency_key  TEXT,                        -- caller-supplied via header; optional
     request_json     TEXT NOT NULL,               -- opaque archive of original request
     signed_raw       TEXT,                        -- hex of latest signed tx
-    status           TEXT NOT NULL,               -- pending|submitted|mined|replaced|failed
+    status           TEXT NOT NULL,               -- pending|submitted|mined|reverted|replaced|failed (pending = signed, pre-broadcast; submitted/mined/reverted are client-reported)
     submitted_at     TIMESTAMP,
     confirmed_at     TIMESTAMP,
     receipt_json     TEXT,                        -- opaque archive of RPC receipt
@@ -315,7 +304,7 @@ CREATE TABLE audit_log (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     caller TEXT,
-    action TEXT NOT NULL,                         -- sign-and-send | sign-typed-data | admin-* | ...
+    action TEXT NOT NULL,                         -- sign-transaction | sign-transaction-duplicate | fsp-sign-message | tx-broadcast-result | tx-receipt | tx-replacement | nonce-init | nonce-sync | wallet-* | caller-* | policy-load
     request_json TEXT,
     decision TEXT NOT NULL,                       -- approved|denied|error
     decision_reason TEXT,
@@ -330,7 +319,7 @@ CREATE INDEX idx_tx_method ON transactions (method_name, contract_address);
 CREATE INDEX idx_audit_caller_ts ON audit_log (caller, ts);
 ```
 
-PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, plus `dbapi_connection.isolation_level=None` set in the `connect` handler (disables sqlite3's implicit `BEGIN (DEFERRED)` so SQLAlchemy's `begin` event handler is the sole transaction start; v0.4.5 fix). The 30 s `busy_timeout` (bumped from 5 s at v0.4.5) absorbs concurrent-writer queueing during sign-and-send bursts.
+PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, plus `dbapi_connection.isolation_level=None` set in the `connect` handler (disables sqlite3's implicit `BEGIN (DEFERRED)` so SQLAlchemy's `begin` event handler is the sole transaction start; v0.4.5 fix). The 30 s `busy_timeout` (bumped from 5 s at v0.4.5) absorbs concurrent-writer queueing during signing bursts.
 
 ## API surface
 
@@ -338,16 +327,23 @@ The **shipped** surface (v0.5.x, mounted in `src/fwd/main.py`) is frozen for v1.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/v1/sign-and-send` | caller | Build → policy → sign → broadcast |
+| `POST` | `/v1/sign-transaction` | caller | Build → policy → sign; returns `{ tx_id, signed_raw_tx, nonce }`. **Does not broadcast** (v1.1.0a9 / D20; was `/v1/sign-and-send`). |
 | `POST` | `/v1/sign-fsp-message` | caller | EIP-191 `personal_sign` over a fwd-**reconstructed** FSP messageHash (UPTIME / REWARD_DISTRIBUTION) from typed fields — no caller-supplied digest. **Shipped v1.1.0a2**; live-Coston2-proven by the v1.1.0a4 drill (GATE-1 F1 + B1 EIP-191 recover; on-chain FSP-protocol *acceptance* / F2 deferred — P3=NO, `docs/reviews/v1.1.0a4-clif-fsp-live-drill-adjudication.md`) |
-| `POST` | `/v1/sign-typed-data` | caller | EIP-712 signing — **(deferred — Phase 10; not mounted; the CLAUDE.md "What FWD IS NOT" `/sign-typed-data` mention is forward-looking, not shipped)** |
-| `GET` | `/v1/wallets` | caller | List wallets accessible to caller — **(deferred — Phase 9/10; today only admin `GET /v1/admin/wallets`, v0.4.0a7)** |
+| `POST` | `/v1/transactions/{tx_id}/broadcast-result` | caller | Client reports the broadcast outcome (`accepted` / `rejected_releaseable` / `rejected_nonce_too_low`). **Shipped v1.1.0a10.** |
+| `POST` | `/v1/transactions/{tx_id}/receipt` | caller | Client reports the on-chain receipt (`mined_success` / `mined_reverted` + block). **Shipped v1.1.0a10.** |
+| `POST` | `/v1/transactions/{tx_id}/sign-replacement` | caller | Re-sign the same intent at the same nonce with bumped fees (stuck-tx replacement). **Shipped v1.1.0a13.** |
 | `GET` | `/v1/transactions/{tx_id}` | caller | Status + hash history + receipt |
-| `GET` | `/v1/audit` | admin | Hash-chained audit log — **(deferred — HTTP not mounted; today the CLI walker `clifwd audit verify\|show\|tail`, shipped v0.5.0a5, is the v1 surface)** |
-| `GET` | `/healthz` | none | Liveness + Vault sealed status + RPC reachability |
-| `POST` | `/v1/admin/wallets` | admin | Generate privkey internally, encrypt via Vault `fwd-master`, persist ciphertext, return address. See § Wallet provisioning. |
+| `GET` | `/healthz` | none | Liveness + sealed-master readiness (no `rpc` field — zero-egress, v1.1.0a9) |
+| `POST` | `/v1/admin/wallets` | admin | Generate privkey internally, seal via `SealedMaster.encrypt`, persist ciphertext, return address. See § Wallet provisioning. |
+| `GET` | `/v1/admin/wallets` | admin | List custodied wallets (no secret material). **Shipped v0.4.0a7.** |
 | `POST` | `/v1/admin/callers` | admin | Issue caller API key |
+| `GET` | `/v1/admin/callers` | admin | List callers (active + revoked) |
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke caller |
+| `POST` | `/v1/admin/nonce-init` | admin | Seed a (wallet, chain) `next_nonce` (fwd cannot read chain). **Shipped v1.1.0a8.** |
+| `POST` | `/v1/admin/nonce-sync` | admin | Bounded-monotonic advance of fwd's nonce view to operator-supplied on-chain truth. **Shipped v1.1.0a13.** |
+| `GET` | `/v1/admin/nonce/holes` | admin | List orphaned pending reservations (operator alarm). **Shipped v1.1.0a13.** |
+
+Deferred (NOT mounted; explicit Core-#18 markers): `GET /v1/wallets` (caller-scoped list — today only admin `GET /v1/admin/wallets`); `GET /v1/audit` (HTTP — today the CLI walker `clifwd audit verify|show|tail`, v0.5.0a5); `POST /v1/sign-typed-data` (EIP-712 — Phase 10).
 
 Admin endpoints require a separate `FWD_ADMIN_KEY` configured at boot. Admin authentication is not policy-controlled — it's the bootstrap.
 
@@ -377,8 +373,8 @@ Flow:
 1. Validate `name` is unique; if not, 409 `wallet_exists`.
 2. Generate privkey via `eth_account.Account.create()` and immediately wrap as `bytearray` for zeroization.
 3. Derive the EIP-55 address from the public key.
-4. Encrypt the privkey via `transit/encrypt/fwd-master` → `vault:v1:<ciphertext>`.
-5. `INSERT INTO wallets (name, address, privkey_ciphertext, vault_master_key='fwd-master', policy_path, created_at)`.
+4. Seal the privkey via `SealedMaster.encrypt()` → `seal:v1:<ciphertext>` (AES-256-GCM; v1.0.0a1, no Vault).
+5. `INSERT INTO wallets (name, address, privkey_ciphertext, vault_master_key='local:v1', policy_path, created_at)`.
 6. Zeroize the plaintext bytearray.
 7. Audit row: `action='wallet-create', caller=<admin>, outcome=<address>`.
 8. Return `{ name, address }`.
@@ -414,7 +410,7 @@ Flow on success:
 1. Read file content; verify mode + ownership via `os.stat`.
 2. `bytes.fromhex(content.strip())` → 32-byte privkey, immediately wrapped as `bytearray`.
 3. Derive the EIP-55 address; verify against `--expected-address` if provided.
-4. Encrypt the privkey via `transit/encrypt/fwd-master` → `vault:v1:<ciphertext>`.
+4. Seal the privkey via `SealedMaster.encrypt()` → `seal:v1:<ciphertext>` (AES-256-GCM; v1.0.0a1, no Vault).
 5. `INSERT INTO wallets (...)`.
 6. Zeroize the plaintext bytearray.
 7. Audit row: `action='wallet-import', caller=<operator-uid>, request_json={name, source_file_path, source_file_mode, source_file_owner}, outcome=<address>` — the privkey itself is NOT in the audit; only the source-file metadata.
@@ -429,13 +425,13 @@ Not supported in v1. See `decisions.md` D9 § "When to revisit" for the deferred
 
 | Use case | v1 mechanism |
 |---|---|
-| Disaster recovery (host failure) | Litestream restore (SQLite ciphertext) + Vault Raft snapshot restore (master key) on a new host. The wallet keeps signing without any plaintext ever existing on disk. |
+| Disaster recovery (host failure) | Litestream restore (SQLite ciphertext) + the operator-held `master.key` file (mode-0600 sealed master) on a new host. The wallet keeps signing without any plaintext ever existing on disk. (Vault Raft snapshots retired at v1.0.0a1 — D1.) |
 | Migration to a hardware wallet | Generate a new wallet on the HW device, transfer balance on-chain, retire the old `fwd`-resident wallet. |
 | Forensics / non-repudiation | `clifwd audit verify\|show\|tail` (v0.5.0a5 CLI walker) walks the hash-chained audit log; the signed transactions themselves are forensic evidence. (HTTP `GET /v1/audit` deferred — see § API surface.) |
 
 ## Idempotency
 
-Callers SHOULD send an `Idempotency-Key` header on every `POST /v1/sign-and-send`. The contract:
+Callers SHOULD send an `Idempotency-Key` header on every `POST /v1/sign-transaction`. The contract:
 
 | Field | Value |
 |---|---|
@@ -447,13 +443,13 @@ Callers SHOULD send an `Idempotency-Key` header on every `POST /v1/sign-and-send
 | TTL | Indefinite — keys are first-class identifiers, not cache entries |
 
 **Behavior on duplicate:**
-- If a request arrives with an `(caller, Idempotency-Key)` pair that already exists in `transactions`, `fwd` returns the original `tx_id` and current status with HTTP 200.
-- The duplicate request is NOT re-signed, NOT re-broadcast, and NOT re-policy-checked.
-- The duplicate is recorded in the audit log as `action='sign-and-send-duplicate'` with `outcome=<original tx_id>`.
+- If a request arrives with an `(caller, Idempotency-Key)` pair that already exists in `transactions`, `fwd` returns the original `tx_id` and current status (incl. the original `signed_raw_tx`) with HTTP 200.
+- The duplicate request is NOT re-signed and NOT re-policy-checked (and there is nothing to re-broadcast — fwd never broadcast in the first place).
+- The duplicate is recorded in the audit log as `action='sign-transaction-duplicate'` with `outcome=<original tx_id>`.
 
 **Behavior on missing header:** request proceeds normally; no idempotency protection applies. Recommended for one-shot ad-hoc operator calls; not recommended for automated callers.
 
-This contract is documented in v0.1.1; the replay implementation **shipped v0.5.0a7** (`api/sign.py` reads the `Idempotency-Key` header — ≤128 chars, else 400 `bad_idempotency_key`; `app/sign_and_send.py` checks `(caller, key)` via `TransactionRepo.get_by_idempotency_key` before the policy gate and, on a hit, returns the cached `tx_id` + seq-1 hash with a `sign-and-send-duplicate` audit row, no re-sign / re-broadcast / re-policy).
+This contract is documented in v0.1.1; the replay implementation **shipped v0.5.0a7** (`api/sign.py` reads the `Idempotency-Key` header — ≤128 chars, else 400 `bad_idempotency_key`; `app/sign_transaction.py` checks `(caller, key)` via `TransactionRepo.get_by_idempotency_key` before the policy gate and, on a hit, returns the cached `tx_id` + seq-1 hash with a `sign-transaction-duplicate` audit row, no re-sign / re-policy).
 
 ## Error envelope
 
@@ -478,11 +474,12 @@ Stable error codes:
 | `intent_unparseable` | 422 | `data` field could not be ABI-decoded against the bound contract |
 | `nonce_unavailable` | 409 | Nonce reservation contention; caller may retry |
 | `idempotency_replay` | 200 | Duplicate request; original `tx_id` returned (not actually an error — listed for completeness) |
-| `vault_unavailable` | 503 | Vault sealed, unreachable, or returned error |
-| `rpc_failed` | 502 | Upstream JSON-RPC error |
+| `vault_unavailable` | 503 | Sealed master unavailable (master file unreadable, or ciphertext/key mismatch). Error-class name retained from the Vault era; there is no Vault (v1.0.0a1 / D1). |
 | `internal_error` | 500 | Unhandled exception |
 
-The response body MUST NOT contain: SQL state, Python tracebacks, Vault error responses, RPC error responses, internal stack frames, environment variable values, file paths, or caller API keys. Sensitive details land in the audit log and structured server logs only.
+(`rpc_failed` (502) was retired at v1.1.0a9 — `fwd` makes no RPC call. A broadcast that the chain rejects is reported by the **client** via `POST /v1/transactions/{tx_id}/broadcast-result`, not surfaced as an `fwd` error.)
+
+The response body MUST NOT contain: SQL state, Python tracebacks, sealed-master internals, internal stack frames, environment variable values, file paths, or caller API keys. Sensitive details land in the audit log and structured server logs only.
 
 ## Versioning
 
@@ -510,49 +507,9 @@ Blast radius: a compromised running `fwd`, OR host read of BOTH the master-key f
 
 ## Auth lifecycle
 
-Per `decisions.md` D10, `fwd` uses a staged token-management strategy: minimum viable in v1, proactive renewal at Phase 7, periodic tokens at Phase 8 if warranted.
+**There is none (v1.0.0a1).** The Vault AppRole token lifecycle that this section once described (`auth/approle/login`, lease renewal, periodic tokens — `decisions.md` D10) was retired with Vault at v1.0.0a1 (D1). The sealed master needs no authentication to anything: `SealedMaster` loads the 32-byte master key once at startup from the mode-0600 host file into an `mlock`'d `bytearray`, and decrypts in-process for the life of the container. No token, no login, no renewal task, no Shamir unseal, no `__aexit__` token zeroize.
 
-### v1 (Phase 3b–6)
-
-| Event | Action |
-|---|---|
-| `fwd` startup | `POST /v1/auth/approle/login` with `(FWD_VAULT_ROLE_ID, FWD_VAULT_SECRET_ID)` from env. Cache `client_token`, `lease_duration`, `lease_renewable` in `mlock`-protected memory. |
-| Any Vault call (`encrypt`, `decrypt`) | Send with `X-Vault-Token: <client_token>` header. |
-| 403 from any Vault call | Re-auth (single fresh `auth/approle/login`). Update cached token. Retry the failed call exactly once. If retry also returns 403, surface the error to the caller. |
-| `fwd` shutdown | No explicit token revocation; the token expires naturally at `token_ttl`. Cached token bytes are zeroized in `__aexit__`. |
-
-No background task. No proactive renewal. Suitable for v1 volumes (wallet creation: rare; signing: ~once per FTSO epoch / per register tx / etc., well below the 24h TTL).
-
-### Phase 7 hardening (v0.5.0)
-
-Add an asyncio background task started in `VaultClient.__aenter__`:
-
-- Sleeps `lease_duration / 3` seconds at a time.
-- If renewable AND `now + (lease_duration / 3) < max_ttl_deadline`: `POST /v1/auth/token/renew-self`. Update `expires_at`.
-- Else: full re-auth via `auth/approle/login`. Update cached token.
-- Cancel-clean on `__aexit__`.
-
-The 403 fallback in `_request()` stays as defense-in-depth (clock skew, vault failover, race between renewal and 403, manual revocation).
-
-### Phase 8 production (v1.0.0)
-
-When the first production consumer migrates, the operator evaluates switching the AppRole `fwd` role from `(token_ttl=24h, token_max_ttl=72h)` to `(token_period=24h, token_max_ttl=0)`. Periodic tokens can be renewed indefinitely within `period` seconds; the 72h `max_ttl` re-auth boundary disappears. Same client code on either side; only the role config changes.
-
-Migration procedure (operator runbook, lands at Phase 8):
-
-```sh
-docker compose stop fwd
-docker exec -e VAULT_TOKEN=<root-token> fwd-vault \
-    vault write auth/approle/role/fwd \
-    token_policies=fwd-app \
-    token_period=24h \
-    token_max_ttl=0 \
-    secret_id_ttl=0 \
-    secret_id_num_uses=0
-docker compose start fwd
-```
-
-Trade-off: no automatic credential rotation. Operator-driven `secret_id` rotation (quarterly, or on incident) becomes the periodic hygiene task.
+The only credentials in the system are **caller** API keys (see § Caller authentication) and the **admin** key (`FWD_ADMIN_KEY`); both are minted/configured by the operator and rotated from the CLI, not negotiated with any backend.
 
 ## Policy YAML format
 
@@ -603,7 +560,7 @@ to Phase 10.
 
 ## Policy engine
 
-The Phase 7 policy engine evaluates each `/v1/sign-and-send` request
+The Phase 7 policy engine evaluates each `/v1/sign-transaction` request
 against the loaded `policy.yaml`. Pure-function shape (per D14):
 
 Shipped shape (v0.5.0a4, `app/policy_engine.py` — aligned to code per
@@ -625,7 +582,7 @@ async def evaluate(
     *,
     caller: Caller,
     wallet: Wallet,
-    request: SignAndSendRequest,
+    request: SignTransactionRequest,
     policy: Policy,
     registry: AbiRegistry,
     rate_repo: RateRepo,
@@ -638,20 +595,21 @@ Evaluation order is the 10 steps in D14. The entire body is wrapped in
 (default-deny, Core invariant #2). Every `Deny` carries the step number
 for forensics.
 
-**Live wiring (shipped v0.5.0a6).** `app/policy_gate.py` (`gate()` →
-`PolicyDenied` on Deny; `release_rate_after_failure()`) is called by
-`app/sign_and_send.py` BEFORE nonce reservation: a denied request never
-reserves a nonce, never signs, never broadcasts (the synthetic-attack
-matrix asserts `rpc.send_raw_transaction` is not awaited for all 10
-deny vectors). The v0.3.0 Coston2-only chain allowlist was **lifted** —
-`policy.yaml` (via the engine) is now the sole authorization;
-`infra/rpc.py::ALLOWED_CHAINS` is reduced to the RPC-routing rail
-(`{14,19,114}` = chains fwd has a configured URL for). Rate
+**Live wiring (shipped v0.5.0a6; reconciled for zero-egress v1.1.0a9).**
+`app/policy_gate.py` (`gate()` → `PolicyDenied` on Deny;
+`release_rate_after_failure()`) is called by `app/sign_transaction.py`
+BEFORE nonce reservation: a denied request never reserves a nonce and
+never signs (the synthetic-attack matrix asserts `signer.sign_transaction`
+is not awaited for the deny vectors). The v0.3.0 Coston2-only chain
+allowlist was **lifted** — `policy.yaml` (via the engine) is now the sole
+authorization; the old `infra/rpc.py::ALLOWED_CHAINS` routing rail is gone
+entirely (`rpc.py` was deleted at v1.1.0a9 — `fwd` reaches no chain). Rate
 release-on-failure mirrors the nonce release (engine increments at
-step 8/9; a pre-broadcast failure calls `release_rate_after_failure`
-with keys re-derived from the `AllowDecision` + policy);
-`add_committed_value` (wallet aggregate) is added ONLY on broadcast
-success, with the same `now` the engine used.
+step 8/9; a pre-return failure calls `release_rate_after_failure` with
+keys re-derived from the `AllowDecision` + policy); `add_committed_value`
+(wallet aggregate) is added on successful **sign** (the request that
+reserved the nonce and produced the signed tx — there is no broadcast step
+in `fwd` to gate on), with the same `now` the engine used.
 
 **Rate-limit state** lives in two SQLite tables (Alembic 0005,
 v0.5.0a4, `infra/rate_repo.py`): `rate_buckets` (caller × wallet ×
@@ -750,16 +708,17 @@ split (Core invariant #18):** the substrate — `infra/audit_repo.py`
 (`AuditRepo`, `_canonical_json`, `_row_hash`, `_as_utc`,
 `GENESIS_PREV_HASH`), `app/audit_walk.py`, the `clifwd audit` CLI, the
 `AuditRepoCM` dependency — shipped at **v0.5.0a5**. **Shipped
-v0.5.0a6:** the `sign-and-send` row authorship (denied/error/approved
-via `app/policy_gate.py` + `app/sign_and_send.py` on the shared
-`RequestScope` session), the lifespan `policy-load` row
-(`_startup_policy_load`), and unifying `sign_and_send`'s `request_json`
-onto `_canonical_json`. **Shipped v0.5.0a7:** the `wallet-*` /
-`caller-*` admin-action rows (a keyword-only `audit_repo` threaded
-through the four admin use cases — one row per call, success or
-known-failure, NO secret in `request_json`/`outcome`) + `AdminScope`/
-`AdminScopeCM`, plus the idempotency-replay `sign-and-send-duplicate`
-row. Both deferral markers retired (Core invariant #18). The
+v0.5.0a6:** the signing row authorship (denied/error/approved
+via `app/policy_gate.py` + the sign use case on the shared
+`RequestScope` session — the use case + action were renamed
+`sign-and-send`→`sign-transaction` at v1.1.0a9), the lifespan
+`policy-load` row (`_startup_policy_load`), and unifying the sign
+request's `request_json` onto `_canonical_json`. **Shipped v0.5.0a7:**
+the `wallet-*` / `caller-*` admin-action rows (a keyword-only
+`audit_repo` threaded through the four admin use cases — one row per
+call, success or known-failure, NO secret in `request_json`/`outcome`)
++ `AdminScope`/`AdminScopeCM`, plus the idempotency-replay
+`sign-transaction-duplicate` row. Both deferral markers retired (Core invariant #18). The
 chain-walker self-write `audit-verify-failure` row remains **Phase 10**
 (gated on the on-chain anchor — see "Tamper evidence", D16).
 
@@ -767,7 +726,7 @@ chain-walker self-write `audit-verify-failure` row remains **Phase 10**
 - `seq INTEGER PRIMARY KEY AUTOINCREMENT`
 - `ts TIMESTAMP NOT NULL`
 - `caller TEXT` — NULL for admin-keyed actions
-- `action TEXT NOT NULL` — enum: `sign-and-send`, `sign-and-send-duplicate`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`, `audit-verify-failure` (the last is accepted by `AuditRepo.append` from a5 but written by NO v0.5.0 path — the chain-walker self-write-on-break is **Phase 10**, gated on the on-chain anchor that closes the tamper-evidence recursion; see D16)
+- `action TEXT NOT NULL` — enum: `sign-transaction`, `sign-transaction-duplicate`, `fsp-sign-message`, `tx-broadcast-result`, `tx-receipt`, `tx-replacement`, `nonce-init`, `nonce-sync`, `wallet-create`, `wallet-import`, `caller-create`, `caller-revoke`, `policy-load`, `audit-verify-failure` (the last is accepted by `AuditRepo.append` but written by NO path yet — the chain-walker self-write-on-break is **Phase 10**, gated on the on-chain anchor that closes the tamper-evidence recursion; see D16). The `sign-transaction*` actions were `sign-and-send*` before the v1.1.0a9 rename; the FSP / `tx-*` / `nonce-*` actions were added across v1.1.0a2–a13.
 - `request_json TEXT` — canonical sorted-key compact JSON of request payload
 - `decision TEXT NOT NULL` — `approved` | `denied` | `error`
 - `decision_reason TEXT` — human-readable, e.g. `"policy_denied step=5: max_value_wei exceeded"`
@@ -779,9 +738,10 @@ chain-walker self-write `audit-verify-failure` row remains **Phase 10**
 INSIDE the request's RequestScope session (v0.4.5
 single-session-per-request invariant). One writer-lock acquisition
 covers nonce reservation + transaction INSERT + audit_log INSERT +
-rate-bucket increment. Estimated additional lock-holding time from
-audit + rate: ~5–10 ms on top of the existing ~1 s Vault decrypt +
-RPC. Within 30 s busy_timeout headroom; no lock-split refactor in v1.
+rate-bucket increment. Lock-holding time is now sub-millisecond — the
+critical section is sealed-master decrypt + sign + INSERTs, with NO
+Vault round-trip and NO RPC in the path (v1.0.0a1 + v1.1.0a9). Within
+30 s busy_timeout headroom; no lock-split refactor in v1.
 (a5 ships `AuditRepoCM` as a standalone session CM; `RequestScope` is
 extended to carry `AuditRepo` at a6.)
 
@@ -828,11 +788,11 @@ commit to Flare via fwd itself) closes the recursion.
 
 **Continuous:** the `litestream` sidecar replicates `state.db` to `/backup/state.db` on the `backup` volume (`config/litestream/litestream.yml`: `type: file`, `sync-interval: 10s`, `snapshot-interval: 24h`, `retention: 72h`). ~10 s RPO.
 
-**Periodic Vault snapshots:** the `vault-snapshot` sidecar loops `vault operator raft snapshot save` → `/backup/vault-snapshots/vault-<UTC-ts>.snap` (interval `VAULT_SNAPSHOT_INTERVAL_SEC`, default 24 h; rotation keeps newest `VAULT_SNAPSHOT_RETENTION_COUNT`, default 7). The `fwd-snapshot` AppRole has ONLY `read` on `sys/storage/raft/snapshot` — disjoint from `fwd-app` (snapshot role cannot decrypt; app role cannot snapshot).
+**The sealed master is backed up out-of-band** (v1.0.0a1 — Vault retired, so there is no `vault-snapshot` sidecar and no Raft snapshot). The 32-byte `master.key` file is `policy.yaml`-class private config the operator copies off-host alongside the `backup` volume with their own tools.
 
-**Restore drill — canonical in `runbooks/restore.md` (8-step, local-volume).** Summary: operator copies the `backup` volume contents onto the new host first; bring up `vault` only; `litestream restore` `state.db` from the volume; Vault Raft snapshot restore (throwaway-init → restore → unseal with the **original D6 shares** — a fresh `vault-init.sh` is retired as broken: it regenerates the seal, making old shares + old wallet ciphertexts useless); bring up `fwd` + `litestream`; smoke-test via `clifwd health`; nonce reconciliation runs automatically at fwd startup (`app/nonce_reconcile.py` via `_startup_reconcile` — there is **no** `clifwd reconcile` subcommand; reconcile is a boot step, silence = happy path); `/v1/sign-and-send` through to `status=mined`.
+**Restore drill — canonical in `runbooks/restore.md`.** Summary (post-v1.0.0a1, post-zero-egress): operator copies the `backup` volume contents AND the operator-held `master.key` onto the new host; `litestream restore` `state.db` from the volume; bring up `fwd` + `litestream`; smoke-test via `docker exec fwd clifwd health`. Nonce state is NOT auto-reconciled from chain (fwd has no egress — `app/nonce_reconcile.py` was deleted at v1.1.0a9); the operator re-seeds/advances via the admin `nonce-init` / `nonce-sync` endpoints if the restored view trails chain truth. (`runbooks/restore.md` itself still describes the pre-v1.0.0a1 Vault procedure and is a separate reconciliation.)
 
-Target RTO: ≤ 30 minutes from a clean host (Phase 6 GA drill measured 7 m 36 s — v0.4.6).
+Target RTO: ≤ 30 minutes from a clean host (Phase 6 GA drill measured 7 m 36 s — v0.4.6, on the Vault-era topology; the sealed-master path is strictly simpler).
 
 ## Observability
 
@@ -857,12 +817,12 @@ Pure business logic. Policy evaluation, intent decoding, nonce reservation rules
 
 **Must NOT:**
 - Import from `infra/`, `app/`, or `api/`
-- Touch SQLite, Vault, RPC, FastAPI, environment variables, or the filesystem
+- Touch SQLite, the sealed master, FastAPI, environment variables, or the filesystem
 - Take any I/O dependency, async or sync
 
 ### Application (`src/fwd/app/`)
 
-Use-case orchestrators. The `sign-and-send` flow that calls `auth → policy → nonce → sign → broadcast → audit` in order, coordinating between domain and infrastructure adapters.
+Use-case orchestrators. The `sign-transaction` flow that calls `auth → policy → nonce → sign → audit` in order (no broadcast — the caller does that, v1.1.0a9), coordinating between domain and infrastructure adapters.
 
 **Must NOT:**
 - Implement signing math, RLP encoding, or hash-chain hashing (those are domain)
@@ -871,7 +831,7 @@ Use-case orchestrators. The `sign-and-send` flow that calls `auth → policy →
 
 ### Infrastructure (`src/fwd/infra/`)
 
-External-system adapters. `EnvelopeSigner` (decrypts wallet ciphertexts via Vault and signs in-process with `eth-account`), SQLite repositories, JSON-RPC client, Litestream sidecar config, structlog setup, argon2id hasher, ABI-loader filesystem reader.
+External-system adapters. `EnvelopeSigner` (decrypts wallet ciphertexts via the in-process `SealedMaster` and signs with `eth-account`), SQLite repositories, Litestream sidecar config, structlog setup, argon2id hasher, ABI-loader filesystem reader. (No JSON-RPC client — `rpc.py` was deleted at v1.1.0a9; `fwd` has no network egress.)
 
 **Must NOT:**
 - Make policy decisions
@@ -883,7 +843,7 @@ External-system adapters. `EnvelopeSigner` (decrypts wallet ciphertexts via Vaul
 HTTP handlers (FastAPI routes) and CLI commands (Typer subcommands). Translates external requests into application-layer calls; formats responses; returns the error envelope shape documented above.
 
 **Must NOT:**
-- Decode calldata, manage nonces, call Vault directly, write to SQLite directly
+- Decode calldata, manage nonces, call the sealed master directly, write to SQLite directly
 - Contain branching policy logic
 - Import from `infra/` directly — interface always goes through `app/`
 
@@ -897,11 +857,11 @@ Three implementation patterns specific to the v0.1.2 envelope-encryption signing
 
 ### 1. No plaintext caching between requests
 
-Core invariant #16 (decrypt-on-demand, zeroize-on-completion) forbids caching plaintext private keys in process-wide state between signing operations. Every `/v1/sign-and-send` decrypts → signs → zeroizes, even if the same wallet was used 10 milliseconds ago.
+Core invariant #16 (decrypt-on-demand, zeroize-on-completion) forbids caching plaintext private keys in process-wide state between signing operations. Every `/v1/sign-transaction` decrypts → signs → zeroizes, even if the same wallet was used 10 milliseconds ago.
 
 **Enforced by:** `tests/unit/test_envelope_signer.py::test_no_32byte_state_after_create_wallet` and `::test_no_32byte_state_after_sign_transaction` (added in v0.3.2). Each test runs the relevant operation, then walks `signer.__dict__` and fails on any attribute that is a `bytes`/`bytearray` of length 32.
 
-**Why this matters:** an attacker who compromises `fwd` with a cache present can dump every cached privkey in one shot; without a cache, they must wait for and intercept a signing event per wallet — an attack that is detectable in Vault's audit log as a burst of `transit/decrypt` calls.
+**Why this matters:** an attacker who compromises `fwd` with a cache present can dump every cached privkey in one shot; without a cache, they must wait for and intercept a signing event per wallet — an attack that surfaces in `fwd`'s own hash-chained audit log as a burst of `sign-transaction` rows.
 
 ### 2. `bytearray`, not `bytes`, for privkey buffers
 
@@ -949,7 +909,7 @@ class Signer(Protocol):
     # SignedTransaction = NamedTuple of (raw_transaction: bytes, hash: bytes, r: int, s: int, v: int)
 ```
 
-v1 ships one implementation: `EnvelopeSigner` — fetches the wallet's Vault-wrapped privkey ciphertext from SQLite, calls `transit/decrypt/fwd-master` to recover plaintext, signs the transaction in-process with `eth-account`, zeroizes the plaintext buffer, and returns the signed payload. A future `YubiHsmSigner` (Phase 10, optional) plugs in via the same protocol — `fwd`'s policy engine, audit log, and API surface are unchanged. Future signer implementations that wrap a remote signing backend (HSM, KMS) will reintroduce DER parsing and v-recovery internally; the protocol only commits to "give me a signed transaction." This is the only forward-compatibility abstraction in the codebase; everything else is concrete to v1.
+v1 ships one implementation: `EnvelopeSigner` — fetches the wallet's sealed-master-wrapped privkey ciphertext from SQLite, calls `SealedMaster.decrypt` (in-process AES-256-GCM; no Vault, no network) to recover plaintext, signs the transaction in-process with `eth-account`, zeroizes the plaintext buffer, and returns the signed payload. A future `YubiHsmSigner` (Phase 10, optional) plugs in via the same protocol — `fwd`'s policy engine, audit log, and API surface are unchanged. Future signer implementations that wrap a remote signing backend (HSM, KMS) will reintroduce DER parsing and v-recovery internally; the protocol only commits to "give me a signed transaction." This is the only forward-compatibility abstraction in the codebase; everything else is concrete to v1.
 
 ## Out-of-scope for this document
 

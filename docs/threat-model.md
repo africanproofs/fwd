@@ -34,8 +34,8 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 | 3 | Has shell on the Docker host (non-root) | Plausible |
 | 4 | Has root on the Docker host | Possible — operational hygiene matters |
 | 5 | Has physical access to the host | Low (datacenter physical security) |
-| 6 | Has compromised khosi's laptop AND hardware GPG key | Low |
-| 7 | Has compromised 3 of 5 unseal-share locations | Very low |
+| 6 | Has compromised khosi's laptop AND hardware GPG key | Low — *retired Vault model (A5–A8); no GPG-encrypted shares exist post-v1.0.0a1* |
+| 7 | Has compromised 3 of 5 unseal-share locations | N/A — *retired Vault model (A5–A8); the sealed master has no Shamir shares* |
 | 8 | Has broken secp256k1 | Affects all of Ethereum |
 
 `fwd`'s job is to make tier-3 and tier-4 compromise **bounded** rather than catastrophic, and to ensure tiers 5–7 require multiple distinct compromises that cannot be achieved through any single incident.
@@ -89,7 +89,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 - `fwd` runs with `mlock`-equivalent memory protection (`IPC_LOCK` capability in compose) so plaintext privkeys are not swapped to disk.
 - Decrypt-on-demand (Core invariant #16): plaintext privkeys exist in memory only for microseconds per signing operation.
 - Host hardening runbook: minimal package set, SSH key-only, fail2ban, prompt patching.
-- Audit-log + RPC monitoring: extracted keys would be used to broadcast unauthorized transactions, which we'd see.
+- Audit-log visibility: `fwd` signs but does not broadcast (zero-egress, D20), so extracted-key abuse surfaces as anomalous `sign-transaction` rows in `fwd`'s hash-chained audit log; `fwd` itself cannot be the broadcast or network-exfil channel (no RPC client, no egress).
 
 **Residual risk.** Real, and a degradation from the originally-intended v0.1.0 design (which was infeasible because Vault Transit doesn't support secp256k1). The exposure window is bounded to active signing operations rather than the full Vault uptime, which is a meaningful improvement over a naive "key in memory all the time" pattern. **This is the biggest residual risk in v1.**
 
@@ -133,6 +133,8 @@ This is the cost of collapsing the Vault/fwd process boundary that v0.1.0 origin
 **Comparison to `.env` baseline.** Today: there is no policy enforcement point. After `fwd`: a compromised `fwd` is similarly catastrophic (key exfiltration possible), but the audit trail and Vault-side visibility make abuse detectable in ways `.env` files do not.
 
 ---
+
+> **A5–A8 describe the RETIRED Vault custody model (Vault removed at v1.0.0a1 — `decisions.md` D1).** There is no Vault, no AppRole, no Transit, and no 3-of-5 Shamir unseal ceremony in the current system, so **A5–A8 no longer obtain**. They are retained as honest history (Core invariant #18). The live custody attack surface is **A3** (host root) and **A4** (process compromise) against the *sealed local master* — both already framed for the current design above. Recovery for the sealed master is regenerate-wallet + on-chain re-authorization, not a share ceremony.
 
 ### A5. Vault is compromised directly (or AppRole credentials leak)
 
@@ -219,20 +221,20 @@ This was incorrectly described in v0.1.0 as "can sign but cannot extract" — th
 
 **How.** Datacenter break-in, evil-maid attack, server seizure.
 
-**What the attacker gets.** Same as A6 (sealed Vault → encrypted gibberish) or A3 (unsealed Vault → memory extraction possible).
+**What the attacker gets (v1.0.0a1 sealed-master model).** A *running* host: same as A4 — plaintext recoverable from `fwd`'s process memory during a signing op. An *offline/stopped* host: the SQLite ciphertexts (`seal:v1:`) AND the mode-0600 `master.key` file — if the attacker reads both, they recover all wallet keys; ciphertexts WITHOUT the master file are useless gibberish. (There is no "sealed Vault" state any more — the sealed master is a plaintext 32-byte file at rest, so disk encryption matters more here than in the Vault era.)
 
 **Mitigations.**
-- Datacenter physical security (Scaleway / hosting provider).
-- Optional disk encryption on host (defense in depth).
-- Power-on tamper detection: server should be configured to seal Vault on suspicious shutdowns (cron + signal handler).
+- Datacenter physical security (hosting provider).
+- Full-disk encryption on the host (defense in depth — now the primary at-rest protection for the `master.key` file, since there is no Vault encryption-at-rest layer).
+- The host is never publicly exposed; `fwd` has no egress (D20).
 
-**Residual risk.** Low for hosted environments. Higher for on-premises or if a host is moved.
+**Residual risk.** Low for hosted environments. Higher for on-premises or if a host is moved. Proportionate to the asset class (low-value automation keys — see the asset table).
 
 ---
 
 ### A10. Supply-chain attack
 
-**How.** A compromised version of `hashicorp/vault` Docker image, a malicious Python package update, a backdoored `eth-account` release.
+**How.** A malicious Python package update, or a backdoored `eth-account` / `cryptography` release. (The `hashicorp/vault` image is no longer an attack vector — Vault was retired at v1.0.0a1.)
 
 **What the attacker gets.** Whatever the malicious code does — could exfiltrate keys at signing time, modify transaction destinations silently, or open a covert channel.
 
@@ -241,7 +243,7 @@ This was incorrectly described in v0.1.0 as "can sign but cannot extract" — th
 - Python dependencies pinned in `poetry.lock`; no floating versions.
 - `fwd`'s own image built from source by AP's CI; not pulled from a registry someone else controls.
 - Renovate or Dependabot for proposed updates; updates reviewed before merge.
-- Vault's audit device logs every Vault operation independently — supply-chain attack inside `fwd` would still leave Vault-side traces.
+- `fwd`'s own hash-chained audit log records every signing decision — a supply-chain attack that drives signatures through `fwd`'s code paths still leaves audit traces (and `fwd` has no egress to phone home, D20).
 
 **Residual risk.** Industry-wide problem. Affects all software. Specific mitigations are the standard ones.
 
@@ -249,14 +251,14 @@ This was incorrectly described in v0.1.0 as "can sign but cannot extract" — th
 
 ### A11. Side-channel attacks (Spectre/Meltdown family)
 
-**How.** A separate process on the same host reads Vault's memory via speculative-execution side-channels.
+**How.** A separate process on the same host reads `fwd`'s memory (where a wallet key is plaintext during a signing op) via speculative-execution side-channels.
 
 **Mitigations.**
 - Single-purpose host: no other services running. No untrusted code shares the kernel.
 - Host kernel patched (KPTI, retpoline, etc.).
 - Cloud providers (Scaleway) apply mitigations at the hypervisor layer.
 
-**Residual risk.** Low for a single-tenant single-purpose host. Higher in multi-tenant cloud, but Vault's `mlock` doesn't fully protect against speculative reads.
+**Residual risk.** Low for a single-tenant single-purpose host. Higher in multi-tenant cloud, but `fwd`'s `mlockall` (Core invariant #1) prevents swap-to-disk, not speculative reads.
 
 ---
 
@@ -269,13 +271,12 @@ This was incorrectly described in v0.1.0 as "can sign but cannot extract" — th
 | Threat | Today (`.env`) | After `fwd` v1 | After `fwd` + YubiHSM 2 |
 |---|---|---|---|
 | Caller compromise | **Total loss** | Bounded by per-caller policy | Bounded by per-caller policy |
-| Host root compromise | Total loss | Plaintext recoverable from `fwd` process memory during signing operation; ciphertexts decryptable via running `fwd`'s AppRole token | Keys cannot be extracted; signing can be abused while attacker has access |
-| Disk theft (sealed) | Total loss | Encrypted, useless | Encrypted, useless |
-| Backup theft | Total loss | Encrypted, useless | Encrypted, useless |
-| Single share or location stolen | Total loss | Below threshold, useless | Below threshold, useless |
-| `fwd` process compromise | N/A | **All wallet keys decryptable via `transit/decrypt/fwd-master` (per A4); attacker can exfiltrate plaintext** — Vault audit makes bulk decryption visible | Keys cannot be extracted; signing can be abused while compromise persists |
-| AppRole credential leak (`FWD_VAULT_ROLE_ID` + `FWD_VAULT_SECRET_ID`) + SQLite ciphertext access | N/A | **Equivalent to fwd process compromise — all wallet keys decryptable** (per A5) | Keys cannot be extracted; signing can be abused during access window |
-| Supply-chain | Total loss | Bounded by Vault-side audit | Same |
+| Host root compromise | Total loss | Plaintext recoverable from `fwd` process memory during a signing op; OR host read of BOTH the `master.key` file AND the SQLite ciphertexts (sealed master, v1.0.0a1 — no AppRole) | Keys cannot be extracted; signing can be abused while attacker has access |
+| Disk theft (ciphertext only) | Total loss | SQLite ciphertexts WITHOUT `master.key` = useless gibberish; WITH it = recoverable (full-disk encryption is the at-rest defense) | Encrypted, useless |
+| Backup theft | Total loss | Same as disk theft — ciphertext useless without the separately-held `master.key` | Encrypted, useless |
+| `fwd` process compromise | N/A | **All wallet keys decryptable in-process via the sealed master (per A4); attacker can sign during the compromise** — `fwd`'s audit log makes signing visible, and zero-egress (D20) denies a network exfil channel | Keys cannot be extracted; signing can be abused while compromise persists |
+| ~~AppRole credential leak~~ | — | **N/A — Vault/AppRole retired at v1.0.0a1 (D1).** The custody attack surface is host-root / process compromise above. | — |
+| Supply-chain | Total loss | Bounded by `fwd`'s hash-chained audit + zero egress | Same |
 | Physical | Total loss | Encrypted at rest; in-memory if running | Keys never in host memory |
 
 ## The honest one-line summary

@@ -9,12 +9,12 @@ Every dependency `fwd` requires, grouped by tier. The "Status for AP" column fla
 | Docker + Docker Compose | Likely present, must be installed if absent | Any host. No K3s required. |
 | GitLab repo + CI runners | ✅ Exists | New repo at `gitlab.com/proofs.africa/fwd` |
 | GitLab Container Registry | ✅ Exists | Image: `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` |
-| Flare RPC | ✅ Exists | `ap-ftso-01:9650` (archive node, internal) |
-| Songbird RPC | ✅ Exists | `ap-ftso-02:9650` (pruned node, internal) |
-| Coston2 RPC | ✅ Public | `https://coston2-api.flare.network/ext/C/rpc` — outside AP's control, fine for spike + tests |
-| **a local `backup` volume (v0.4.3) bucket** | ⚠️ Create one | New bucket for Litestream backups. ~€0/mo at AP volume. |
+| **A local `backup` volume** | ⚠️ Provision one | Docker volume (or host bind) for Litestream SQLite replicas. Local only — no cloud, no IAM, ~€0/mo. |
+| The `master.key` file | ⚠️ Generate one | 32-byte mode-0600 sealed master via `clifwd master generate` (v1.0.0a1; replaces Vault). |
 
-**Net-new operational surface:** one a local `backup` volume (v0.4.3) bucket. Nothing else.
+**`fwd` needs NO chain RPC** (zero-egress, v1.1.0a9 / D20): it never broadcasts and never reads the chain. The Flare / Songbird / Coston2 RPC endpoints are **caller** prerequisites (the client broadcasts the signed tx), listed under § Cross-project dependencies — not `fwd` infrastructure.
+
+**Net-new operational surface:** one local `backup` volume + the operator-held `master.key` file. Nothing else.
 
 Notably **NOT required:**
 - AWS account
@@ -23,8 +23,9 @@ Notably **NOT required:**
 - Pulumi
 - Postgres
 - Redis
-- Public DNS hostname (ClusterIP-equivalent — bound to `127.0.0.1`)
+- Public DNS hostname — `fwd` is on an `internal: true` network with no host port (v1.1.0a15); callers reach it intra-network, admin via `docker exec`
 - TLS certificate from a public CA
+- Any chain RPC endpoint (zero-egress — `fwd` never reaches the chain)
 
 ## Containerized services (deployed by `fwd`'s `docker-compose.yml`)
 
@@ -43,8 +44,8 @@ Two services (was four pre-v1.0.0a1: `vault` + `vault-snapshot` deleted with the
 | `uvicorn` | `^0.30` | ASGI server |
 | `pydantic` | `^2.9` | Request/response validation (with FastAPI) |
 | `pydantic-settings` | `^2.6` | Env var configuration |
-| `httpx` | `^0.27` | Async HTTP — RPC + Vault |
-| ~~`hvac`~~ | — | NEVER adopted — the Vault client is hand-rolled on `httpx` (`infra/vault_client.py`); this row was doctrine drift, struck v0.5.6 |
+| `httpx` | `^0.27` | Used by the **CLI** only (`clifwd` admin commands → `fwd`'s own inbound API: health, wallets, callers, nonce). The daemon (`app`/`api`/`infra`) makes NO outbound HTTP — zero-egress (D20). |
+| ~~`hvac`~~ | — | NEVER adopted (Vault retired entirely at v1.0.0a1 — D1; the old hand-rolled `vault_client.py` was deleted then). Struck. |
 | `eth-account` | `^0.13` | EIP-1559 transaction encoding, RLP |
 | `eth-utils` | `^5.0` | keccak256, address formatting, EIP-55 checksum |
 | `coincurve` | `^20.0` | secp256k1 — `eth-account`'s active backend (`eth_keys ... CoinCurveECCBackend`); pinned for custody-path supply-chain legibility, NOT directly imported by `fwd` (wallet keygen is `eth_account.Account.create()` per the v0.2.0 spike). Kept v0.5.5 (audit contest). |
@@ -55,7 +56,7 @@ Two services (was four pre-v1.0.0a1: `vault` + `vault-snapshot` deleted with the
 | `pyyaml` | `^6.0` | Policy file loading |
 | `structlog` | `^24.4` | JSON structured logging |
 | ~~`prometheus-client`~~ | — | Removed v0.5.5 (audit OE-6): zero src/ use; re-add at Phase 10 when `/metrics` is built |
-| `tenacity` | `^9.0` | Retry policies for RPC calls |
+| `tenacity` | `^9.0` | **Unused since v1.1.0a9** — was retry policy for RPC calls; `fwd` no longer makes any (zero-egress). Still in `pyproject.toml`; a removal candidate for a future cleanup (not removed here — docs-only ship). |
 | `typer` | `^0.16` | CLI framework |
 | `rich` | `^13.9` | CLI rendering |
 
@@ -85,11 +86,9 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 
 | Item | Why | Status |
 |---|---|---|
-| GPG keypair on YubiKey hardware token | Encrypting unseal shares for digital backup; PIN-protected | Verify or set up |
-| Printer access | Paper backup of 2 of 5 unseal shares | Trivial |
-| Off-site physical location | One paper share + one encrypted USB lives outside primary residence | Decide |
-| a local `backup` volume (v0.4.3) IAM keys | Litestream → bucket credentials (read+write scoped to `s3://ap-fwd-backups/...`) | Generate at Phase 6 |
-| Hardware wallet for identity rotation | Phase 8 `ClaimSetupManager.setClaimExecutors` transaction signed by identity address | Already in use by AP |
+| `master.key` (32-byte sealed master) | Custody root — generate via `clifwd master generate`, mode-0600, bind-mounted, backed up off-host out-of-band. Replaces the entire Vault unseal-share apparatus (no GPG/YubiKey/paper/Shamir — Vault retired v1.0.0a1, D1). | Generate before first boot |
+| Off-host copy of the `backup` volume + `master.key` | Disaster recovery (litestream restore + the master file). Operator's own transport (rsync/restic/USB/NAS) — `fwd` does not ship backups off-host (no egress). No cloud IAM / S3 bucket. | Operator-driven |
+| Hardware wallet for identity rotation | `ClaimSetupManager.setClaimExecutors` transaction signed by the identity address | Already in use by AP |
 
 ## Cross-project dependencies (callers, not `fwd`'s deps)
 
@@ -114,20 +113,22 @@ Listed because earlier design drafts implied otherwise; making the absences expl
 - **No Pulumi** — the Pulumi-exclusivity rule from root `CLAUDE.md` applies to K8s deployments only; `fwd` is not on K8s.
 - **No Postgres** — SQLite + Litestream replaces it.
 - **No Redis** — SQLite handles nonce locking via `BEGIN IMMEDIATE`.
-- **No public DNS / TLS cert** — ClusterIP-equivalent (`127.0.0.1` on host) only.
-- **No `web3.py`** — `eth-account` is enough.
+- **No public DNS / TLS cert** — `fwd` is on an `internal: true` network with no host port (v1.1.0a15); reachable only intra-network, admin via `docker exec`.
+- **No chain RPC / `web3.py` / broadcast path** — `eth-account` signs; the client broadcasts (zero-egress, D20).
 - **No external auth provider** (Auth0, Keycloak, etc.) — bearer API keys are the auth model in v1, mTLS is the Phase 10 option.
-- **No service-mesh** (linkerd, Istio) — `fwd-internal` Docker network is the boundary.
+- **No service-mesh** (linkerd, Istio) — the `fwd-callers` `internal: true` Docker network is the boundary.
 
 ## Honest summary
 
-The only genuinely net-new operational dependency AP picks up by building `fwd` is **HashiCorp Vault running in Docker** (with state backups on a local volume). Everything else is either already operating, already in AP's standard stack, or trivially provisioned.
+The only genuinely net-new operational dependencies AP picks up by building `fwd` are **a local `backup` volume for Litestream** and the operator-held **`master.key`** sealed-master file (v1.0.0a1 — HashiCorp Vault was retired; there is no Vault container, no AWS, no cloud account). Everything else is either already operating, already in AP's standard stack, or trivially provisioned.
 
-Compared to the AWS-KMS alternative, `fwd` adds *less* total dependency surface — it removes a cloud account at the cost of one extra container. Compared to the K3s alternative, `fwd` removes the K8s control-plane dependency at the cost of slightly weaker caller authentication (bearer keys vs SA tokens), with a documented Phase 10 mTLS upgrade path.
+Compared to the AWS-KMS alternative, `fwd` adds *less* total dependency surface — no cloud account, no KMS, one daemon + one backup sidecar. Compared to the K3s alternative, `fwd` removes the K8s control-plane dependency at the cost of slightly weaker caller authentication (bearer keys vs SA tokens), with a documented Phase 10 mTLS upgrade path.
 
 ## Verification spike (Phase 1 risk retirement)
 
-The Phase 1 spike retires two specific dependency assumptions under the v0.1.2 architecture:
+> **Historical (Phase 1, v0.2.0).** Both assumptions below were tested under the original Vault-Transit + fwd-broadcasts design. Both have since been superseded: **(1)** Vault was retired at v1.0.0a1 — custody round-trips through the in-process `SealedMaster` (AES-256-GCM), proven live by the v1.0.0a3 sealed-master drill; **(2)** `fwd` no longer broadcasts (v1.1.0a9 / D20) — the client does, and the signed-tx + broadcast path is proven by the v1.1.0a12 funded Coston2 drill + the epoch-400 mainnet drill. Retained as honest history of the Phase 1 risk retirement.
+
+The Phase 1 spike retired two specific dependency assumptions under the (then-current) v0.1.2 architecture:
 
 1. **Vault Transit `aes256-gcm96` round-trips arbitrary 32-byte plaintext intact** — confirm `transit/encrypt/fwd-master` accepts a base64-encoded 32-byte secp256k1 privkey and `transit/decrypt/fwd-master` returns the original bytes verbatim. The roundtrip is asserted in the spike before the privkey is used.
 2. **`eth-account` 0.13.x signs a type-0x02 (EIP-1559) transaction for chainId 114 that Coston2 RPC accepts** — confirm `Account.sign_transaction(tx_dict, privkey)` produces a correctly-RLP-encoded signed transaction whose `eth_sendRawTransaction` broadcast succeeds and produces a successful receipt.
