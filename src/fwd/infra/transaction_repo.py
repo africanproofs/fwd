@@ -61,7 +61,7 @@ transaction_attempts = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
-_VALID_STATUSES = frozenset({"pending", "submitted", "mined", "replaced", "failed", "dropped", "reverted"})
+_VALID_STATUSES = frozenset({"pending", "submitted", "mined", "failed", "dropped", "reverted"})
 
 
 @dataclass(frozen=True)

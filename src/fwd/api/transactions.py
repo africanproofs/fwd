@@ -417,7 +417,7 @@ async def post_sign_replacement(
                 decision="denied",
                 caller=caller.name,
                 request_json=_canonical_json({"tx_id": tx_id}),
-                decision_reason=f"illegal_transition:{tx.status}->replaced",
+                decision_reason=f"illegal_transition:{tx.status}->replacement",
             )
             await scope.audit_repo.commit()  # Core #5/#19
             raise HTTPException(
