@@ -879,6 +879,18 @@ epoch-400 Flare/Songbird mainnet drill through migrated clif passed.
 **New operational risk:** orphaned nonce reservation; mitigated as above. **Pending:**
 the production cutover (live claim/FSP through migrated clif) remains operator-gated.
 
+## D21. Current-state docs describe the present only (Core #18 amended)
+
+**Decision (v1.1.0a22 — operator directive; constitutional-amendment ship).** The current-state docs — `CLAUDE.md`, `README.md`, `architecture.md`, `threat-model.md`, `dependencies.md` — describe the code as it is now, in present tense, with NO archaeology: no "was X / retired / superseded / fixed in vX" annotations, no version-by-version narrative, no references to deprecated or discarded designs. When code changes, the current-state docs are rewritten to the new present (old wording replaced, not annotated-as-superseded). The project's history — evolution, decision rationale, abandoned ideas — lives ONLY in the quarantined record: `docs/history/` (per-version ship narratives + `SHIP-LOG.md`, append-only, Core #13) and this file (`decisions.md`, the append-only decision log).
+
+**What changed.** This amends Core invariant #18, whose prior wording mandated in-place "honest history" annotations in the current-state docs. Over many ships those annotations accreted into archaeology that buried the present — by v1.1.0a21 the `CLAUDE.md` § Scope was a ~1,250-word a8→a21 arrow-chain, and the invariants / architecture / threat-model carried pervasive "Vault retired / was sign-and-send / vestigial" asides. The operator's directive: the docs must reflect the code as it is, not as it used to be.
+
+**Scope (operator-chosen).** Sanitize the current-state docs + remove dead code/config that is no longer part of the project (the retired Vault-snapshot sidecar + scripts, the stale Vault runbooks, the vestigial `replaced` tx status). KEEP the historical-record files (`docs/history/`, `SHIP-LOG.md`, this decision log, `implementation-plan.md`) untouched as the quarantined memory — a reader of the current-state docs never time-travels, but the project's history survives in files that ARE explicitly history.
+
+**Consequences.** Core #18 is the new rule going forward; the per-ship doctrine surface's § Scope artifact is a clean current-state line (no arrow-chain). `SHIP-LOG.md` + `docs/history/` remain append-only (Core #13 unchanged). Audits still catch drift (a current-state claim the code does not do); the fix is to rewrite the doc to the present. Self-ratifying per the constitutional-amendment ship-type (D17): this amendment is governed by the definition it introduces, recorded here honestly.
+
+**When to revisit.** If the quarantine boundary proves wrong (e.g. a current-state doc genuinely needs a historical pointer readers miss), adjust the pointer convention — not by re-admitting inline archaeology.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.
