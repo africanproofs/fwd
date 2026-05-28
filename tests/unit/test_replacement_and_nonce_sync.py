@@ -37,6 +37,7 @@ from fwd.app.dependencies import (
     ReportScope,
     get_admin_scope,
     get_replacement_scope,
+    get_report_scope,
     get_transaction_repo,
 )
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
@@ -311,6 +312,17 @@ def _make_replacement_client(
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _make_report_client(
+    caller: Caller,
+    report_cm: _RealReportScopeCM,
+) -> TestClient:
+    app = FastAPI()
+    app.include_router(transactions_router)
+    app.dependency_overrides[require_caller] = lambda: caller
+    app.dependency_overrides[get_report_scope] = lambda: report_cm
+    return TestClient(app, raise_server_exceptions=False)
+
+
 def _make_nonce_client(
     admin_scope_cm: _RealAdminScopeCM,
     tx_repo_cm: _RealTransactionRepoCM | None = None,
@@ -510,7 +522,7 @@ async def test_sign_transaction_records_attempt_1_and_reserved_at() -> None:
 
 @pytest.mark.asyncio
 async def test_sign_replacement_happy_path(db_session: AsyncSession) -> None:
-    """submitted tx + valid bump → 200 replaced, new attempt recorded, same nonce."""
+    """submitted tx + valid bump → 200, tx stays `submitted`, new attempt recorded, same nonce."""
     tx_id = "018f0001-a13-0001-0000-000000000001"
     await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=5)
     await _seed_tx_hash(db_session, tx_id=tx_id, hash_hex=TX_HASH_1, sequence_num=1)
@@ -562,7 +574,7 @@ async def test_sign_replacement_happy_path(db_session: AsyncSession) -> None:
     db_session.expire_all()
     tx_row = await _tx_row(db_session, tx_id)
     assert tx_row is not None
-    assert tx_row["status"] == "replaced"
+    assert tx_row["status"] == "submitted"
 
     attempts = await _attempt_rows(db_session, tx_id)
     assert len(attempts) == 2
@@ -796,6 +808,180 @@ async def test_sign_replacement_sign_failure_does_not_release_nonce(
         row["action"] == "tx-replacement" and row["decision"] == "error"
         for row in rows
     )
+
+
+@pytest.mark.asyncio
+async def test_receipt_after_replacement(db_session: AsyncSession) -> None:
+    """After sign-replacement, the replacement hash is accepted by /receipt and
+    the nonce is confirmed (gap-closer for the replacement lifecycle bug)."""
+    from fwd.domain.signer import SignedTransaction
+
+    tx_id = "018f0001-a19-receipt-after-repl-0001"
+    nonce = 5
+    await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=nonce)
+    await _seed_tx_hash(db_session, tx_id=tx_id, hash_hex=TX_HASH_1, sequence_num=1)
+    prev_priority = 500_000_000
+    await _seed_attempt(
+        db_session,
+        tx_id=tx_id,
+        sequence_num=1,
+        gas=21_000,
+        max_fee_per_gas=1_000_000_000,
+        max_priority_fee_per_gas=prev_priority,
+    )
+    # Seed the nonce row so mark_confirmed has a row to update.
+    await _seed_nonce(db_session, next_nonce=nonce + 1, last_confirmed=None)
+
+    # The replacement signer returns a known hash.
+    replacement_hash_bytes = bytes(range(32))
+    replacement_hash_hex = "0x" + replacement_hash_bytes.hex()
+    new_raw = b"\x02\xcc\xdd"
+    mock_signer = MagicMock()
+    mock_signer.sign_transaction = AsyncMock(
+        return_value=SignedTransaction(
+            raw_transaction=new_raw,
+            hash=replacement_hash_bytes,
+            r=1,
+            s=2,
+            v=27,
+        )
+    )
+
+    caller = _make_caller(CALLER_A)
+    scope_cm = _RealReplacementScopeCM(db_session, signer=mock_signer)
+    replacement_client = _make_replacement_client(caller, scope_cm)
+
+    min_priority = math.ceil(prev_priority * 1.125)
+    r = replacement_client.post(
+        f"/v1/transactions/{tx_id}/sign-replacement",
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": min_priority,
+        },
+        headers={"Authorization": "Bearer fwd_live_x"},
+    )
+    assert r.status_code == 200, r.text
+
+    # TX must still be submitted after replacement.
+    db_session.expire_all()
+    tx_row = await _tx_row(db_session, tx_id)
+    assert tx_row is not None
+    assert tx_row["status"] == "submitted"
+
+    # Now report the receipt using the replacement's hash.
+    report_cm = _RealReportScopeCM(db_session)
+    report_client = _make_report_client(caller, report_cm)
+
+    r2 = report_client.post(
+        f"/v1/transactions/{tx_id}/receipt",
+        json={
+            "tx_hash": replacement_hash_hex,
+            "outcome": "mined_success",
+            "block_number": 12345,
+        },
+        headers={"Authorization": "Bearer fwd_live_x"},
+    )
+    assert r2.status_code == 200, r2.text
+
+    db_session.expire_all()
+    tx_row2 = await _tx_row(db_session, tx_id)
+    assert tx_row2 is not None
+    assert tx_row2["status"] == "mined"
+
+    # mark_confirmed ran: last_confirmed == nonce.
+    nonce_row = await _nonce_row(db_session)
+    assert nonce_row is not None
+    assert nonce_row["last_confirmed"] == nonce
+
+
+@pytest.mark.asyncio
+async def test_multi_replacement_reaches_cap(db_session: AsyncSession) -> None:
+    """Four consecutive replacements all return 200 and leave the tx submitted;
+    a 5th (6th attempt total) returns 409 replacement_cap_exhausted.
+
+    Prior to the fix the 2nd call would 409 illegal_transition because
+    the 1st moved the tx to 'replaced'.
+    """
+    from fwd.domain.signer import SignedTransaction
+
+    tx_id = "018f0001-a19-multi-repl-cap-00001"
+    nonce = 5
+    await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=nonce)
+    await _seed_tx_hash(db_session, tx_id=tx_id, hash_hex=TX_HASH_1, sequence_num=1)
+    init_priority = 100_000_000
+    init_fee = 200_000_000
+    await _seed_attempt(
+        db_session,
+        tx_id=tx_id,
+        sequence_num=1,
+        gas=21_000,
+        max_fee_per_gas=init_fee,
+        max_priority_fee_per_gas=init_priority,
+    )
+
+    caller = _make_caller(CALLER_A)
+
+    prev_priority = init_priority
+    prev_fee = init_fee
+
+    for i in range(4):
+        new_priority = math.ceil(prev_priority * 1.125)
+        new_fee = prev_fee + 50_000_000  # comfortably rising, stays well under caps
+
+        mock_signer = MagicMock()
+        mock_signer.sign_transaction = AsyncMock(
+            return_value=SignedTransaction(
+                raw_transaction=b"\x02" + bytes([i]),
+                hash=bytes([i]) * 32,
+                r=1,
+                s=2,
+                v=27,
+            )
+        )
+        scope_cm = _RealReplacementScopeCM(db_session, signer=mock_signer)
+        client = _make_replacement_client(caller, scope_cm)
+
+        r = client.post(
+            f"/v1/transactions/{tx_id}/sign-replacement",
+            json={
+                "gas": 21_000,
+                "max_fee_per_gas": new_fee,
+                "max_priority_fee_per_gas": new_priority,
+            },
+            headers={"Authorization": "Bearer fwd_live_x"},
+        )
+        assert r.status_code == 200, f"call {i + 1}: {r.text}"
+
+        db_session.expire_all()
+        tx_row = await _tx_row(db_session, tx_id)
+        assert tx_row is not None
+        assert tx_row["status"] == "submitted", f"call {i + 1}: expected submitted, got {tx_row['status']}"
+
+        prev_priority = new_priority
+        prev_fee = new_fee
+
+    # After 4 replacements there are 5 attempts total (seq 1..5).
+    attempts = await _attempt_rows(db_session, tx_id)
+    assert len(attempts) == 5
+
+    # A 5th replacement call (6th attempt) must be rejected.
+    fifth_priority = math.ceil(prev_priority * 1.125)
+    fifth_fee = prev_fee + 50_000_000
+
+    scope_cm_final = _RealReplacementScopeCM(db_session)
+    client_final = _make_replacement_client(caller, scope_cm_final)
+    r_cap = client_final.post(
+        f"/v1/transactions/{tx_id}/sign-replacement",
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": fifth_fee,
+            "max_priority_fee_per_gas": fifth_priority,
+        },
+        headers={"Authorization": "Bearer fwd_live_x"},
+    )
+    assert r_cap.status_code == 409, r_cap.text
+    assert r_cap.json()["detail"]["error"] == "replacement_cap_exhausted"
 
 
 # ===========================================================================

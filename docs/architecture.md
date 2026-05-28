@@ -207,19 +207,21 @@ The `POST /v1/sign-transaction` happy path:
       { tx_hash, outcome: mined_success | mined_reverted, block_number }
     - On stuck tx, caller calls POST /v1/transactions/{tx_id}/sign-replacement
       → fwd re-signs the SAME intent at the SAME nonce with bumped fees
-      (×1.125, ≤5 retries), appends transaction_hashes (sequence_num=N+1)
+      (×1.125, ≤5 retries), appends transaction_hashes (sequence_num=N+1).
+      The tx STAYS `submitted` (v1.1.0a19) — the client then broadcasts the
+      replacement and reports its receipt via the SAME /receipt call (which
+      accepts any recorded hash), confirming the nonce.
 ```
 
-> **Replacement lifecycle — current limitation (v1.1.0a13; flagged for a follow-up
-> code ship).** `sign-replacement` requires the tx to be in `submitted` and sets its
-> status to `replaced`. But `/broadcast-result` only accepts `pending` and `/receipt`
-> only accepts `submitted` — so once a tx is `replaced`, **the replacement transaction's
-> own broadcast/receipt cannot be reported back through these endpoints**, and the
-> reserved nonce is never marked confirmed by a receipt. In practice the operator
-> reconciles that wallet's nonce to chain truth via the admin `nonce-sync` endpoint
-> after a replacement lands. Closing this (e.g. allowing a `replaced → mined/reverted`
-> receipt transition, or minting a successor tx record for the replacement) is a known
-> follow-up; the docs describe the code as it is, not as it should be (Core invariant #18).
+> **Replacement lifecycle (fixed v1.1.0a19).** `sign-replacement` requires the tx to be
+> `submitted` and **keeps it `submitted`** — it no longer transitions to a terminal
+> `replaced` status. Because `/receipt` accepts ANY hash fwd recorded for the tx, the
+> client reports the *replacement's* receipt through the normal `submitted →
+> mined/reverted` path and the nonce is marked confirmed — no operator `nonce-sync`
+> needed. Keeping `submitted` also makes the ≤5-retry cap reachable (a 2nd+
+> `sign-replacement` still sees `submitted`); previously the first replacement moved
+> the tx to `replaced`, dead-ending both report-back and any further replacement. The
+> `replaced` value stays in the status enum but is now **vestigial** (no writer).
 
 ### Failure modes in the signing flow
 
@@ -285,7 +287,7 @@ CREATE TABLE transactions (
     idempotency_key  TEXT,                        -- caller-supplied via header; optional
     request_json     TEXT NOT NULL,               -- opaque archive of original request
     signed_raw       TEXT,                        -- hex of latest signed tx
-    status           TEXT NOT NULL,               -- pending|submitted|mined|reverted|replaced|failed (pending = signed, pre-broadcast; submitted/mined/reverted are client-reported)
+    status           TEXT NOT NULL,               -- pending|submitted|mined|reverted|failed (pending = signed, pre-broadcast; submitted/mined/reverted are client-reported). `replaced` is a valid-but-vestigial value as of v1.1.0a19 — replacements keep the tx `submitted`, nothing writes `replaced`.
     submitted_at     TIMESTAMP,
     confirmed_at     TIMESTAMP,
     receipt_json     TEXT,                        -- opaque archive of RPC receipt

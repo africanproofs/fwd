@@ -617,7 +617,6 @@ async def post_sign_replacement(
             created_at=now,
         )
         await scope.tx_repo.add_hash(tx_id, new_hash, sequence_num=new_seq)
-        await scope.tx_repo.update_status(tx_id, "replaced")
         await scope.audit_repo.append(
             action="tx-replacement",
             decision="approved",
