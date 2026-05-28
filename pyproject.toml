@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fwd"
-version = "1.1.0a20"
+version = "1.1.0a21"
 description = "Flare Wallet Daemon — policy-gated signing service for AP backend keys"
 authors = ["African Proofs <khosimorafo@yahoo.com>"]
 readme = "README.md"
@@ -26,7 +26,7 @@ argon2-cffi = "^23.1"
 pyyaml = "^6.0"
 structlog = "^24.4"
 # prometheus-client removed v0.5.5 (audit OE-6): zero src/ use; metrics are Phase 10 — re-add when /metrics is built, not before (Behavioural guideline 2, "nothing speculative").
-tenacity = "^9.0"
+# tenacity removed v1.1.0a21: zero src/ + tests/ use since the v1.1.0a9 RPC excision (it was the retry policy for RPC calls); not a transitive dep of anything in poetry.lock (Behavioural guideline 2 — nothing speculative).
 typer = "^0.16"
 rich = "^13.9"
 

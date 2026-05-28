@@ -56,7 +56,7 @@ Two services (was four pre-v1.0.0a1: `vault` + `vault-snapshot` deleted with the
 | `pyyaml` | `^6.0` | Policy file loading |
 | `structlog` | `^24.4` | JSON structured logging |
 | ~~`prometheus-client`~~ | — | Removed v0.5.5 (audit OE-6): zero src/ use; re-add at Phase 10 when `/metrics` is built |
-| `tenacity` | `^9.0` | **Unused since v1.1.0a9** — was retry policy for RPC calls; `fwd` no longer makes any (zero-egress). Still in `pyproject.toml`; a removal candidate for a future cleanup (not removed here — docs-only ship). |
+| ~~`tenacity`~~ | — | **Removed v1.1.0a21** — was the retry policy for RPC calls; zero `src/`+`tests/` use since the v1.1.0a9 RPC excision (`fwd` makes no RPC, zero-egress), and not a transitive dep of anything. Dropped from `pyproject.toml` + `poetry.lock` (minimal `--no-update` re-lock). |
 | `typer` | `^0.16` | CLI framework |
 | `rich` | `^13.9` | CLI rendering |
 
