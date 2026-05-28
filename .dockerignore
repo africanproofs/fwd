@@ -29,3 +29,13 @@ secrets/
 README.md
 LICENSE
 CLAUDE.md
+
+# Custody / private config — NEVER bake into an image (Core invariant #12).
+# Operator-provisioned, bind-mounted at runtime. The Dockerfile copies only
+# config/abis/; these guard against any future broadening of the COPY.
+config/master.key
+config/*.key
+config/policy.yaml
+config/policy.yaml.*
+config/*.bak
+config/*.bak-*

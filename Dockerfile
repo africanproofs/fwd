@@ -44,11 +44,12 @@ COPY --from=build /usr/local/bin /usr/local/bin
 COPY --from=build /build/src /app/src
 COPY alembic.ini /app/alembic.ini
 COPY alembic/ /app/alembic/
-# Phase 7: the ABI registry (config/abis/) is read at lifespan startup by
+# The ABI registry (config/abis/) is read at lifespan startup by
 # AbiRegistry.load(FWD_ABIS_DIR, default /app/config/abis). It MUST ship in
-# the image or _startup_policy_load fail-fasts (D14). policy.yaml is NOT
-# copied — it is operator-controlled and bind-mounted (Core invariant #12).
-COPY config/ /app/config/
+# the image or _startup_policy_load fail-fasts (D14). Copy ONLY config/abis/:
+# policy.yaml, the sealed master, and any backups are operator-controlled and
+# bind-mounted at runtime, NEVER baked into an image layer (Core invariant #12).
+COPY config/abis/ /app/config/abis/
 
 # D16 promises `docker exec fwd clifwd audit verify` as the canonical
 # walker invocation, but `poetry install --no-root` does not install the
