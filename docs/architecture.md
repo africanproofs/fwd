@@ -228,7 +228,7 @@ Every failure `fwd` itself can hit occurs **before** the signed tx leaves the bu
 | 14 (client-reported) | broadcast `rejected_releaseable` | recorded; tail nonce released, else surfaced via `nonce/holes` | Released (tail) / hole |
 | 14 (client-reported) | broadcast `rejected_nonce_too_low` | recorded; chain is ahead → operator `nonce-sync` | Kept |
 
-Every failure writes an audit row recording the caller, the request, the failed step, and the response code — committed independently of the rolled-back transaction (Core invariant #19). The structlog scrubber (see `## Implementation hazards` below) ensures no plaintext privkey reaches the audit log under any failure path.
+Every denied or errored operation in this sign path writes an audit row recording the caller, the request, the failed step, and the response code — committed independently of the rolled-back transaction (Core invariant #19). (Pre-handler rejects — auth failures, malformed-header 400s, and read-only/health GETs — are not in this path and write no audit row.) The structlog scrubber (see `## Implementation hazards` below) ensures no plaintext privkey reaches the audit log under any failure path.
 
 ## SQLite schema
 

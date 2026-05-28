@@ -77,6 +77,7 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 | `pytest-cov` | `^6.0` | Coverage reporting (CI gate) |
 | `ruff` | `^0.8` | Lint + format (AP standard) |
 | `mypy` | `^1.13` | Strict type-checking (AP standard) |
+| `types-pyyaml` | `^6.0` | PyYAML type stubs for `mypy --strict` (policy loader) |
 | Docker | Recent | For local image builds and `docker-compose` |
 | Docker Compose | v2 | Native CLI (`docker compose`, not `docker-compose`) |
 | GitLab CI runner | Existing | Lints, tests, builds the image, pushes to registry |
