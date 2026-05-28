@@ -1,5 +1,11 @@
 # Sign-and-send verification — manual operator gate (v0.3.0)
 
+> ⚠️ **SUPERSEDED (pre-zero-egress) — historical.** The endpoint `/v1/sign-and-send`
+> was renamed `/v1/sign-transaction` and made sign-only (no broadcast) at v1.1.0a9;
+> custody moved off Vault at v1.0.0a1. The current sealed-master sign gate is
+> `v1.0.0a1-sealed-master-verification.md`, and the live client↔fwd↔chain path is
+> proven by the v1.1.0a12 Coston2 + epoch-400 mainnet drills. Kept as honest history.
+
 > Phase 3c verification: send a real Coston2 transaction via fwd's
 > `POST /v1/sign-and-send`. This is the operator-driven equivalent of the
 > v0.2.0 spike, but as a real service.

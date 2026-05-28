@@ -4,6 +4,8 @@ This document records the architectural decisions made during `fwd`'s v0.1.0 des
 
 Decisions are numbered for reference. Format: **Decision** / **Alternatives considered** / **Why** / **Consequences** / **When to revisit**.
 
+> **Two project-wide renames post-date many records below; D1 and D20 are the records of truth, and older decision bodies use the original names as honest history:** (1) **custody** — HashiCorp Vault was retired at v1.0.0a1; custody is now a sealed local master (`decisions.md` D1). Wherever an operative decision still reads "Vault / Transit / AppRole / unseal," read "sealed master." (2) **the signing endpoint** — `/v1/sign-and-send` was renamed `/v1/sign-transaction` and made sign-only (no broadcast) at v1.1.0a9 (`decisions.md` D20). Wherever a still-operative decision references `/v1/sign-and-send`, the live route is `/v1/sign-transaction`. These renames are NOT re-annotated inline on every historical record (that would churn the append-only log); D1/D20 carry the authoritative reconciliation.
+
 ---
 
 ## D1. Custody backend
@@ -32,8 +34,12 @@ A sealed master gives equivalent at-rest protection (ciphertext-only on
 disk theft absent the master file) and equivalent runtime blast radius
 (a compromised running `fwd` decrypts everything either way), at a
 fraction of the operational and dependency surface. **Disaster
-recovery** is regenerate-the-wallet + on-chain `setClaimRecipient`
-rotation (≈ free), not a share ceremony. **Operator decision recorded
+recovery** is regenerate-the-wallet + on-chain re-authorization
+(≈ free), not a share ceremony. **[Flag — DR mechanic, per CLAUDE.md
+Core #17:** the exact on-chain step is `ClaimSetupManager.setClaimExecutors`
+re-authorization of the regenerated executor, NOT recipient rotation; this
+path is not yet Reviewer-verified end-to-end, so the `setClaimRecipient`
+wording is retained-flagged here, not rewritten into security doctrine.] **Operator decision recorded
 2026-05-17.** Alternatives weighed: keep Vault (rejected — pays the full
 ops tax for a benefit that does not apply here); passphrase/Shamir-sealed
 master (rejected — restart friction with no real marginal security for
@@ -147,7 +153,7 @@ the v0.4.3 honest-history precedent — do not delete).
 - Phase 8 includes a one-time on-chain `ClaimSetupManager.setClaimExecutors` transaction (the operator's claim-recipient is unchanged).
 - The hardware wallet that controls the identity address `0x26534aC74153E3257dDD3471f96faA33D5D3B575` must be available during the cutover. (Identity keys themselves do not migrate to fwd — they stay offline.)
 - After rotation, every subsequent claim signed by the new Vault-resident key is cryptographically uncontaminated.
-- The procedure becomes a documented runbook (`runbooks/key-rotation.md`) reusable for any future key rotations (compromise response, hardware-wallet upgrade, scheduled hygiene).
+- The procedure becomes a documented runbook (not yet written) reusable for any future key rotations (compromise response, hardware-wallet upgrade, scheduled hygiene).
 
 **When to revisit.** Per-key, at every migration. Coston2 test wallet (Phase 9) follows the same logic — generate fresh, fund the new address, retire the old. `apcli` and other backends similarly.
 
@@ -194,10 +200,10 @@ the v0.4.3 honest-history precedent — do not delete).
 - Forces discipline. Public repos can't have a "TODO: actually validate this" left in. If AP can't make `fwd`'s code public, AP shouldn't be running `fwd`.
 
 **What does NOT live in the public repo.**
-- Vault unseal shares (never committed).
+- The `master.key` sealed master (mode-0600, host-provisioned, never committed; v1.0.0a1 — replaced the retired Vault unseal shares).
 - Caller API keys (issued at runtime, stored as argon2id hashes).
 - `policy.yaml` *values* for production wallets — values live in a separate private location (private GitLab repo or env-injected on host).
-- Litestream credentials, Vault root token, AppRole secret IDs (env-injected).
+- `FWD_ADMIN_KEY` and operator secrets (env-injected). (Litestream cloud credentials / Vault root token / AppRole secret IDs are all retired — local-only backups since v0.4.3, no Vault since v1.0.0a1.)
 - The `address` field of any wallet is public anyway (visible on-chain).
 
 **Consequences.**
@@ -238,7 +244,7 @@ the v0.4.3 honest-history precedent — do not delete).
 
 **Decision.** Three wallet-provisioning paths in v1, with deliberately asymmetric ergonomics:
 
-- **Create — HTTP + CLI.** `POST /v1/admin/wallets` (admin-scoped) and `clifwd wallets create` both call the same flow: `fwd` generates a fresh secp256k1 privkey internally via `eth_account.Account.create()`, derives the address, encrypts the privkey via `transit/encrypt/fwd-master`, persists `(name, address, privkey_ciphertext, vault_master_key='fwd-master', policy_path)` in SQLite, and zeroizes the plaintext bytearray. Plaintext privkey never leaves `fwd`'s process; no caller (not even the admin) ever sees it.
+- **Create — HTTP + CLI.** `POST /v1/admin/wallets` (admin-scoped) and `clifwd wallets create` both call the same flow: `fwd` generates a fresh secp256k1 privkey internally via `eth_account.Account.create()`, derives the address, encrypts the privkey via `SealedMaster.encrypt` (`seal:v1:` ciphertext; v1.0.0a1 retired Vault Transit — D1), persists `(name, address, privkey_ciphertext, vault_master_key='local:v1', policy_path)` in SQLite, and zeroizes the plaintext bytearray. Plaintext privkey never leaves `fwd`'s process; no caller (not even the admin) ever sees it.
 
 - **Import — CLI only.** `clifwd wallets import --privkey-file <path>` provisions a wallet from an existing 32-byte hex-encoded privkey supplied by the operator. **No HTTP endpoint.** The CLI enforces a refusal table (file mode, file owner, content shape, name uniqueness) before accepting the file.
 
@@ -867,8 +873,9 @@ surfaced as an unresolved hole (`GET /v1/admin/nonce/holes`).
 **Rejected alternatives:** a keyless egress *relay* sidecar; a LAN-only network lock
 — both moot once "whole-stack zero egress" + "only public internet" were chosen.
 
-**Consumer:** `clif` migrated to the sign-only API (v0.5.2 — signs via fwd,
-broadcasts + reports back itself) + reward-Merkle root/proof verification (v0.5.1).
+**Consumer:** `clif` migrated to the sign-only API (v0.5.5 — signs via fwd,
+broadcasts + reports back itself; reward-Merkle root/proof verification); the
+epoch-400 Flare/Songbird mainnet drill through migrated clif passed.
 **New operational risk:** orphaned nonce reservation; mitigated as above. **Pending:**
 the production cutover (live claim/FSP through migrated clif) remains operator-gated.
 

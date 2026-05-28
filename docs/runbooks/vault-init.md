@@ -1,5 +1,11 @@
 # Vault initialization runbook
 
+> ⚠️ **RETIRED (v1.0.0a1) — DO NOT FOLLOW.** HashiCorp Vault was removed entirely
+> (`decisions.md` D1); there is no Vault to initialize or unseal. Custody is a sealed
+> local master — provision it with `clifwd master generate` (see README § Quickstart).
+> This file is kept only as honest history of the Phase 3a–7 Vault model (Core
+> invariant #18).
+
 > First-run ritual to bring Vault from uninitialized → operational. Performed once per `fwd` deployment, after `docker compose up -d` brings the stack up. Subsequent restarts only require unseal (steps 4–5).
 >
 > **Per `decisions.md` D6: 5 unseal shares, threshold 3, distributed as 2 paper + 3 GPG-encrypted across 5 distinct failure domains.** The operator is responsible for placing each share in its planned location BEFORE proceeding past step 3.

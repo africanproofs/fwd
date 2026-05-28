@@ -1,5 +1,10 @@
 # Phase 7 verification — manual operator gate (v0.5.0)
 
+> ℹ️ **Historical Phase-7 record (v0.5.0).** Predates Vault retirement (v1.0.0a1) and
+> the zero-egress turn (v1.1.0a9): references to `/v1/sign-and-send` and Vault are
+> honest history of that phase's GA gate, not current behaviour. Kept per Core
+> invariant #18.
+
 > Phase 7 GA verification: against a live Coston2 RPC, fwd enforces the
 > D14 default-deny policy on `/v1/sign-and-send` — every one of the 10
 > D14 evaluation steps refuses with HTTP 403 and writes a `decision=

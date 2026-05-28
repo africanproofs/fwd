@@ -1,5 +1,10 @@
 # CI integration runbook — running `tests/integration/` locally and in CI
 
+> ℹ️ **Partially historical.** Predates Vault retirement (v1.0.0a1) and the
+> zero-egress turn (v1.1.0a9): references to "real Vault" and `/v1/sign-and-send` are
+> stale — the integration suite now runs against the sealed master with no Vault
+> stage. Kept per Core invariant #18; a refresh is a tracked follow-up.
+
 > The 3 integration tests under `tests/integration/` exercise real Vault
 > encrypt/decrypt + real argon2id + the full sign-and-send path with the
 > RPC layer mocked. They skip when Vault is unreachable. This runbook

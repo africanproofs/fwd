@@ -1,5 +1,15 @@
 # Restore runbook — fwd state from the local `backup` volume (Phase 6)
 
+> ⚠️ **PARTIALLY STALE (pre-v1.0.0a1 / pre-zero-egress) — DO NOT FOLLOW AS-IS.** This
+> runbook still contains Vault-Raft-snapshot restore steps and a `/v1/sign-and-send`
+> smoke test. Vault was retired at v1.0.0a1 and the endpoint is now
+> `/v1/sign-transaction`. The **current** sealed-master restore is: copy the `backup`
+> volume + the operator-held `master.key` onto the new host → `litestream restore`
+> `state.db` → `docker compose up` → `docker exec fwd clifwd health` → re-seed/advance
+> the nonce via the admin `nonce-init`/`nonce-sync` endpoints (fwd no longer
+> reconciles from chain). See `architecture.md` § backup/restore. A full rewrite of
+> this runbook is a tracked follow-up.
+
 > This runbook documents the disaster-recovery procedure for fwd: restore
 > `state.db` from the Litestream file replica, restore Vault from its Raft
 > snapshot, and confirm a working signing path against the restored state.

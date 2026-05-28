@@ -1,5 +1,10 @@
 # Phase 5 verification — manual operator gate (v0.4.0)
 
+> ℹ️ **Historical Phase-5 record (v0.4.0).** Predates Vault retirement (v1.0.0a1) and
+> the zero-egress turn (v1.1.0a9): references to `/v1/sign-and-send`, a receipt
+> watcher, and the chain-reconcile are honest history of that phase, not current
+> behaviour. Kept per Core invariant #18.
+
 > Phase 5 GA verification: 10 concurrent `/v1/sign-and-send` calls against
 > the same wallet on Coston2 land in monotonically increasing nonces with
 > no gaps and no duplicates. This is the operator-driven equivalent of the

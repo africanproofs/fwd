@@ -29,7 +29,7 @@ Notably **NOT required:**
 
 ## Containerized services (deployed by `fwd`'s `docker-compose.yml`)
 
-| Service | Image (pinned) | Role |
+| Service | Image (tag-pinned; digest-pinning is a Phase 10 item) | Role |
 |---|---|---|
 | `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The gateway service (FastAPI). Custody is in-process: `SealedMaster` AES-256-GCM under a mode-0600 host-file master (v1.0.0a1 retired the `vault` + `vault-snapshot` services — D1) |
 | `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to a local `backup` volume (v0.4.3 — no cloud) |
@@ -61,7 +61,7 @@ Two services (was four pre-v1.0.0a1: `vault` + `vault-snapshot` deleted with the
 | `rich` | `^13.9` | CLI rendering |
 
 Notably **NOT present:**
-- `web3.py` — too heavy, we don't need contract abstractions. `eth-account` + `httpx` cover the signing path with a fraction of the dependency tree.
+- `web3.py` — too heavy, we don't need contract abstractions. `eth-account` covers the signing path with a fraction of the dependency tree (`httpx` is CLI/admin-client only — the daemon makes no outbound HTTP; zero-egress, D20).
 - `kubernetes` — no K8s API access needed (no TokenReview).
 - `boto3` — no AWS dependency.
 

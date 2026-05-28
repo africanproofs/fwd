@@ -5,7 +5,7 @@ backend keys (Flare, Songbird, Coston2). It replaces every `.env PRIVATE_KEY` ac
 AP automation with one HTTP endpoint, one sealed custody backend, and one
 tamper-evident audit log — and it **never connects to the internet**.
 
-> **Status: v1.1.0a16 — production-deployed.** The zero-egress initiative is
+> **Status: v1.1.0a18 — production-deployed.** The zero-egress initiative is
 > complete and proven on live Coston2 + Flare/Songbird mainnet. fwd **signs** EVM
 > transactions and Flare FSP protocol messages; it does **not** broadcast and makes
 > **no outbound network connection**. Clients broadcast the signed payload
@@ -72,8 +72,21 @@ locally: **Python 3.12 + Poetry ≥ 1.8**.
 
 The master key never lives in the repo or image — you generate it on the host:
 
+`master generate` runs **in-process** (it does not need the daemon), so generate the
+key *before* the container starts — the container won't boot without it. With the CLI
+installed locally:
+
 ```bash
 clifwd master generate --out config/master.key   # writes a 32-byte key, mode 0600
+```
+
+Docker-only host (no local Python)? Run the same command inside the image — it
+overrides the daemon entrypoint and writes to the bind-mounted host path:
+
+```bash
+docker run --rm -v "$PWD/config:/config" \
+  registry.gitlab.com/proofs.africa/fwd/fwd:${FWD_IMAGE_TAG:-dev} \
+  clifwd master generate --out /config/master.key
 ```
 
 It refuses to overwrite an existing file. This file is `policy.yaml`-class private
@@ -85,8 +98,12 @@ out-of-band — losing it means re-sealing every wallet.
 ```bash
 cp .env.example .env
 # Edit .env: set FWD_ADMIN_KEY to a random ≥32-char string; set gas caps if desired.
-# Provide your operator-controlled config/policy.yaml (gitignored, bind-mounted).
+cp docs/policy.example.yaml config/policy.yaml   # then edit for your callers/wallets
 ```
+
+`config/policy.yaml` is operator-controlled, gitignored, and bind-mounted. Create the
+file before `docker compose up` — with the compose bind mount, a missing path can be
+created as a *directory* and fail confusingly.
 
 ### 3. Bring up the daemon
 
@@ -126,8 +143,8 @@ docker exec fwd clifwd nonce init --wallet clif-claimer-flr-prod --chain 14 --st
 Via `fwd-client` (recommended) or directly:
 
 ```
-POST /v1/sign-transaction            # → { tx_id, signed_raw_tx }
-  ── client broadcasts signed_raw_tx itself ──
+POST /v1/sign-transaction            # → { tx_id, hash, signed_raw_tx, nonce }
+  ── client broadcasts signed_raw_tx itself (hash is the tx_hash to report back) ──
 POST /v1/transactions/{tx_id}/broadcast-result   # outcome: accepted | rejected_*
   ── client polls the chain ──
 POST /v1/transactions/{tx_id}/receipt            # outcome: mined_success | mined_reverted
@@ -145,7 +162,7 @@ Auth: **caller** = the bearer API key minted in step 5; **admin** = `FWD_ADMIN_K
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/healthz` | none | Liveness + sealed-master readiness |
-| `POST` | `/v1/sign-transaction` | caller | Sign an ABI-decoded EVM tx (returns `tx_id` + `signed_raw_tx`; client broadcasts) |
+| `POST` | `/v1/sign-transaction` | caller | Sign an ABI-decoded EVM tx — returns `{ tx_id, hash, signed_raw_tx, nonce }`; client broadcasts |
 | `POST` | `/v1/sign-fsp-message` | caller | Sign an EIP-191 FSP message (`UPTIME` or `REWARD_DISTRIBUTION`) |
 | `GET` | `/v1/transactions/{tx_id}` | caller | Look up a signed tx's lifecycle status |
 | `POST` | `/v1/transactions/{tx_id}/broadcast-result` | caller | Report broadcast outcome (`accepted` / `rejected_releaseable` / `rejected_nonce_too_low`) |
@@ -177,7 +194,7 @@ commands (`master generate`, `wallets import`, `audit *`, `fsp scope`) do not.
 | `clifwd health` | Probe `/healthz` |
 | `clifwd master generate --out PATH` | Generate the 32-byte sealed master (0600; refuses overwrite) |
 | `clifwd wallets create --name … --policy …` | Create a wallet (fwd generates + seals) |
-| `clifwd wallets import --name … --privkey-file … --policy …` | Import an existing key (shreds the source after sealing) |
+| `clifwd wallets import --name … --privkey-file … --policy …` | Import an existing key (optionally shreds the source file with `--shred-source`) |
 | `clifwd wallets list` | List wallets |
 | `clifwd callers create --name … --policy …` | Mint a caller API key (printed once) |
 | `clifwd callers list` | List callers |
@@ -202,7 +219,7 @@ list.
 | `FWD_MAX_GAS` / `FWD_MAX_FEE_PER_GAS` | Zero-egress sanity caps on client-supplied gas/fees |
 | `FWD_NONCE_SYNC_MAX_ADVANCE` | Max monotonic jump `nonce-sync` will accept |
 | `FWD_RESERVATION_LEASE_SEC` | Age after which a pending reservation is a "hole" |
-| `FWD_DATABASE_URL` | SQLite path for the daemon + Alembic migrations |
+| `DATABASE_URL` | SQLite path for the daemon + Alembic migrations (no `FWD_` prefix — this is the one setting field without the `fwd_` prefix) |
 | `FWD_LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` (default `INFO`) |
 | `FWD_DISABLE_MLOCK` | Set `1` only in dev/test to skip `mlockall` |
 | `FWD_URL` | CLI-side: the daemon URL `clifwd` HTTP commands target |
@@ -251,7 +268,7 @@ Briefly:
 | [`docs/threat-model.md`](docs/threat-model.md) | Attack-surface analysis, mitigations, residual risk |
 | [`docs/dependencies.md`](docs/dependencies.md) | Infrastructure, services, libraries, operator prerequisites |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased roadmap with explicit gates |
-| [`docs/runbooks/`](docs/runbooks/) | Restore, sealed-master verification, CI integration, phase drills |
+| [`docs/runbooks/`](docs/runbooks/) | Operator runbooks. **Current:** `v1.0.0a1-sealed-master-verification.md`. **Stale/historical** (carry a banner — pre-v1.0.0a1 Vault / pre-zero-egress; do not follow as-is): `restore.md`, `vault-init.md`, `sign-and-send-verification.md`, `phase-{5,7}-verification.md`, `ci-integration.md`. Reconciling them is a tracked follow-up. |
 | [`docs/history/`](docs/history/) | Per-version ship records ([`SHIP-LOG.md`](docs/history/SHIP-LOG.md) + index) |
 
 ## Provenance

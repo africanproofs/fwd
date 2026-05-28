@@ -12,7 +12,7 @@ In order of value and consequence-of-compromise:
 | Songbird claim recipient key | Sealed (AES-256-GCM) in SQLite | Reward-epoch revenue (recurring, smaller) | Same, smaller |
 | Coston2 test wallet keys | Sealed (AES-256-GCM) in SQLite | Testnet gas (~negligible) | Test environment disruption |
 | Future automation keys (`apcli`, `fics` writes, agent wallets) | Sealed (AES-256-GCM) in SQLite | Per-caller, bounded by policy | Bounded by per-caller policy |
-| Sealed master key (AES-256-GCM, seals all wallet keys at rest) | Mode-0600 host file owned by the `fwd` user (v1.0.0a1; no Vault/Shamir — D1) | All keys, all assets | Total loss of `fwd`-managed custody (recovery: regenerate wallets + on-chain `setClaimRecipient` rotation) |
+| Sealed master key (AES-256-GCM, seals all wallet keys at rest) | Mode-0600 host file owned by the `fwd` user (v1.0.0a1; no Vault/Shamir — D1) | All keys, all assets | Total loss of `fwd`-managed custody (recovery: regenerate wallets + on-chain re-authorization — the exact step is `ClaimSetupManager.setClaimExecutors`, flagged unverified per CLAUDE.md Core #17, not recipient rotation) |
 | Audit log integrity | SQLite + Litestream | Forensic / non-repudiation | Loss of "what happened, when" record |
 
 What is NOT held in `fwd`:
@@ -70,9 +70,9 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 **What changes vs A1.** Nothing materially — they still operate within policy. But timing-based abuse may evade rate limits set on a "reasonable use" assumption.
 
 **Mitigations.**
-- Spend caps independent of rate limits (`max_value_wei`, `daily_value_cap`).
+- Spend caps independent of rate limits: per-method `max_value_wei` and per-wallet `max_aggregate_value_wei_per_day` (the actual policy fields; there is no `daily_value_cap`).
 - Recipient pattern locks (`beneficiary` constraint — claim recipient must equal a fixed address).
-- For high-value methods: `require_human_approval_above_value_wei` — `fwd` can pause and surface to operator.
+- (Not implemented) a `require_human_approval_above_value_wei` pause-and-surface gate is a candidate future control, NOT a current policy field — today high-value methods are bounded by `max_value_wei` + the daily aggregate cap + rate limits.
 
 **Residual risk.** Same envelope as A1. Operator visibility via audit log + alerts (Phase 10) is the catch.
 
@@ -86,7 +86,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 **Mitigations in place.**
 - Single-purpose host recommendation (no other services running, smallest attack surface).
-- `fwd` runs with `mlock`-equivalent memory protection (`IPC_LOCK` capability in compose) so plaintext privkeys are not swapped to disk.
+- `fwd` calls `mlockall(MCL_CURRENT|MCL_FUTURE)` at startup so plaintext privkeys are not swapped to disk. Because the container runs non-root, the mechanism that lets `mlockall` succeed is `ulimits.memlock: -1` in compose; `cap_add: [IPC_LOCK]` is kept for defense-in-depth (Core invariant #1).
 - Decrypt-on-demand (Core invariant #16): plaintext privkeys exist in memory only for microseconds per signing operation.
 - Host hardening runbook: minimal package set, SSH key-only, fail2ban, prompt patching.
 - Audit-log visibility: `fwd` signs but does not broadcast (zero-egress, D20), so extracted-key abuse surfaces as anomalous `sign-transaction` rows in `fwd`'s hash-chained audit log; `fwd` itself cannot be the broadcast or network-exfil channel (no RPC client, no egress).
@@ -114,23 +114,19 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 **How.** Bug in `fwd`'s policy engine or signing path, or malicious dependency, lets an attacker execute code in the running `fwd` process.
 
-**What the attacker gets.** Under Path 2 (v0.1.2 architecture), this is materially worse than the originally-intended design. A compromised `fwd` can:
-- Issue arbitrary `transit/decrypt/fwd-master` calls using its Vault token, recovering ALL wallet privkeys it has ciphertexts for.
-- Sign anything the recovered keys can sign — bypassing fwd's own policy engine.
-- Exfiltrate the plaintext privkeys offline.
-
-This is the cost of collapsing the Vault/fwd process boundary that v0.1.0 originally specified (and which was infeasible because Vault Transit doesn't support secp256k1).
+**What the attacker gets (v1.0.0a1 sealed-master model).** Code execution in the running `fwd` process can call `SealedMaster.decrypt` (the master is loaded per signing operation from the mode-0600 file, in-process — no Vault, no token), recovering any wallet privkey it has a `seal:v1:` ciphertext for, and sign anything those keys can sign — bypassing `fwd`'s own policy engine. It **cannot exfiltrate over the network from the `fwd` process itself** (zero-egress, D20 — see the banner above): exfiltration requires separate host-level egress the attacker must obtain elsewhere. There is no separate key-management process boundary — the deliberate v1.0.0a1 trade-off for low-value automation keys on a never-public host.
 
 **Mitigations in place.**
 - `fwd`'s code is small, public, and auditable — bugs surface to scrutiny.
-- Pinned dependency versions; signed Docker images where available.
-- Vault's own audit device logs every `transit/decrypt` operation independently of `fwd`'s audit log — sustained abuse becomes visible in Vault audit even if fwd's audit is corrupted.
+- Pinned dependency versions; images pinned by tag.
+- `fwd`'s own hash-chained audit log records every signing decision independently — sustained abuse through `fwd`'s code paths shows up as an anomalous burst of `sign-transaction` rows (there is no Vault audit device; this is the record).
 - Default-deny policy: a compromised fwd that goes through its own code paths still hits policy checks. (Bypass requires defeating both `fwd`'s engine AND signing path, not just the engine.)
-- Decrypt-on-demand (Core invariant #16) limits passive exfiltration to "request a signature, observe the decrypt." Bulk decryption (decrypt all wallets, walk away) is detectable in Vault audit as an anomalous burst.
+- Decrypt-on-demand + per-operation master load (Core invariants #16, #8): plaintext keys, and the master itself, are absent from memory between operations — passive bulk extraction must wait for and intercept signing events.
+- Zero egress (D20): `fwd` cannot phone home, so a compromise cannot stream keys out on its own.
 
-**Residual risk.** The strongest argument in v1 for the Phase 10 YubiHSM 2 upgrade. Until Phase 10, this is the genuine "fwd compromise = lose all wallets fwd manages" weakness, mitigated only by Vault audit visibility and policy default-deny on the fwd side.
+**Residual risk.** The strongest argument in v1 for the Phase 10 YubiHSM 2 upgrade. Until Phase 10, this is the genuine "fwd compromise = lose the wallets fwd can decrypt while compromised" weakness, mitigated by `fwd`'s audit log, policy default-deny, and the zero-egress denial of an in-process exfil channel.
 
-**Comparison to `.env` baseline.** Today: there is no policy enforcement point. After `fwd`: a compromised `fwd` is similarly catastrophic (key exfiltration possible), but the audit trail and Vault-side visibility make abuse detectable in ways `.env` files do not.
+**Comparison to `.env` baseline.** Today: there is no policy enforcement point. After `fwd`: a compromised `fwd` is similarly catastrophic (key extraction possible with code execution), but the hash-chained audit trail + zero egress make abuse detectable and the exfil path harder in ways `.env` files do not.
 
 ---
 
@@ -239,7 +235,7 @@ This was incorrectly described in v0.1.0 as "can sign but cannot extract" — th
 **What the attacker gets.** Whatever the malicious code does — could exfiltrate keys at signing time, modify transaction destinations silently, or open a covert channel.
 
 **Mitigations.**
-- All Docker image tags pinned to specific digests in `docker-compose.yml`.
+- Docker images pinned by tag in `docker-compose.yml` (`fwd` via `${FWD_IMAGE_TAG}`, `litestream:0.3.13`); digest-pinning is a Phase 10 hardening item, not yet applied.
 - Python dependencies pinned in `poetry.lock`; no floating versions.
 - `fwd`'s own image built from source by AP's CI; not pulled from a registry someone else controls.
 - Renovate or Dependabot for proposed updates; updates reviewed before merge.
