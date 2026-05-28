@@ -43,7 +43,7 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
    via POST /v1/transactions/{id}/broadcast-result + /receipt.
 ```
 
-Two Docker services and two named volumes (Vault retired at v1.0.0a1 — D1; v0.4.3 reversed the earlier Scaleway-S3 direction — backups go to a local volume; off-host transport is the operator's job). The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). **Caveat (hardening flag):** the `litestream` sidecar has no `networks:`/`network_mode:` key, so it joins Compose's *default* bridge, which has internet egress. It only ever writes to the local `backup` volume (it makes no remote connection), but for a strict whole-stack zero-egress posture it should be pinned to `network_mode: none` (it needs no network) or to the internal network — tracked as a compose hardening item, not yet applied.
+Two Docker services and two named volumes (Vault retired at v1.0.0a1 — D1; v0.4.3 reversed the earlier Scaleway-S3 direction — backups go to a local volume; off-host transport is the operator's job). The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). The `litestream` sidecar is pinned **`network_mode: none`** (v1.1.0a20) — it replicates over the shared `fwd-state`/`backup` volumes (`type: file`) and needs no network, so the whole stack is egress-free (previously litestream silently joined Compose's default egress-capable bridge — the a18-review-flagged crack, now closed).
 
 | Service | Image | Role |
 |---|---|---|

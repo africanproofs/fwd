@@ -76,9 +76,16 @@ services:
       - fwd-state:/data
       - ./config/litestream/litestream.yml:/etc/litestream.yml:ro
       - backup:/backup
-    # No network membership: Litestream now writes the replica to the local
-    # `backup` Docker volume (Litestream type: file). It needs no network
-    # access — no internal Vault traffic, no public S3 egress.
+    # Zero network (v1.1.0a20): Litestream writes the replica to the local
+    # `backup` Docker volume (Litestream `type: file`) and reads the source DB
+    # over the shared `fwd-state` volume — it needs NO network (no internal
+    # traffic, no S3/public egress). `network_mode: none` ENFORCES that. Without
+    # it the service silently joined Compose's default bridge (which HAS egress)
+    # — the a18-review-flagged crack in whole-stack zero-egress, closed here.
+    # (`network_mode` and `networks:` are mutually exclusive; litestream declares
+    # no `networks:`, so this is consistent. `depends_on: fwd` is startup
+    # ordering only — unaffected; replication is via the shared volume, not network.)
+    network_mode: none
     restart: unless-stopped
 
 networks:
