@@ -94,6 +94,19 @@ def _is_predicatable_scalar(abi_type: str) -> bool:
     return bool(_SCALAR_RE.match(abi_type))
 
 
+def has_nonscalar_args(abi_fn_entry: dict[str, Any]) -> bool:
+    """Return True iff any top-level input of *abi_fn_entry* is non-scalar.
+
+    A non-scalar top-level arg (array, tuple, dynamic bytes array) is decoded
+    by eth_abi but projected out of DecodedIntent.args (B1), so it cannot be
+    matched by an arg predicate. The policy engine uses this to fail closed:
+    a method carrying such an arg is refused unless the method rule opts in
+    via allow_unconstrained_args.
+    """
+    inputs: list[dict[str, Any]] = abi_fn_entry.get("inputs", [])
+    return any(not _is_predicatable_scalar(canonical_type(inp)) for inp in inputs)
+
+
 def _normalize(ctype: str, value: Any) -> Any:
     """Normalize a decoded value to a JSON-serializable form.
 

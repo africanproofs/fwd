@@ -107,6 +107,7 @@ def _make_policy(
                     "contracts": {
                         ERC20_CONTRACT: {
                             "abi": "erc20",
+                            "chains": [114],
                             "methods": {
                                 sig: {
                                     "max_value_wei": mr.max_value_wei,  # type: ignore[union-attr]

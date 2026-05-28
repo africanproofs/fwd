@@ -71,6 +71,7 @@ def _make_integ_policy(wallet_name: str, caller_name: str) -> Policy:
                     "contracts": {
                         _ERC20_CONTRACT: {
                             "abi": "erc20",
+                            "chains": [_CHAIN_ID],
                             "methods": {
                                 "transfer(address,uint256)": {
                                     "max_value_wei": "0",

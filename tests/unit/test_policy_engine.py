@@ -101,12 +101,14 @@ def _make_policy(
     perm_path: str = POLICY_PATH,
     contract_addr: str = ERC20_CONTRACT,
     abi: str = "erc20",
+    chains: list[int] | None = None,
     methods: dict[str, MethodRule] | None = None,
     wallet_allowlist: list[str] | None = None,
     rate: RateLimit | None = None,
     wallet_name: str = WALLET_NAME,
     wallet_constraint_path: str = "wc/main",
     wallet_constraint: WalletConstraint | None = None,
+    include_wallets_binding: bool = True,
 ) -> Policy:
     if methods is None:
         methods = {
@@ -116,24 +118,30 @@ def _make_policy(
         }
     if wallet_allowlist is None:
         wallet_allowlist = [WALLET_NAME]
+    if chains is None:
+        chains = [114]
     return Policy.model_validate(
         {
             "version": 1,
             "callers": {
                 caller_name: {"policy_path": caller_policy_path},
             },
-            "wallets": {
-                wallet_name: {"policy_path": wallet_constraint_path},
-            },
+            "wallets": (
+                {wallet_name: {"policy_path": wallet_constraint_path}}
+                if include_wallets_binding
+                else {}
+            ),
             "permissions": {
                 perm_path: {
                     "contracts": {
                         contract_addr: {
                             "abi": abi,
+                            "chains": chains,
                             "methods": {
                                 sig: {
                                     "max_value_wei": mr.max_value_wei,
                                     "arg_predicates": mr.arg_predicates,
+                                    "allow_unconstrained_args": mr.allow_unconstrained_args,
                                 }
                                 for sig, mr in methods.items()
                             },
@@ -234,6 +242,157 @@ async def test_happy_path_returns_allow(session: AsyncSession, registry: AbiRegi
     assert isinstance(result, AllowDecision)
     assert result.matched_policy_path == POLICY_PATH
     assert result.decoded is not None
+
+
+# ---------------------------------------------------------------------------
+# Step 2: chain-ID binding (a29) — a contract address is not chain-unique
+# ---------------------------------------------------------------------------
+
+REWARD_CONTRACT = "0x" + "cc" * 20
+CLAIM_SIG = "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])"
+
+
+def _claim_calldata() -> str:
+    """Valid reward_manager.claim calldata with an EMPTY proofs array.
+
+    The proofs arg is a tuple[] (non-scalar) — decoded but projected out of
+    .args (B1). Used to exercise the non-scalar fail-closed gate (step 4b).
+    """
+    selector = bytes.fromhex("8e33aba5")  # selector_of(reward_manager.claim)
+    encoded = eth_abi.encode(
+        ["address", "address", "uint24", "bool", "(bytes32[],(uint24,bytes20,uint120,uint8))[]"],
+        [RECIPIENT_ADDR, RECIPIENT_ADDR, 5, False, []],
+    )
+    return "0x" + (selector + encoded).hex()
+
+
+@pytest.mark.asyncio
+async def test_step2_chain_not_permitted_denies(
+    session: AsyncSession, registry: AbiRegistry
+) -> None:
+    # Policy binds the contract to chain 14 (Flare); request is for 114 (Coston2).
+    policy = _make_policy(chains=[14])
+    result = await evaluate(
+        caller=_make_caller(),
+        wallet=_make_wallet(),
+        request=_make_request(),  # chain=114
+        policy=policy,
+        registry=registry,
+        rate_repo=RateRepo(session),
+        now=NOW,
+    )
+    assert isinstance(result, DenyDecision)
+    assert result.step == 2
+    assert "chain 114" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_step2_chain_permitted_when_listed(
+    session: AsyncSession, registry: AbiRegistry
+) -> None:
+    # Same address valid on BOTH chains; request 114 matches.
+    policy = _make_policy(chains=[14, 114])
+    result = await evaluate(
+        caller=_make_caller(),
+        wallet=_make_wallet(),
+        request=_make_request(),  # chain=114
+        policy=policy,
+        registry=registry,
+        rate_repo=RateRepo(session),
+        now=NOW,
+    )
+    assert isinstance(result, AllowDecision)
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: non-scalar (array/tuple) args fail closed unless opted in (a29)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_step4b_nonscalar_args_denied_without_optin(
+    session: AsyncSession, registry: AbiRegistry
+) -> None:
+    policy = _make_policy(
+        abi="reward_manager",
+        contract_addr=REWARD_CONTRACT,
+        methods={CLAIM_SIG: MethodRule(max_value_wei="0")},  # allow_unconstrained_args=False
+    )
+    result = await evaluate(
+        caller=_make_caller(),
+        wallet=_make_wallet(),
+        request=_make_request(data=_claim_calldata(), to=REWARD_CONTRACT),
+        policy=policy,
+        registry=registry,
+        rate_repo=RateRepo(session),
+        now=NOW,
+    )
+    assert isinstance(result, DenyDecision)
+    assert result.step == 4
+    assert "non-scalar" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_step4b_nonscalar_args_allowed_with_optin(
+    session: AsyncSession, registry: AbiRegistry
+) -> None:
+    policy = _make_policy(
+        abi="reward_manager",
+        contract_addr=REWARD_CONTRACT,
+        methods={CLAIM_SIG: MethodRule(max_value_wei="0", allow_unconstrained_args=True)},
+    )
+    result = await evaluate(
+        caller=_make_caller(),
+        wallet=_make_wallet(),
+        request=_make_request(data=_claim_calldata(), to=REWARD_CONTRACT),
+        policy=policy,
+        registry=registry,
+        rate_repo=RateRepo(session),
+        now=NOW,
+    )
+    assert isinstance(result, AllowDecision)
+
+
+# ---------------------------------------------------------------------------
+# Step 9: a signable wallet MUST have a policy.wallets binding (a29)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_step9_wallet_without_binding_denies(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    db = tmp_path / "engine9b.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
+    async with engine.begin() as conn:
+        await conn.run_sync(rate_metadata.create_all)
+    reg = AbiRegistry.load(ABIS_DIR)
+    # Wallet is allowlisted (step 7 passes) but has NO policy.wallets binding.
+    policy = _make_policy(rate=RateLimit(per_hour=10), include_wallets_binding=False)
+
+    async def _eval() -> AllowDecision | DenyDecision:
+        async with AsyncSession(engine) as s:
+            result = await evaluate(
+                caller=_make_caller(),
+                wallet=_make_wallet(),
+                request=_make_request(),
+                policy=policy,
+                registry=reg,
+                rate_repo=RateRepo(s),
+                now=NOW,
+            )
+            await s.commit()
+            return result
+
+    r1 = await _eval()
+    assert isinstance(r1, DenyDecision)
+    assert r1.step == 9
+    assert "no constraint binding" in r1.reason
+    # Caller bucket released: a second identical request still reaches step 9
+    # (would be step 8 if the first denial had leaked the increment).
+    r2 = await _eval()
+    assert isinstance(r2, DenyDecision)
+    assert r2.step == 9
+
+    await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

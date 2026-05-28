@@ -32,6 +32,7 @@ def _policy_with_method(method_sig: str) -> Policy:
                     "contracts": {
                         ERC20_CONTRACT: {
                             "abi": "erc20",
+                            "chains": [114],
                             "methods": {
                                 method_sig: {"max_value_wei": "0"},
                             },
@@ -77,6 +78,7 @@ def test_check3_unknown_abi_does_not_also_emit_check3_error() -> None:
                     "contracts": {
                         ERC20_CONTRACT: {
                             "abi": "no-such-abi",  # unknown
+                            "chains": [114],
                             "methods": {
                                 "someMethod(uint256)": {"max_value_wei": "0"},
                             },

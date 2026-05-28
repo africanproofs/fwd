@@ -87,6 +87,12 @@ class TxParamsRejected(Exception):  # noqa: N818
     or the EIP-1559 rule (max_priority_fee_per_gas <= max_fee_per_gas)."""
 
 
+class IdempotencyConflict(Exception):  # noqa: N818
+    """409 - an idempotency_key was reused with a DIFFERENT request body.
+    The key already maps to a prior transaction whose canonical body differs;
+    returning the cached signed tx would silently sign the wrong intent."""
+
+
 async def _audit(
     audit_repo: AuditRepo,
     request: SignTransactionRequest,
@@ -142,6 +148,32 @@ async def sign_transaction(
     if request.idempotency_key is not None:
         existing = await tx_repo.get_by_idempotency_key(request.caller, request.idempotency_key)
         if existing is not None:
+            # Body-check: the key must map to the SAME request body. A reused
+            # key with a differing body is a client bug — returning the cached
+            # signed tx would hand back the wrong intent. Reject with 409.
+            incoming_body = _canonical_json(
+                {
+                    "wallet": request.wallet,
+                    "chain": request.chain,
+                    "to": request.to,
+                    "value_wei": request.value_wei,
+                    "data": request.data,
+                    "gas": request.gas,
+                    "max_fee_per_gas": request.max_fee_per_gas,
+                    "max_priority_fee_per_gas": request.max_priority_fee_per_gas,
+                }
+            )
+            if incoming_body != existing.request_json:
+                await _audit(
+                    audit_repo,
+                    request,
+                    caller,
+                    decision="denied",
+                    decision_reason="idempotency_key_body_mismatch",
+                    outcome=_canonical_json({"original_tx_id": existing.tx_id}),
+                )
+                await audit_repo.commit()
+                raise IdempotencyConflict(request.idempotency_key)
             hashes = await tx_repo.list_hashes_by_tx(existing.tx_id)
             cached_hash = hashes[0].hash_hex if hashes else ""
             orig_seq = await audit_repo.find_sign_transaction_seq(existing.tx_id)

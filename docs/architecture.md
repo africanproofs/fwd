@@ -536,9 +536,13 @@ permissions:
     contracts:
       "0xRewardManager...":              # checksummed; case-insensitive at match
         abi: reward_manager              # references config/abis/registry.yaml
+        chains: [14]                     # REQUIRED, non-empty: valid chain IDs
+                                         # (request.chain must match — step 2)
         methods:
           "claim(address,uint256)":      # full ABI signature, not bare name
             max_value_wei: "0"           # decimal string, parsed to int
+            # allow_unconstrained_args: true  # required ONLY if the method has
+            #   non-scalar (array/tuple) args (this one does not)
             arg_predicates:
               recipient: "0x7c3579ab3e647395c96a1efc98af9a31c5ecc294"
               epochId: any               # sentinel; matches any decoded value
@@ -587,7 +591,13 @@ async def evaluate(
 ) -> AllowDecision | DenyDecision: ...
 ```
 
-Evaluation order is the 10 steps in `decisions.md` D14. The entire body is wrapped in
+Evaluation order is the steps in `decisions.md` D14, hardened by D22: step 2
+additionally requires `request.chain ∈ contracts.<addr>.chains` (a contract
+address is not chain-unique); step 4 additionally denies a method carrying
+non-scalar (array/tuple) top-level args unless its rule sets
+`allow_unconstrained_args: true` (such args are decoded but unconstrainable by
+predicates, B1); step 9 denies when the wallet has no `policy.wallets` binding.
+The entire body is wrapped in
 `try/except Exception → DenyDecision(step=0)` — `evaluate` never raises
 (default-deny, Core invariant #2). Every `Deny` carries the step number
 for forensics.
@@ -597,8 +607,9 @@ for forensics.
 BEFORE nonce reservation: a denied request never reserves a nonce and
 never signs (the synthetic-attack matrix asserts `signer.sign_transaction`
 is not awaited for the deny vectors). `policy.yaml` (via the engine) is
-the sole authorization; there is no Coston2-only chain allowlist —
-`rpc.py` does not exist (`fwd` reaches no chain). Rate release-on-failure
+the sole authorization; the chain is bound declaratively per contract
+(`contracts.<addr>.chains`, step 2), enforced from the request's `chain`
+field — `rpc.py` does not exist (`fwd` reaches no chain). Rate release-on-failure
 mirrors the nonce release (engine increments at step 8/9; a pre-return
 failure calls `release_rate_after_failure` with keys re-derived from the
 `AllowDecision` + policy); `add_committed_value` (wallet aggregate) is

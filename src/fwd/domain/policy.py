@@ -27,6 +27,12 @@ class MethodRule(BaseModel):
 
     max_value_wei: str = "0"  # decimal string; coerced to int at evaluation
     arg_predicates: dict[str, Any] = Field(default_factory=dict)
+    # Fail-closed gate for non-scalar (array/tuple) top-level args: such args
+    # are decoded but projected out of DecodedIntent.args (B1) and therefore
+    # cannot be matched by arg_predicates. A method whose ABI has any such arg
+    # is REFUSED unless the operator explicitly accepts that those args are
+    # unconstrainable by setting this True. Default False = default-deny.
+    allow_unconstrained_args: bool = False
 
 
 class ContractRule(BaseModel):
@@ -35,6 +41,13 @@ class ContractRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     abi: str  # registry name (must match a loaded ABI)
+    # Chain IDs on which this contract rule is valid. REQUIRED, non-empty:
+    # a contract address is not chain-unique (Flare/Songbird/Coston2 system
+    # contracts frequently share an address), so a signing request's chain
+    # MUST match one of these or the request is denied (policy_engine step 2).
+    # No default — a contract rule that does not declare its chains fails the
+    # schema (startup fail-fast, D14) rather than signing on any chain.
+    chains: list[int] = Field(min_length=1)
     methods: dict[str, MethodRule]  # key = canonical method signature
 
 

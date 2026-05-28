@@ -302,6 +302,7 @@ def _carve_out_policy(
                 "contracts": {
                     "0x" + "ee" * 20: {
                         "abi": abi_name,
+                        "chains": [14],
                         "methods": methods,
                     }
                 },

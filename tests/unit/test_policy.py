@@ -47,6 +47,7 @@ def _full_policy_dict() -> dict[str, object]:
                 "contracts": {
                     "0x1234567890abcdef1234567890abcdef12345678": {
                         "abi": "erc20",
+                        "chains": [14],
                         "methods": {
                             "transfer(address,uint256)": {
                                 "max_value_wei": "1000000000000000000",

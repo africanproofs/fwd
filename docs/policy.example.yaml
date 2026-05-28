@@ -7,27 +7,34 @@
 #
 # Schema is strict (extra keys rejected). version MUST be 1.
 #
-# Evaluation (D14, 10 steps, default-deny — only step 10 returns Allow):
+# Evaluation (D14 + D22, default-deny — only step 10 returns Allow):
 #   1 caller -> binding (by NAME; caller.policy_path must match binding;
 #               binding.policy_path must resolve to a permissions block)
 #   2 request.to -> permissions.<path>.contracts.<addr>  (addr case-insensitive)
+#     AND request.chain in contracts.<addr>.chains  (a contract address is not
+#     chain-unique; chain mismatch -> deny)
 #   3 decode request.data against contracts.<addr>.abi   (decode fail -> deny)
 #   4 decoded method signature must be in contracts.<addr>.methods
+#   4b method with non-scalar (array/tuple) top-level args (decoded but
+#     unconstrainable by predicates, B1) -> deny UNLESS the method rule sets
+#     allow_unconstrained_args: true
 #   5 request.value_wei <= methods.<sig>.max_value_wei   (BigInt)
 #   6 arg_predicates: "any" passes; else coerced-compare to the decoded
 #     scalar arg (bool-before-int; int via int(str(v)); address
 #     case-insensitive; plain string exact)
 #   7 request.wallet in permissions.<path>.wallet_allowlist
 #   8 caller rate bucket (per_hour / per_day) increment-and-test
-#   9 wallet_constraints: aggregate-value cap + wallet rate
+#   9 wallet MUST have a policy.wallets binding (else deny); then
+#     wallet_constraints: aggregate-value cap + wallet rate
 #  10 Allow.
 #
 # Startup fail-fast (infra/policy_loader.check_consistency): every
 # ACTIVE caller must be declared here by NAME with a matching
 # policy_path; every contract abi must be a registered ABI
 # (config/abis/registry.yaml); every method signature must exist in
-# that ABI; every wallet_allowlist entry must resolve; every
-# wallets.<name>.policy_path must be a wallet_constraints key.
+# that ABI; every wallet_allowlist entry must resolve AND have a
+# policy.wallets binding; every wallets.<name>.policy_path must be a
+# wallet_constraints key. Every contract rule MUST declare chains.
 
 version: 1
 
@@ -49,12 +56,19 @@ permissions:
       # name must exist in config/abis/registry.yaml.
       "0x0000000000000000000000000000000000000000":
         abi: reward_manager
+        # REQUIRED, non-empty: the chain IDs this contract rule is valid on.
+        # A signing request whose chain is not listed is denied (step 2).
+        # 14 = Flare, 19 = Songbird, 114 = Coston2.
+        chains: [14]
         methods:
           # Full canonical ABI signature. Non-scalar args (the proof
-          # array) are decoded but not predicatable (B1) — bound the
-          # method by max_value_wei + rate instead.
+          # array) are decoded but not predicatable (B1) — they are
+          # unconstrainable, so the method is denied UNLESS you accept that
+          # by setting allow_unconstrained_args: true. Bound the method by
+          # max_value_wei + rate instead.
           "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])":
             max_value_wei: "0"
+            allow_unconstrained_args: true
             arg_predicates:
               # Pin the reward recipient; "any" would allow any value.
               _recipient: "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294"

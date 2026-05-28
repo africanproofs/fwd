@@ -18,6 +18,7 @@ from fwd.domain.intent import (
     DecodedIntent,
     canonical_type,
     decode_intent,
+    has_nonscalar_args,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,18 @@ _ADDR_LOWER = "0x" + "aa" * 20
 # ---------------------------------------------------------------------------
 # Test cases
 # ---------------------------------------------------------------------------
+
+
+def test_has_nonscalar_args_scalar_only_is_false() -> None:
+    # transfer(address,uint256) — both args scalar.
+    assert has_nonscalar_args(_ERC20_TRANSFER) is False
+
+
+def test_has_nonscalar_args_with_tuple_array_is_true() -> None:
+    # claim(...,(...)[]) — the _proofs tuple[] is non-scalar.
+    assert has_nonscalar_args(_RM_CLAIM) is True
+    # autoClaim has an address[] — also non-scalar.
+    assert has_nonscalar_args(_RM_AUTOCLAIM) is True
 
 
 def test_erc20_transfer_happy_path() -> None:

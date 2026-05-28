@@ -158,10 +158,12 @@ def _make_policy(
                     "contracts": {
                         contract_addr: {
                             "abi": "erc20",
+                            "chains": [CHAIN_ID],
                             "methods": {
                                 sig: {
                                     "max_value_wei": mr.max_value_wei,
                                     "arg_predicates": mr.arg_predicates,
+                                    "allow_unconstrained_args": mr.allow_unconstrained_args,
                                 }
                                 for sig, mr in methods.items()
                             },

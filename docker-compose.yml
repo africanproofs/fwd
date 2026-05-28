@@ -48,7 +48,8 @@ services:
       - fwd-state:/data
       # Phase 7: operator-controlled policy.yaml (Core invariant #12 —
       # gitignored, never in the image/repo). The ABI registry ships in
-      # the image via Dockerfile `COPY config/`; only policy.yaml mounts.
+      # the image via Dockerfile `COPY config/abis/`; only policy.yaml
+      # (and the sealed master, below) mounts.
       - ./config/policy.yaml:/etc/fwd/policy.yaml:ro
       # Sealed master (0600 on host; gitignored like policy.yaml —
       # Core invariant #12). Generate with

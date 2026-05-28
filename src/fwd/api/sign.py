@@ -15,6 +15,7 @@ from fwd.api.caller_auth import require_caller
 from fwd.app.dependencies import Caller, RequestScopeCM, get_request_scope
 from fwd.app.policy_gate import PolicyDenied
 from fwd.app.sign_transaction import (
+    IdempotencyConflict,
     NonceNotInitialized,
     SignTransactionRequest,
     TxParamsRejected,
@@ -111,6 +112,8 @@ async def post_sign_transaction(
         raise HTTPException(status_code=400, detail={"error": "tx_params_rejected", "message": str(exc)}) from exc
     except WalletNotFound:
         raise HTTPException(status_code=404, detail={"error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"}) from None
+    except IdempotencyConflict as exc:
+        raise HTTPException(status_code=409, detail={"error": "idempotency_conflict", "message": f"Idempotency-Key reused with a different request body: {exc}"}) from exc
     except NonceNotInitialized as exc:
         raise HTTPException(status_code=409, detail={"error": "nonce_not_initialized", "message": str(exc)}) from exc
     except VaultUnavailableError as exc:

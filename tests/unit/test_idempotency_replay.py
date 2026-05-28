@@ -17,7 +17,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from fwd.app.sign_transaction import SignTransactionRequest, SignTransactionResult, sign_transaction
+from fwd.app.sign_transaction import (
+    IdempotencyConflict,
+    SignTransactionRequest,
+    SignTransactionResult,
+    sign_transaction,
+)
 from fwd.domain.policy import Policy
 from fwd.infra.abi_registry import AbiRegistry
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
@@ -105,6 +110,7 @@ def _make_policy() -> Policy:
                     "contracts": {
                         ERC20_CONTRACT: {
                             "abi": "erc20",
+                            "chains": [CHAIN_ID],
                             "methods": {
                                 "transfer(address,uint256)": {
                                     "max_value_wei": "0",
@@ -210,6 +216,45 @@ async def _audit_rows_by_action(session: AsyncSession, action: str) -> list[dict
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_replay_with_different_body_raises_conflict(
+    session: AsyncSession, registry: AbiRegistry
+) -> None:
+    """Same idempotency_key reused with a DIFFERENT request body → 409 conflict
+    (the cached signed tx must NOT be returned for a different intent)."""
+    await _sign(session, registry, idempotency_key="key-body")
+    # Second call: SAME key, DIFFERENT body (different transfer amount).
+    nonce_repo = NonceRepo(session)
+    different = SignTransactionRequest(
+        wallet=WALLET_NAME,
+        caller=CALLER_NAME,
+        chain=CHAIN_ID,
+        to=ERC20_CONTRACT,
+        value_wei="0",
+        data=_transfer_calldata(amount=999),  # differs from the stored body
+        gas=21_000,
+        max_fee_per_gas=3_000_000_000,
+        max_priority_fee_per_gas=1_000_000_000,
+        idempotency_key="key-body",
+    )
+    with pytest.raises(IdempotencyConflict):
+        await sign_transaction(
+            different,
+            _mock_signer(),
+            TransactionRepo(session),
+            nonce_repo,
+            caller=_make_caller(),
+            wallet=_make_wallet(),
+            policy=_make_policy(),
+            registry=registry,
+            rate_repo=RateRepo(session),
+            audit_repo=AuditRepo(session),
+        )
+    # A denied forensic row records the mismatch (Core #5 / #19).
+    rows = await _audit_rows_by_action(session, "sign-transaction")
+    assert any(r["decision_reason"] == "idempotency_key_body_mismatch" for r in rows)
 
 
 @pytest.mark.asyncio
@@ -352,6 +397,7 @@ async def test_different_caller_same_key_is_not_replay(
                     "contracts": {
                         ERC20_CONTRACT: {
                             "abi": "erc20",
+                            "chains": [CHAIN_ID],
                             "methods": {"transfer(address,uint256)": {"max_value_wei": "0"}},
                         }
                     },

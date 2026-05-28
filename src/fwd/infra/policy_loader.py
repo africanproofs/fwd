@@ -151,6 +151,15 @@ def check_consistency(
         for wallet_name in perm.wallet_allowlist:
             if wallet_name not in known_wallet_names:
                 errors.append(f"permission '{perm_path}' allowlists unknown wallet '{wallet_name}'")
+            # Check 4b (fail-closed, mirrors policy_engine step 9): a wallet
+            # signable via the EVM path MUST have a policy.wallets binding so
+            # an aggregate-value constraint applies. Without it the engine
+            # denies at step 9 — surface that as a load-time error instead.
+            if wallet_name not in policy_wallet_names:
+                errors.append(
+                    f"permission '{perm_path}' allowlists wallet '{wallet_name}' "
+                    f"with no policy.wallets binding (no wallet constraint)"
+                )
 
     # Check 5: policy.wallets bindings must point to wallet_constraints keys.
     for wname, wbinding in policy.wallets.items():

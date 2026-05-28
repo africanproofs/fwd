@@ -891,6 +891,24 @@ the production cutover (live claim/FSP through migrated clif) remains operator-g
 
 **When to revisit.** If the quarantine boundary proves wrong (e.g. a current-state doc genuinely needs a historical pointer readers miss), adjust the pointer convention — not by re-admitting inline archaeology.
 
+## D22. Policy fail-closed hardening: chain binding, non-scalar-arg gate, mandatory wallet binding, idempotency body-check (v1.1.0a29)
+
+**Decision (v1.1.0a29 — operator directive "implement recommended fixes"; feature ship).** Four fail-closed gaps surfaced by a whole-project external review (the items a28 deferred) are closed. This refines the D14 evaluation order; D14 itself stays as the canonical order, amended here:
+
+1. **Chain binding (step 2).** `ContractRule` gains a REQUIRED, non-empty `chains: list[int]`. A signing request is denied at step 2 unless `request.chain ∈ crule.chains`. Rationale: a contract *address* is not chain-unique — Flare/Songbird/Coston2 system contracts (FlareSystemsManager, RewardManager) frequently share an address, so address-only matching let a Coston2-scoped caller obtain a mainnet signature for the same contract+method. The field has no default: a contract rule that omits `chains` fails schema validation (startup fail-fast, D14), never signs on an unbound chain.
+
+2. **Non-scalar-arg gate (step 4b).** `MethodRule` gains `allow_unconstrained_args: bool = False`. Non-scalar (array/tuple) top-level args are decoded but projected out of `DecodedIntent.args` (B1) and so cannot be matched by `arg_predicates` — they are unconstrainable. A method whose ABI carries such an arg (e.g. `RewardManager.claim`'s proofs tuple[], FSM `signUptimeVote`/`signRewards`'s signature tuple) is now denied UNLESS the operator explicitly accepts the residual via `allow_unconstrained_args: true`. Default-deny (Core #2) for the unconstrainable surface.
+
+3. **Mandatory wallet binding (step 9).** A wallet signable via the EVM path MUST have a `policy.wallets` binding (→ a `wallet_constraints` block). Absent it, there is no aggregate-value cap, so the engine now denies at step 9 (releasing the step-8 caller increment first) instead of signing unconstrained. Mirrored as a load-time fail-fast: `check_consistency` check 4b flags any EVM-allowlisted wallet with no `policy.wallets` binding.
+
+4. **Idempotency body-check.** Idempotency replay now compares the incoming request's canonical body to the stored `transactions.request_json`; a key reused with a DIFFERENT body returns **409 `idempotency_conflict`** (a denied forensic audit row is committed before raise, Core #19) instead of silently returning the cached signed tx for a different intent. No schema change — `request_json` already persists the full body.
+
+**What changed (bounded surface).** Code: `domain/policy.py`, `domain/intent.py` (`has_nonscalar_args`), `app/policy_engine.py`, `infra/policy_loader.py`, `app/sign_transaction.py` (+`IdempotencyConflict`), `api/sign.py` (409 mapping). Tests: new engine/intent/idempotency/loader cases; existing fixtures gained `chains`. Docs: `architecture.md` + `policy.example.yaml` rewritten to the present (Core #18); the docker-compose `COPY config/abis/` drift comment corrected.
+
+**Operator follow-ups (the live, gitignored `config/policy.yaml`).** This is a breaking schema/semantics change for any existing policy. Before the next gated redeploy the operator MUST, in the real `policy.yaml`: (a) add `chains: [...]` to every contract rule (else the policy fails to load); (b) add `allow_unconstrained_args: true` to every method rule whose ABI has array/tuple args — notably the FSP self-submit `signUptimeVote`/`signRewards` rules and any `RewardManager.claim` rule (else those sign requests deny at step 4); (c) ensure every EVM-allowlisted wallet has a `policy.wallets` binding (else load-time error / step-9 deny).
+
+**When to revisit.** If a future consumer needs predicate matching on a specific array/tuple element, replace the coarse `allow_unconstrained_args` opt-in with element-level predicates rather than widening the gate.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from fwd.domain.intent import DecodedIntent, decode_intent
+from fwd.domain.intent import DecodedIntent, decode_intent, has_nonscalar_args
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -104,7 +104,10 @@ async def _evaluate_inner(
             reason=f"caller policy_path '{binding.policy_path}' has no permissions block",
         )
 
-    # Step 2: Resolve contract rule by request.to (case-insensitive).
+    # Step 2: Resolve contract rule by request.to (case-insensitive) AND chain.
+    # A contract address is not chain-unique, so the request.chain must match
+    # one of the rule's declared chains — otherwise the same address on a
+    # different network would be reachable under this rule (cross-chain).
     to_lower = request.to.lower()
     crule = None
     for addr, cr in perm.contracts.items():
@@ -113,6 +116,11 @@ async def _evaluate_inner(
             break
     if crule is None:
         return DenyDecision(step=2, reason="contract not permitted for caller")
+    if request.chain not in crule.chains:
+        return DenyDecision(
+            step=2,
+            reason=f"contract not permitted on chain {request.chain}",
+        )
 
     # Step 3: Parse calldata and decode intent.
     data = request.data
@@ -141,6 +149,17 @@ async def _evaluate_inner(
     mrule = crule.methods.get(decoded.method_signature)
     if mrule is None:
         return DenyDecision(step=4, reason="method signature not permitted")
+
+    # Step 4b: Fail closed on non-scalar (array/tuple) top-level args. Such args
+    # are decoded but projected out of decoded.args (B1) and cannot be matched
+    # by arg_predicates — so they are unconstrainable. Refuse unless the method
+    # rule explicitly accepts that via allow_unconstrained_args.
+    if has_nonscalar_args(abi_method.abi_fn_entry) and not mrule.allow_unconstrained_args:
+        return DenyDecision(
+            step=4,
+            reason="method has unconstrainable non-scalar args; "
+            "set allow_unconstrained_args: true to permit",
+        )
 
     # Step 5: Check max_value_wei.
     try:
@@ -204,8 +223,22 @@ async def _evaluate_inner(
         return DenyDecision(step=8, reason="caller rate limit exceeded")
 
     # Step 9: Check wallet constraint (aggregate + rate).
+    # Fail closed: a wallet that may be signed for MUST have a policy.wallets
+    # binding resolving to a wallet_constraints block. Absent it, there is no
+    # aggregate-value cap — so deny rather than sign unconstrained. The step-8
+    # caller increment is released first (mirrors the wallet_ok=False path).
     wb = policy.wallets.get(wallet.name)
-    constraint = policy.wallet_constraints.get(wb.policy_path) if wb is not None else None
+    if wb is None:
+        await rate_repo.release_caller(
+            caller=caller.name,
+            wallet=request.wallet,
+            contract=to_lower,
+            method=decoded.method_signature,
+            rate=perm.rate,
+            now=now,
+        )
+        return DenyDecision(step=9, reason="wallet has no constraint binding")
+    constraint = policy.wallet_constraints.get(wb.policy_path)
     wallet_ok = await rate_repo.check_and_increment_wallet(
         wallet=wallet.name,
         constraint=constraint,

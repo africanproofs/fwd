@@ -85,6 +85,7 @@ def _full_consistent_policy_raw() -> dict[str, object]:
                 "contracts": {
                     "0xabcdef1234567890abcdef1234567890abcdef12": {
                         "abi": "erc20",
+                        "chains": [114],
                         "methods": {
                             "transfer(address,uint256)": {
                                 "max_value_wei": "1000",
@@ -256,6 +257,7 @@ def test_check_consistency_unknown_abi_in_permissions(tmp_path: Path) -> None:
                 "contracts": {
                     "0x1234567890123456789012345678901234567890": {
                         "abi": "no_such_abi",
+                        "chains": [114],
                         "methods": {},
                     }
                 },
@@ -294,7 +296,7 @@ def test_check_consistency_unknown_wallet_in_allowlist(tmp_path: Path) -> None:
     assert any("ghost-wallet" in e for e in errors), errors
 
 
-def test_check_consistency_wallet_in_db_is_known(tmp_path: Path) -> None:
+def test_check_consistency_evm_wallet_in_db_without_binding_errors(tmp_path: Path) -> None:
     registry = AbiRegistry.load(ABIS_DIR)
     raw = {
         "version": 1,
@@ -311,8 +313,12 @@ def test_check_consistency_wallet_in_db_is_known(tmp_path: Path) -> None:
     policy = load_policy(_write_yaml(tmp_path, raw))
     wallets = [_make_wallet("db-wallet")]
     errors = check_consistency(policy, [], wallets, registry)
-    # db-wallet is in the DB, so no error.
-    assert not any("db-wallet" in e for e in errors), errors
+    # db-wallet is in the DB (check 4 does NOT flag it as unknown)...
+    assert not any("unknown wallet 'db-wallet'" in e for e in errors), errors
+    # ...but fail-closed (check 4b, mirrors policy_engine step 9): an
+    # EVM-allowlisted wallet MUST have a policy.wallets binding so a
+    # wallet constraint applies. Absent it, check 4b flags it.
+    assert any("db-wallet" in e and "no policy.wallets binding" in e for e in errors), errors
 
 
 # ---------------------------------------------------------------------------

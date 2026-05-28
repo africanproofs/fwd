@@ -376,18 +376,33 @@ async def test_uses_nonce_repo_for_nonce() -> None:
 @pytest.mark.asyncio
 async def test_idempotency_replay() -> None:
     """Idempotency replay returns cached tx_id without re-evaluating policy."""
+    from fwd.infra.audit_repo import _canonical_json
+
+    request = _request(idempotency_key="test-key")
     existing_tx = MagicMock()
     existing_tx.tx_id = "existing-tx-id"
     existing_tx.nonce = 7
     existing_tx.signed_raw = "0xdeadbeef"
+    # Body-check: the cached row's request_json MUST match the replay body,
+    # else the replay is a 409 conflict (different body, same key).
+    existing_tx.request_json = _canonical_json(
+        {
+            "wallet": request.wallet,
+            "chain": request.chain,
+            "to": request.to,
+            "value_wei": request.value_wei,
+            "data": request.data,
+            "gas": request.gas,
+            "max_fee_per_gas": request.max_fee_per_gas,
+            "max_priority_fee_per_gas": request.max_priority_fee_per_gas,
+        }
+    )
 
     tx_repo = _tx_repo()
     tx_repo.get_by_idempotency_key = AsyncMock(return_value=existing_tx)
     tx_repo.list_hashes_by_tx = AsyncMock(return_value=[])
     audit = _audit_repo_mock()
     audit.find_sign_transaction_seq = AsyncMock(return_value=None)
-
-    request = _request(idempotency_key="test-key")
     with patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())) as mock_gate:
         result = await sign_transaction(
             request, _signer(), tx_repo, _nonce_repo(),
