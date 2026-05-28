@@ -103,7 +103,7 @@ def test_row_hash_deterministic() -> None:
         "prev_hash": GENESIS_PREV_HASH,
         "ts": datetime(2026, 5, 16, 12, 0, 0, 0, tzinfo=UTC),
         "caller": "test-caller",
-        "action": "sign-and-send",
+        "action": "sign-transaction",
         "request_json": None,
         "decision": "approved",
         "decision_reason": None,
@@ -137,7 +137,7 @@ async def test_linkage_three_rows(session: AsyncSession) -> None:
     repo = AuditRepo(session)
     r1 = await repo.append(action="wallet-create", decision="approved", caller="alice")
     await session.commit()
-    r2 = await repo.append(action="sign-and-send", decision="approved", caller="alice")
+    r2 = await repo.append(action="sign-transaction", decision="approved", caller="alice")
     await session.commit()
     r3 = await repo.append(action="caller-create", decision="approved")
     await session.commit()
@@ -196,7 +196,7 @@ async def test_verify_clean_chain(session: AsyncSession) -> None:
     repo = AuditRepo(session)
     n = 5
     for i in range(n):
-        await repo.append(action="sign-and-send", decision="approved", caller=f"c{i}")
+        await repo.append(action="sign-transaction", decision="approved", caller=f"c{i}")
         await session.commit()
 
     result = await repo.verify()
@@ -224,7 +224,7 @@ async def test_verify_detects_tampered_field(session: AsyncSession) -> None:
     from fwd.infra.audit_repo import audit_log
 
     repo = AuditRepo(session)
-    await repo.append(action="sign-and-send", decision="approved")
+    await repo.append(action="sign-transaction", decision="approved")
     await session.commit()
     r2 = await repo.append(action="wallet-create", decision="approved")
     await session.commit()
@@ -249,7 +249,7 @@ async def test_verify_detects_broken_link(session: AsyncSession) -> None:
     from fwd.infra.audit_repo import audit_log
 
     repo = AuditRepo(session)
-    await repo.append(action="sign-and-send", decision="approved")
+    await repo.append(action="sign-transaction", decision="approved")
     await session.commit()
     r2 = await repo.append(action="wallet-create", decision="approved")
     await session.commit()
@@ -303,7 +303,7 @@ async def test_verify_windowed_clean_subrange(session: AsyncSession) -> None:
     repo = AuditRepo(session)
     rows = []
     for i in range(5):
-        r = await repo.append(action="sign-and-send", decision="approved", caller=f"c{i}")
+        r = await repo.append(action="sign-transaction", decision="approved", caller=f"c{i}")
         await session.commit()
         rows.append(r)
 
@@ -346,7 +346,7 @@ async def test_verify_windowed_upstream_break_subrange_clean(session: AsyncSessi
     from fwd.infra.audit_repo import audit_log
 
     repo = AuditRepo(session)
-    r1 = await repo.append(action="sign-and-send", decision="approved")
+    r1 = await repo.append(action="sign-transaction", decision="approved")
     await session.commit()
     r2 = await repo.append(action="wallet-create", decision="approved")
     await session.commit()
@@ -439,7 +439,7 @@ async def test_tail_returns_last_n_ascending(session: AsyncSession) -> None:
     repo = AuditRepo(session)
     appended = []
     for i in range(5):
-        r = await repo.append(action="sign-and-send", decision="approved", caller=f"c{i}")
+        r = await repo.append(action="sign-transaction", decision="approved", caller=f"c{i}")
         await session.commit()
         appended.append(r)
 

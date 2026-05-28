@@ -52,7 +52,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 - Default-deny policy (Core invariant #2).
 - Intent decoding refuses unparseable calldata (Core invariant #3).
 - Rate limits per caller, per window.
-- Audit log records every request and decision — including denied/errored requests (the policy-probing case): forensic rows are committed independently of the failing transaction (Core invariant #19), so an attacker probing the policy leaves an audit trace. Abuse becomes immediately visible.
+- Audit log records every signing request and decision — including denied/errored requests (the policy-probing case): forensic rows are committed independently of the failing transaction (Core invariant #19), so an attacker probing the policy leaves an audit trace. Abuse through `fwd` becomes immediately visible.
 - API key revocation via admin CLI (no service restart needed).
 
 **Residual risk.** Bounded by policy. Compared to today (compromise = total loss of the `.env` private key), this is a dramatic upgrade.
@@ -86,8 +86,8 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 - Single-purpose host recommendation (no other services running, smallest attack surface).
 - `fwd` calls `mlockall(MCL_CURRENT|MCL_FUTURE)` at startup so plaintext privkeys are not swapped to disk. Because the container runs non-root, the mechanism that lets `mlockall` succeed is `ulimits.memlock: -1` in compose; `cap_add: [IPC_LOCK]` is kept for defense-in-depth (Core invariant #1).
 - Decrypt-on-demand (Core invariant #16): plaintext privkeys exist in memory only for microseconds per signing operation.
-- Host hardening runbook: minimal package set, SSH key-only, fail2ban, prompt patching.
-- Audit-log visibility: `fwd` signs but does not broadcast (zero-egress, D20), so extracted-key abuse surfaces as anomalous `sign-transaction` rows in `fwd`'s hash-chained audit log; `fwd` itself cannot be the broadcast or network-exfil channel (no RPC client, no egress).
+- Host hardening (operator practice, not a fwd-shipped artifact): minimal package set, SSH key-only, fail2ban, prompt patching.
+- Audit-log visibility: `fwd` signs but does not broadcast (zero-egress), so abuse routed *through* `fwd` surfaces as anomalous `sign-transaction` rows in its hash-chained audit log, and `fwd` itself cannot be the broadcast or network-exfil channel (no RPC client, no egress). Use of a key *extracted* from the host (master + ciphertext) happens outside `fwd` and requires external chain monitoring to detect.
 
 **Residual risk.** Real. The exposure window is bounded to active signing operations — plaintext is in memory only during a signing op, not continuously, a meaningful improvement over a naive "key in memory all the time" pattern. **This is the biggest residual risk in v1.**
 
@@ -106,7 +106,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 **Mitigations in place.**
 - `fwd`'s code is small, public, and auditable — bugs surface to scrutiny.
 - Pinned dependency versions; images pinned by tag.
-- `fwd`'s own hash-chained audit log records every signing decision independently — sustained abuse through `fwd`'s code paths shows up as an anomalous burst of `sign-transaction` rows (there is no Vault audit device; this is the record).
+- `fwd`'s own hash-chained audit log records every signing decision independently — sustained abuse through `fwd`'s code paths shows up as an anomalous burst of `sign-transaction` rows; the audit log is the authoritative record.
 - Default-deny policy: a compromised fwd that goes through its own code paths still hits policy checks. (Bypass requires defeating both `fwd`'s engine AND signing path, not just the engine.)
 - Decrypt-on-demand + per-operation master load (Core invariants #16, #8): plaintext keys, and the master itself, are absent from memory between operations — passive bulk extraction must wait for and intercept signing events.
 - Zero egress: `fwd` cannot phone home, so a compromise cannot stream keys out on its own.
@@ -180,7 +180,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 ## The honest one-line summary
 
-**`fwd` does not make AP's keys unstealable.** It makes them dramatically more expensive to steal, makes every theft attempt visible, and bounds the blast radius of caller compromises to the policy envelope of that caller. Combined with policy-bounded per-caller damage, that is the upgrade. Perfect requires hardware (YubiHSM), which is a Phase 10 option, not a v1 requirement.
+**`fwd` does not make AP's keys unstealable.** It makes them dramatically more expensive to steal, makes abuse *through* `fwd` visible in its hash-chained audit log (use of an extracted key elsewhere requires external chain monitoring to detect), and bounds the blast radius of caller compromises to the policy envelope of that caller. Combined with policy-bounded per-caller damage, that is the upgrade. Perfect requires hardware (YubiHSM), which is a Phase 10 option, not a v1 requirement.
 
 ## When this document is wrong
 
@@ -189,5 +189,3 @@ This threat model captures the current attack surface. It must be updated when:
 - `fwd` adds a new attack surface (a new endpoint, a new caller class, a new chain).
 - The custody model changes (Phase 10 HSM upgrade — most threats shift).
 - Operator practices change (single-operator → multi-operator, on-prem → cloud, etc.).
-
-Updates are themselves audit-logged: every revision of this document carries a `## Revision history` entry at the bottom.

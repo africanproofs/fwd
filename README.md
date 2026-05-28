@@ -26,8 +26,8 @@ that `fwd` does:
 2. **Default-deny policy.** Per-caller allowlists of
    `(wallet × contract × method × max_value × rate)`. Compromise of one caller key is
    bounded by its policy, not by the wallet's balance.
-3. **Tamper-evident audit log.** Every request, decision, signature, and reported
-   outcome is hash-chained (`prev_hash` → `row_hash`) and replayable.
+3. **Tamper-evident audit log.** Every signing request, decision, signature, and
+   reported outcome is hash-chained (`prev_hash` → `row_hash`) and replayable.
 4. **Zero egress.** fwd has no RPC client and no network route to the internet. It
    signs and allocates nonces locally; the **client** broadcasts and reports back.
 
@@ -265,7 +265,6 @@ Briefly:
 | [`docs/threat-model.md`](docs/threat-model.md) | Attack-surface analysis, mitigations, residual risk |
 | [`docs/dependencies.md`](docs/dependencies.md) | Infrastructure, services, libraries, operator prerequisites |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased build-out record |
-| [`docs/runbooks/`](docs/runbooks/) | Operator runbooks (sealed-master verification, CI integration) |
 | [`docs/history/`](docs/history/) | Per-version ship records ([`SHIP-LOG.md`](docs/history/SHIP-LOG.md) + index) |
 
 ## Provenance

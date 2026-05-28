@@ -32,16 +32,15 @@ services:
       FWD_ABIS_DIR: /app/config/abis
     # NO host port. The `fwd-callers` network is `internal: true` (see below),
     # which removes the network's gateway — and with it host→container port
-    # publishing (verified v1.1.0a15: a `ports:` mapping is silently ineffective;
-    # `docker port fwd` is empty; host curl → connection refused). This was an
-    # a11 doctrine error ("published ports still work") that the a14 production
-    # cutover surfaced. Consequences + access pattern:
+    # publishing: a `ports:` mapping is silently ineffective (`docker port fwd`
+    # is empty; host curl → connection refused). Consequences + access pattern:
     #   • CLIENTS (clif, …) reach fwd intra-network at `http://fwd:8080` — they
     #     attach to `fwd-callers` (and a normal bridge of their own for egress).
-    #   • ADMIN ops (clifwd nonce-init / callers / nonce-sync / nonce/holes,
-    #     healthchecks) run INSIDE the container: `docker exec fwd clifwd <cmd>`
-    #     (localhost:8080 inside the container is the daemon; FWD_ADMIN_KEY is in
-    #     the container env via env_file).
+    #   • ADMIN ops run INSIDE the container: the CLI ones via
+    #     `docker exec fwd clifwd <cmd>` (`nonce init`, `callers …`, `wallets …`,
+    #     `audit …`); nonce-sync and nonce/holes are HTTP-only admin endpoints
+    #     (`POST/GET /v1/admin/nonce/*`) reachable the same way. FWD_ADMIN_KEY is
+    #     in the container env via env_file.
     #   • If host-port access is ever required, use an override compose that drops
     #     `internal: true` AND blocks the container's egress at the host firewall
     #     — do not silently re-add a `ports:` line under internal:true.
@@ -51,7 +50,7 @@ services:
       # gitignored, never in the image/repo). The ABI registry ships in
       # the image via Dockerfile `COPY config/`; only policy.yaml mounts.
       - ./config/policy.yaml:/etc/fwd/policy.yaml:ro
-      # v1.0.0a1 sealed master (0600 on host; gitignored like policy.yaml —
+      # Sealed master (0600 on host; gitignored like policy.yaml —
       # Core invariant #12). Generate with
       # `clifwd master generate --out ./config/master.key`.
       - ./config/master.key:/run/fwd/master.key:ro
@@ -76,12 +75,11 @@ services:
       - fwd-state:/data
       - ./config/litestream/litestream.yml:/etc/litestream.yml:ro
       - backup:/backup
-    # Zero network (v1.1.0a20): Litestream writes the replica to the local
-    # `backup` Docker volume (Litestream `type: file`) and reads the source DB
-    # over the shared `fwd-state` volume — it needs NO network (no internal
-    # traffic, no S3/public egress). `network_mode: none` ENFORCES that. Without
-    # it the service silently joined Compose's default bridge (which HAS egress)
-    # — the a18-review-flagged crack in whole-stack zero-egress, closed here.
+    # Zero network: Litestream writes the replica to the local `backup` Docker
+    # volume (Litestream `type: file`) and reads the source DB over the shared
+    # `fwd-state` volume — it needs NO network (no internal traffic, no external
+    # egress). `network_mode: none` ENFORCES that, keeping the whole stack
+    # egress-free.
     # (`network_mode` and `networks:` are mutually exclusive; litestream declares
     # no `networks:`, so this is consistent. `depends_on: fwd` is startup
     # ordering only — unaffected; replication is via the shared volume, not network.)
@@ -91,17 +89,15 @@ services:
 networks:
   # fwd attaches to THIS network only. `internal: true` gives the network no
   # gateway to the host's external network → the fwd container has NO route to
-  # the internet. Verified (v1.1.0a11): a container on an `internal: true` bridge
-  # cannot resolve/connect to `flare-api.flare.network:443` (gaierror / no route),
-  # while the same image on a normal bridge connects — so fwd, attached only here,
-  # cannot reach the internet. This is the network-level enforcement of the
-  # v1.1.0a9 zero-egress architecture (a code-level grep already shows no RPC/httpx
-  # in the daemon): fwd
-  # signs and never broadcasts, so it needs no egress. NOTE (corrected v1.1.0a15):
-  # `internal: true` ALSO removes host→container port publishing — there is NO
+  # the internet: a container on an `internal: true` bridge cannot resolve/connect
+  # to `flare-api.flare.network:443` (gaierror / no route), while the same image on
+  # a normal bridge connects — so fwd, attached only here, cannot reach the
+  # internet. This is the network-level enforcement of the zero-egress architecture
+  # (a code-level grep shows no RPC/httpx in the daemon): fwd signs and never
+  # broadcasts, so it needs no egress. `internal: true` ALSO removes host→container
+  # port publishing — there is NO
   # host port; admin runs via `docker exec fwd clifwd …` (see the fwd service's
-  # no-host-port comment above). The earlier a11 claim that published ports still
-  # work was wrong and was surfaced by the a14 production cutover.
+  # no-host-port comment above).
   #
   # CLIENTS (clif, etc.) are DUAL-HOMED: they attach to `fwd-callers` to reach
   # `fwd:8080`, AND to a normal (non-internal) bridge of their own for their

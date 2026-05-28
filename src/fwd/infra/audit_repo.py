@@ -107,8 +107,6 @@ def _row_hash(
 
 _VALID_ACTIONS = frozenset(
     {
-        "sign-and-send",
-        "sign-and-send-duplicate",
         "sign-transaction",
         "sign-transaction-duplicate",
         "wallet-create",

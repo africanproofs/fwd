@@ -1,7 +1,7 @@
 """Regression tests for `fwd.infra.db` — the production engine path.
 
 The Phase 5 GA drill at v0.4.4 surfaced a critical concurrency bug: any
-sign-and-send request failed with `(sqlite3.OperationalError) database is
+sign-transaction request failed with `(sqlite3.OperationalError) database is
 locked\\n[SQL: BEGIN IMMEDIATE]`. Root cause: sqlite3's DB-API driver wraps
 every statement in an implicit BEGIN (DEFERRED) by default; SQLAlchemy's
 `begin` event then fires AFTER that implicit BEGIN, so our `BEGIN
@@ -116,7 +116,7 @@ async def test_forensic_audit_row_survives_exception_through_session_scope(
     fresh_db: Path,
 ) -> None:
     """The Phase 7 GA drill (v0.5.2) surfaced a D16 / Core invariant #5 bug:
-    a `denied`/`error` sign-and-send audit row was appended on the shared
+    a `denied`/`error` sign-transaction audit row was appended on the shared
     RequestScope session and then the operation raised; the exception
     propagated through `session_scope`, whose `except Exception:` arm
     rolled it back — discarding the forensic row (same defect class as the
@@ -136,7 +136,7 @@ async def test_forensic_audit_row_survives_exception_through_session_scope(
         async with db_mod.session_scope() as session:
             ar = AuditRepo(session)
             await ar.append(
-                action="sign-and-send",
+                action="sign-transaction",
                 decision="denied",
                 caller="phase7-gate-caller",
                 decision_reason="policy_denied step=6: arg 'to' predicate mismatch",
@@ -149,7 +149,7 @@ async def test_forensic_audit_row_survives_exception_through_session_scope(
         async with db_mod.session_scope() as session:
             ar = AuditRepo(session)
             await ar.append(
-                action="sign-and-send",
+                action="sign-transaction",
                 decision="error",
                 caller="phase7-gate-caller",
                 decision_reason="broadcast_failure",

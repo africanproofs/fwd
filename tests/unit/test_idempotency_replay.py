@@ -272,7 +272,7 @@ async def test_replay_writes_duplicate_audit_row(
     session: AsyncSession,
     registry: AbiRegistry,
 ) -> None:
-    """Replay path writes a sign-and-send-duplicate audit row with correct fields."""
+    """Replay path writes a sign-transaction-duplicate audit row with correct fields."""
     first = await _sign(session, registry, idempotency_key="key-dup-audit")
     await session.commit()
 
@@ -287,7 +287,7 @@ async def test_replay_writes_duplicate_audit_row(
 
     outcome = json.loads(str(r["outcome"]))
     assert outcome["original_tx_id"] == first.tx_id
-    # original_audit_seq is an int (the approved sign-and-send row's seq)
+    # original_audit_seq is an int (the approved sign-transaction row's seq)
     # or None if no such row is found — both are valid per spec.
     assert "original_audit_seq" in outcome
     await session.rollback()

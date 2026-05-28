@@ -47,11 +47,13 @@ Two services deployed and managed by `docker-compose.yml`. Nothing manual to ins
 | `httpx` | `^0.27` | Used by the **CLI** only (`clifwd` admin commands → `fwd`'s own inbound API: health, wallets, callers, nonce). The daemon (`app`/`api`/`infra`) makes NO outbound HTTP — zero-egress (D20). |
 | `eth-account` | `^0.13` | EIP-1559 transaction encoding, RLP |
 | `eth-utils` | `^5.0` | keccak256, address formatting, EIP-55 checksum |
+| `eth-abi` | `^5.0` | ABI encode/decode for intent decoding (`domain/intent.py`) + FSP message reconstruction (`domain/fsp_message.py`) |
 | `coincurve` | `^20.0` | secp256k1 — `eth-account`'s active backend (`eth_keys ... CoinCurveECCBackend`); pinned for custody-path supply-chain legibility, NOT directly imported by `fwd` (wallet keygen is `eth_account.Account.create()`). |
 | `sqlalchemy` | `^2.0` | DB layer (async) |
 | `aiosqlite` | `^0.20` | Async SQLite driver |
 | `alembic` | `^1.13` | Schema migrations |
 | `argon2-cffi` | `^23.1` | API key hashing (argon2id) |
+| `cryptography` | `^44.0` | AES-256-GCM sealed-master custody primitive (`infra/sealed_master.py`) |
 | `pyyaml` | `^6.0` | Policy file loading |
 | `structlog` | `^24.4` | JSON structured logging |
 | `typer` | `^0.16` | CLI framework |

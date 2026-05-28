@@ -212,7 +212,7 @@ The `POST /v1/sign-transaction` happy path:
       recorded hash), confirming the nonce.
 ```
 
-`sign-replacement` requires the tx to be `submitted` and **keeps it `submitted`**. Because `/receipt` accepts ANY hash fwd recorded for the tx, the client reports the replacement's receipt through the normal `submitted → mined/reverted` path and the nonce is marked confirmed — no operator `nonce-sync` needed. Keeping `submitted` also makes the ≤5-retry cap reachable (a 2nd+ `sign-replacement` still sees `submitted`). The `replaced` value stays in the status enum (`_VALID_STATUSES`) but no code path writes it.
+`sign-replacement` requires the tx to be `submitted` and **keeps it `submitted`**. Because `/receipt` accepts ANY hash fwd recorded for the tx, the client reports the replacement's receipt through the normal `submitted → mined/reverted` path and the nonce is marked confirmed — no operator `nonce-sync` needed. Keeping `submitted` also makes the ≤5-retry cap reachable (a 2nd+ `sign-replacement` still sees `submitted`).
 
 ### Failure modes in the signing flow
 
@@ -278,7 +278,7 @@ CREATE TABLE transactions (
     idempotency_key  TEXT,                        -- caller-supplied via header; optional
     request_json     TEXT NOT NULL,               -- opaque archive of original request
     signed_raw       TEXT,                        -- hex of latest signed tx
-    status           TEXT NOT NULL,               -- pending|submitted|mined|reverted|replaced|failed (pending = signed, pre-broadcast; submitted/mined/reverted are client-reported)
+    status           TEXT NOT NULL,               -- pending|submitted|mined|reverted|failed (pending = signed, pre-broadcast; submitted/mined/reverted are client-reported)
     submitted_at     TIMESTAMP,
     confirmed_at     TIMESTAMP,
     receipt_json     TEXT,                        -- opaque archive of RPC receipt
@@ -774,7 +774,7 @@ Default-deny in v1 is verified by a synthetic-attack integration test (Phase 7 g
 
 ### Domain (`src/fwd/domain/`)
 
-Pure business logic. Policy evaluation, intent decoding, nonce reservation rules, audit-chain hashing, EIP-1559 RLP encoding, DER parsing, low-S normalization, v-recovery from a digest + (r, s) pair to a candidate address.
+Pure business logic. Policy evaluation, intent decoding (ABI), FSP messageHash reconstruction, nonce reservation rules, audit-chain hashing, and the `Signer` Protocol the application layer depends on. The cryptographic signing itself (EIP-1559 RLP encoding, ECDSA) is delegated to `eth-account` in the infra `EnvelopeSigner`; DER parsing, low-S normalization, and v-recovery enter only with a Phase 10 hardware-backed signer.
 
 **Must NOT:**
 - Import from `infra/`, `app/`, or `api/`

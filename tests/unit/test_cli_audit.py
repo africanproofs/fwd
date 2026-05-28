@@ -31,7 +31,7 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 
 
-def _make_row(seq: int = 1, action: str = "sign-and-send") -> AuditRow:
+def _make_row(seq: int = 1, action: str = "sign-transaction") -> AuditRow:
     return AuditRow(
         seq=seq,
         ts=datetime(2026, 5, 16, 12, 0, 0, 0, tzinfo=UTC),
@@ -104,7 +104,7 @@ def test_audit_show_existing_seq_exits_0() -> None:
     with patch("fwd.cli.audit.show_row", new=AsyncMock(return_value=row)):
         result = runner.invoke(app, ["audit", "show", "7"])
     assert result.exit_code == 0
-    assert "sign-and-send" in result.stdout
+    assert "sign-transaction" in result.stdout
     assert "approved" in result.stdout
 
 

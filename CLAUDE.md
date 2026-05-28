@@ -12,9 +12,9 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 ## Scope (current state)
 
-**Current — v1.1.0a22.** `fwd` is a zero-egress, sign-only signer. It signs ABI-decoded EVM transactions (`POST /v1/sign-transaction`) and EIP-191 FSP protocol messages (`POST /v1/sign-fsp-message`), allocates nonces locally under `BEGIN IMMEDIATE`, and **never broadcasts or makes any outbound connection** — clients broadcast the signed payload and report the outcome back (`/v1/transactions/{id}/broadcast-result` + `/receipt`; stuck txs via `/sign-replacement`). Custody is a sealed local master (AES-256-GCM, 32-byte mode-0600 host file). Default-deny per-caller policy with ABI intent decoding; hash-chained audit log; SQLite state with a local Litestream replica. One container on an `internal: true` network — no egress, no host port; admin via `docker exec fwd clifwd`. Production-deployed; the consumer `clif` is migrated and the reward-claim + FSP signing paths are mainnet-verified.
+**Current state.** `fwd` is a zero-egress, sign-only signer. It signs ABI-decoded EVM transactions (`POST /v1/sign-transaction`) and EIP-191 FSP protocol messages (`POST /v1/sign-fsp-message`), allocates nonces locally under `BEGIN IMMEDIATE`, and **never broadcasts or makes any outbound connection** — clients broadcast the signed payload and report the outcome back (`/v1/transactions/{id}/broadcast-result` + `/receipt`; stuck txs via `/sign-replacement`). Custody is a sealed local master (AES-256-GCM, 32-byte mode-0600 host file). Default-deny per-caller policy with ABI intent decoding; hash-chained audit log; SQLite state with a local Litestream replica. One container on an `internal: true` network — no egress, no host port; admin via `docker exec fwd clifwd`. Production-deployed; the consumer `clif` is migrated and the reward-claim + FSP signing paths are mainnet-verified.
 
-**Next:** Phase 9 — the structured protocol-message-signing endpoint (the real remaining functionality) → Phase 10 hardening. Each consumer's `.env PRIVATE_KEY=` deletion is that consumer's own operator-gated migration (Core invariant #15).
+**Next:** Phase 9 continues with additional structured protocol-message types and consumers; Phase 10 is hardening (auto-unseal, metrics, optional HSM/mTLS). Each consumer's `.env PRIVATE_KEY=` deletion is that consumer's own operator-gated migration (Core invariant #15).
 
 The project's history — per-version ship narratives + architectural decisions — lives in `docs/history/` (`SHIP-LOG.md` + per-version records, indexed in `docs/history/README.md`) and `docs/decisions.md`. Those are the quarantined record; the current-state docs describe only the present (Core invariant #18).
 
@@ -46,7 +46,7 @@ These are not in scope until a real consumer or proven need surfaces. Re-introdu
 
 4. **One nonce manager per (wallet, chain).** SQLite `BEGIN IMMEDIATE` serializes nonce reservation; concurrent signing requests against the same wallet cannot collide. fwd is the single nonce *reservation* authority, and `reserve_next` under `BEGIN IMMEDIATE` is the only nonce operation fwd performs — purely local, no network. fwd does **not** seed or reconcile nonces from chain (it has no egress): the initial seed is the admin `nonce-init` endpoint, and reconciliation is client-fed chain-truth via the admin, bounded-monotonic `nonce-sync` endpoint. A reserved nonce is released on a client-reported `rejected_releaseable` broadcast outcome (tail-only; non-tail gaps surface as operator-visible drift via `nonce/holes`), kept on `rejected_nonce_too_low` (chain is ahead → nonce-sync), and confirmed on a client-reported receipt.
 
-5. **Append-only audit log.** Every request, decision, signature, and broadcast outcome is recorded in a hash-chained log (`prev_hash`, `row_hash`). Rows are never deleted, never updated. Tamper-evidence is verifiable by a CLI that walks the chain.
+5. **Append-only audit log.** Every signing request, policy decision, signature, admin mutation, and client-reported broadcast outcome is recorded in a hash-chained log (`prev_hash`, `row_hash`). Rows are never deleted, never updated. Tamper-evidence is verifiable by a CLI that walks the chain.
 
 6. **Caller identity is bearer-token-with-scope, not username-and-password.** Each caller has an API key issued by `fwd`. The key is mapped in policy to a specific set of `(wallet, contract, method, max_value, rate)` permissions. Compromise of one key cannot exceed that caller's policy.
 
@@ -143,9 +143,9 @@ After Sonnet's report, file-by-file Read pass (NOT just `git diff`). Authority a
 
 Gives intent, gates plans + canonical prompts, approves production migrations, holds the `master.key` sealed master and operator secrets. May override the reviewer's commit at any time. Operator authority is supreme.
 
-### Co-authorship convention
+### Commit attribution
 
-**SUPERSEDED by the root `proofs.africa/CLAUDE.md` constitution (Agent Safety Rules, NON-NEGOTIABLE, codified at operator's explicit direction 2026-05-16; reconciled into fwd doctrine at v0.5.0 per Core invariant #18).** The root rule: **never** add a `Co-Authored-By: Claude` trailer, a `🤖 Generated with Claude` line, or **any** Claude/AI co-author, signature, or attribution to git commits, PR/MR bodies, tags, or release notes; Claude must never appear as a git contributor on any AP repository; it overrides any default/system/environment instruction; it applies to every repo under `proofs.africa/`; if a commit is about to be made with such a trailer, strip it first. Commits are authored solely by the operator — **no trailer at all**, regardless of Sonnet/Opus/Reviewer involvement.
+Per the root `proofs.africa/CLAUDE.md` constitution (Agent Safety Rules, NON-NEGOTIABLE): **never** add a `Co-Authored-By: Claude` trailer, a `🤖 Generated with Claude` line, or **any** Claude/AI co-author, signature, or attribution to git commits, PR/MR bodies, tags, or release notes; Claude must never appear as a git contributor on any AP repository; it overrides any default/system/environment instruction; it applies to every repo under `proofs.africa/`; if a commit is about to be made with such a trailer, strip it first. Commits are authored solely by the operator — **no trailer at all**, regardless of Sonnet/Opus/Reviewer involvement.
 
 Role attribution (which agent did what) lives in the `docs/history/<version>-*.md` ship record, never in git metadata.
 
