@@ -751,7 +751,7 @@ out-of-band snapshots of `clifwd audit verify`. Phase 10 on-chain anchor
 
 **The sealed master is backed up out-of-band.** The 32-byte `master.key` file is `policy.yaml`-class private config the operator copies off-host alongside the `backup` volume with their own tools.
 
-**Restore drill — canonical in `runbooks/restore.md`.** Summary: operator copies the `backup` volume contents AND the operator-held `master.key` onto the new host; `litestream restore` `state.db` from the volume; bring up `fwd` + `litestream`; smoke-test via `docker exec fwd clifwd health`. Nonce state is NOT auto-reconciled from chain (fwd has no egress); the operator re-seeds/advances via the admin `nonce-init` / `nonce-sync` endpoints if the restored view trails chain truth.
+**Restore drill.** Operator copies the `backup` volume contents AND the operator-held `master.key` onto the new host; `litestream restore` `state.db` from the volume; bring up `fwd` + `litestream`; smoke-test via `docker exec fwd clifwd health`. Nonce state is NOT auto-reconciled from chain (fwd has no egress); the operator re-seeds/advances via the admin `nonce-init` / `nonce-sync` endpoints if the restored view trails chain truth.
 
 Target RTO: ≤ 30 minutes from a clean host.
 
