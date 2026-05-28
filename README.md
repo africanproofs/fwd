@@ -5,12 +5,11 @@ backend keys (Flare, Songbird, Coston2). It replaces every `.env PRIVATE_KEY` ac
 AP automation with one HTTP endpoint, one sealed custody backend, and one
 tamper-evident audit log — and it **never connects to the internet**.
 
-> **Status: v1.1.0a18 — production-deployed.** The zero-egress initiative is
-> complete and proven on live Coston2 + Flare/Songbird mainnet. fwd **signs** EVM
-> transactions and Flare FSP protocol messages; it does **not** broadcast and makes
-> **no outbound network connection**. Clients broadcast the signed payload
+> **Status: production-deployed**, proven on Coston2 + Flare/Songbird mainnet. fwd
+> **signs** EVM transactions and Flare FSP protocol messages; it does **not** broadcast
+> and makes **no outbound network connection**. Clients broadcast the signed payload
 > themselves and report the outcome back. Custody is a sealed local master
-> (AES-256-GCM); HashiCorp Vault was retired at v1.0.0a1.
+> (AES-256-GCM, mode-0600 host file).
 
 ## What fwd is
 
@@ -229,11 +228,9 @@ list.
 Each wallet's secp256k1 private key is envelope-encrypted with AES-256-GCM under a
 32-byte master held in a **mode-0600 host file** (`seal:v1:…` ciphertext in SQLite),
 decrypted only during a bounded signing operation, then zeroized; process memory is
-`mlockall`-locked against swap. This **sealed local master replaced HashiCorp Vault at
-v1.0.0a1** — the Vault Transit + Shamir machinery was found disproportionate to the
-asset class (low-value Flare automation keys on a host that is never publicly
-exposed). Full rationale + threat model:
-[`docs/decisions.md`](docs/decisions.md) D1 and
+`mlockall`-locked against swap. The custody backend is proportionate to the asset
+class — low-value Flare automation keys on a host that is never publicly exposed.
+Rationale + threat model: [`docs/decisions.md`](docs/decisions.md) and
 [`docs/threat-model.md`](docs/threat-model.md).
 
 ## What fwd is NOT
@@ -264,18 +261,17 @@ Briefly:
 |---|---|
 | [`CLAUDE.md`](CLAUDE.md) | Operating doctrine + Core invariants for agents and humans |
 | [`docs/architecture.md`](docs/architecture.md) | Components, trust boundaries, signing flow, schema, API |
-| [`docs/decisions.md`](docs/decisions.md) | Architectural decisions (D1 custody pivot, D20 zero-egress) |
+| [`docs/decisions.md`](docs/decisions.md) | Architectural decisions and rationale (append-only log) |
 | [`docs/threat-model.md`](docs/threat-model.md) | Attack-surface analysis, mitigations, residual risk |
 | [`docs/dependencies.md`](docs/dependencies.md) | Infrastructure, services, libraries, operator prerequisites |
-| [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased roadmap with explicit gates |
-| [`docs/runbooks/`](docs/runbooks/) | Operator runbooks. **Current:** `v1.0.0a1-sealed-master-verification.md`. **Stale/historical** (carry a banner — pre-v1.0.0a1 Vault / pre-zero-egress; do not follow as-is): `restore.md`, `vault-init.md`, `sign-and-send-verification.md`, `phase-{5,7}-verification.md`, `ci-integration.md`. Reconciling them is a tracked follow-up. |
+| [`docs/implementation-plan.md`](docs/implementation-plan.md) | Phased build-out record |
+| [`docs/runbooks/`](docs/runbooks/) | Operator runbooks (sealed-master verification, CI integration) |
 | [`docs/history/`](docs/history/) | Per-version ship records ([`SHIP-LOG.md`](docs/history/SHIP-LOG.md) + index) |
 
 ## Provenance
 
 - **Custody:** sealed local master (AES-256-GCM, 32-byte mode-0600 host file);
-  signing in-process with `eth-account` post-decrypt. (HashiCorp Vault Transit was the
-  v0.1.2→v0.5.x design, retired at v1.0.0a1 — `docs/decisions.md` D1.)
+  signing in-process with `eth-account` post-decrypt.
 - **Role:** `keosd` (Antelope/EOSIO) is the lineage; `fwd` is the redesign — intent
   decoding, default-deny policy, hash-chained audit, EVM-native + FSP signing, and
   zero egress are what `fwd` adds.
