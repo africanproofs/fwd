@@ -135,15 +135,27 @@ validate it, load it (restart), create the fwd-generated wallets, mint the calle
 tokens (printed once), seed the sender nonces — and prints the two operator-only
 **GATES** (your FSP signing-key import + the on-chain authorization). It is
 **idempotent**: re-running skips anything already created and skips the restart
-if the policy hasn't changed. Flags: `--claim-only` / `--sign-only`,
-`--skip-fsp-import` (defer the FSP key), and a comma list for `--networks`. For
-mainnet, use `--networks flare` / `--networks songbird` (the generator fills the
-right contract addresses + chain id).
+if the policy hasn't changed. Flags: `--import-existing` (migration — see below),
+`--claim-only` / `--sign-only`, `--skip-fsp-import` (defer the key-import gate), and
+a comma list for `--networks`. For mainnet, use `--networks flare` /
+`--networks songbird` (the generator fills the right contract addresses + chain id).
 
 **Reward class.** The command takes a class: `rewards fsp` (the default — FTSO
 claim + FSP signing, today's provider rewards) or `rewards validator`
 (staking/validator rewards — a future class, not yet implemented). Bare
 `clifwd onboard rewards` means `fsp`.
+
+**Migrating an existing provider?** Add **`--import-existing`**. By default onboard
+*generates* a fresh claim executor + FSP sender (greenfield; cleanest custody — the
+keys are born inside fwd and never had a plaintext life). But if you already run a
+provider, you already hold a funded, on-chain-authorized executor and submit key —
+`--import-existing` imports those (and the signing key) instead of generating new
+ones, so you skip re-running `setClaimExecutors` and re-funding a new sender. It
+**prompts each sender's current on-chain nonce** (fwd is zero-egress — it can't read
+the chain) and prints a **cutover** checklist instead of new authorization. The
+trade-off: an imported key carries its pre-fwd plaintext exposure into fwd, and you
+must **stop the old submitter/claimer** for those accounts (fwd becomes their sole
+user — otherwise the two collide on nonces).
 
 That is the whole onboarding. The manual runbook below is exactly what the one
 command does, step by step — use it if you want to drive each step yourself.

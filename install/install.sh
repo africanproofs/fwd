@@ -203,7 +203,9 @@ cat <<EOF
 
 One command does all of the below:
   clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
-(idempotent; ends by printing the two operator-only GATES). The manual sequence:
+(idempotent; ends by printing the two operator-only GATES).
+Migrating an existing provider? add --import-existing to import your existing
+executor + sender keys instead of generating fresh ones. The manual sequence:
 
 Next — bring up reward signing (the custody gate; your security event, not the installer's).
 The default reward policy covers BOTH revenue ops: claiming (RewardManager.claim)
