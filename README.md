@@ -65,8 +65,8 @@ so fwd can keep its nonce ledger and audit log coherent:
 
 - fwd attaches to a Docker network with **`internal: true`** — no route to the
   internet, and (a consequence) **no host port**: you cannot `curl` it from the host.
-  Admin runs via `docker exec fwd clifwd …`; callers reach it intra-network at
-  `http://fwd:8080`.
+  Admin runs via the `clifwd` host wrapper (`docker exec fwd clifwd …` under the
+  hood); callers reach it intra-network at `http://fwd:8080`.
 - A caller container must be **dual-homed**: on fwd's internal network (to call fwd)
   **and** on its own egress network (to broadcast to an RPC it owns).
 - **Use the shared client library** — don't hand-roll the loop:
@@ -120,23 +120,26 @@ created as a *directory* and fail confusingly.
 
 ```bash
 docker compose up -d
-docker exec fwd clifwd health          # → master ok / fwd ok  (NO `rpc` field — zero egress)
+clifwd health          # → master ok / fwd ok  (NO `rpc` field — zero egress)
 ```
 
-There is **no host port** (`internal: true`), so probe and administer fwd from inside
-the container with `docker exec fwd clifwd …`, not from the host.
+> **`clifwd` is the operator CLI.** There is **no host port** (`internal: true`),
+> so admin runs *inside* the container. `clifwd` is a thin host wrapper
+> (`install/clifwd`) that calls `docker exec "${FWD_CONTAINER:-fwd}" clifwd "$@"`;
+> `install.sh` puts it on your `PATH`. If it isn't installed, prefix the commands
+> below with `docker exec fwd` (e.g. `docker exec fwd clifwd health`).
 
 ### 4. Create a wallet (fwd generates + seals the key)
 
 ```bash
-docker exec fwd clifwd wallets create --name clif-claimer-flr-prod --policy <policy-path>
-docker exec fwd clifwd wallets list
+clifwd wallets create --name clif-claimer-flr-prod --policy <policy-path>
+clifwd wallets list
 ```
 
 ### 5. Mint a caller API key
 
 ```bash
-docker exec fwd clifwd callers create --name clif --policy <policy-path>
+clifwd callers create --name clif --policy <policy-path>
 # Prints the bearer API key ONCE — capture it into the caller's secret config now.
 ```
 
@@ -146,7 +149,7 @@ fwd can't read the chain, so the operator seeds the starting nonce once per
 (wallet, chain) from on-chain truth:
 
 ```bash
-docker exec fwd clifwd nonce init --wallet clif-claimer-flr-prod --chain 14 --starting-nonce <N>
+clifwd nonce init --wallet clif-claimer-flr-prod --chain 14 --starting-nonce <N>
 ```
 
 ### 7. Sign → broadcast → report back (client side)
@@ -195,9 +198,13 @@ Auth: **caller** = the bearer API key minted in step 5; **admin** = `FWD_ADMIN_K
 
 ## CLI — `clifwd`
 
-Run admin commands inside the container (`docker exec fwd clifwd …`). HTTP commands
-need `FWD_ADMIN_KEY` (and `FWD_URL`, default `http://127.0.0.1:8080`); in-process
-commands (`master generate`, `wallets import`, `audit *`, `fsp scope`) do not.
+`clifwd` runs the CLI inside the container. It's a host wrapper (`install/clifwd`,
+installed on `PATH` by `install.sh`) for `docker exec "${FWD_CONTAINER:-fwd}"
+clifwd "$@"` — so the commands below run as `clifwd …`; if the wrapper isn't on
+your `PATH`, prefix them with `docker exec fwd`. HTTP commands need
+`FWD_ADMIN_KEY` (and `FWD_URL`, default `http://127.0.0.1:8080`); in-process
+commands (`master generate`, `wallets import`, `audit *`, `fsp scope`,
+`policy *`) do not.
 
 | Command | Purpose |
 |---|---|

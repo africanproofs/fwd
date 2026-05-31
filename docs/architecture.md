@@ -52,7 +52,7 @@ Two Docker services and two named volumes. Backups go to a local `backup` volume
 
 | Network | Purpose |
 |---|---|
-| `fwd-callers` | The only network `fwd` attaches to. `internal: true` — no internet route AND no host→container port publishing. Caller containers attach to reach `fwd` at `http://fwd:8080`; admin runs via `docker exec fwd clifwd`. |
+| `fwd-callers` | The only network `fwd` attaches to. `internal: true` — no internet route AND no host→container port publishing. Caller containers attach to reach `fwd` at `http://fwd:8080`; admin runs via the `clifwd` host wrapper (`docker exec fwd clifwd`). |
 
 | Volume | Contents |
 |---|---|
@@ -73,11 +73,13 @@ Two Docker services and two named volumes. Backups go to a local `backup` volume
 v1: bearer API keys. Each caller has a key issued by `fwd`'s admin CLI:
 
 ```
-$ docker exec -it fwd clifwd callers create \
+$ clifwd callers create \
     --name ftso-fee-claimer \
     --policy ftso-claim-flare-prod
 fwd_live_a8f3c9d2b1e4...
 ```
+
+(`clifwd` is the host wrapper for `docker exec "${FWD_CONTAINER:-fwd}" clifwd`.)
 
 The key is opaque to callers; `fwd` stores a salted hash on the host, not the key itself. Callers submit it as `Authorization: Bearer fwd_live_...`. Lookup → policy → wallet permissions.
 
