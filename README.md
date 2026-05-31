@@ -4,9 +4,18 @@ Policy-gated, **zero-egress, sign-only** signing service for a Flare FTSO
 provider's EVM backend keys (Flare, Songbird, Coston2). It replaces every
 `.env PRIVATE_KEY` across an operator's automation with one HTTP endpoint, one
 sealed custody backend, and one tamper-evident audit log — and it **never
-connects to the internet**. Each provider runs their own single-host stack
-(`curl -sfL https://get.proofs.africa/fwd | sh -`); see
-`docs/one-command-install.md`.
+connects to the internet**.
+
+Source: [`github.com/africanproofs/fwd`](https://github.com/africanproofs/fwd)
+(public). Each provider runs their own single-host stack, built from pinned
+source:
+
+```sh
+curl -sfL https://get.proofs.africa/fwd | sh -
+```
+
+See [`docs/one-command-install.md`](docs/one-command-install.md) for the full
+install flow and the custody gate.
 
 > **Status: production-deployed**, proven on Coston2 + Flare/Songbird mainnet. fwd
 > **signs** EVM transactions and Flare FSP protocol messages; it does **not** broadcast
@@ -62,32 +71,33 @@ so fwd can keep its nonce ledger and audit log coherent:
 - A caller container must be **dual-homed**: on fwd's internal network (to call fwd)
   **and** on its own egress network (to broadcast to an RPC it owns).
 - **Use the shared client library** — don't hand-roll the loop:
-  [`gitlab.com/proofs.africa/fwd-client`](https://gitlab.com/proofs.africa/fwd-client)
-  (public). The reward claimer / FSP client `clif` already depends on it.
+  [`gitlab.com/proofs.africa/fwd-client`](https://gitlab.com/proofs.africa/fwd-client).
+  The reward claimer / FSP client
+  [`clif`](https://github.com/africanproofs/clif) already depends on it.
 
 ## Quickstart
 
-Prerequisites: **Docker + Compose v2**. For local development and the `clifwd` CLI
-locally: **Python 3.12 + Poetry ≥ 1.8**.
+Prerequisites: **Docker + Compose v2 + git** (the image builds from pinned
+source on the host). For local development and the `clifwd` CLI locally:
+**Python 3.12 + Poetry ≥ 1.8**.
 
 ### 1. Provision the sealed master key
 
-The master key never lives in the repo or image — you generate it on the host:
-
-`master generate` runs **in-process** (it does not need the daemon), so generate the
-key *before* the container starts — the container won't boot without it. With the CLI
-installed locally:
+The master key never lives in the repo or image — you generate it on the host
+*before* the container starts (it won't boot without it). `master generate` runs
+**in-process** and does not need the daemon. With the CLI installed locally:
 
 ```bash
 clifwd master generate --out config/master.key   # writes a 32-byte key, mode 0600
 ```
 
-Docker-only host (no local Python)? Run the same command inside the image — it
-overrides the daemon entrypoint and writes to the bind-mounted host path:
+Docker-only host (no local Python)? Once the image is built (`docker compose
+build`), run the same command inside it — it overrides the daemon entrypoint and
+writes to the bind-mounted host path:
 
 ```bash
 docker run --rm -v "$PWD/config:/config" \
-  registry.gitlab.com/proofs.africa/fwd/fwd:${FWD_IMAGE_TAG:-dev} \
+  fwd:${FWD_IMAGE_TAG:-dev} \
   clifwd master generate --out /config/master.key
 ```
 
@@ -213,7 +223,7 @@ list.
 
 | Variable | Purpose |
 |---|---|
-| `FWD_IMAGE_TAG` | fwd container image tag (default `dev`; CI sets a versioned tag) |
+| `FWD_IMAGE_TAG` | Tag for the locally built fwd image (default `dev`; the installer pins a release tag) |
 | `FWD_MASTER_KEY_FILE` | Path to the 32-byte sealed master (mode 0600; bind-mounted) |
 | `FWD_ADMIN_KEY` | Bearer key for `/v1/admin/*` (random ≥32 chars in production) |
 | `FWD_POLICY_PATH` | Path to the YAML policy file (operator-controlled, bind-mounted) |
@@ -221,7 +231,7 @@ list.
 | `FWD_MAX_GAS` / `FWD_MAX_FEE_PER_GAS` | Zero-egress sanity caps on client-supplied gas/fees |
 | `FWD_NONCE_SYNC_MAX_ADVANCE` | Max monotonic jump `nonce-sync` will accept |
 | `FWD_RESERVATION_LEASE_SEC` | Age after which a pending reservation is a "hole" |
-| `DATABASE_URL` | SQLite path for the daemon + Alembic migrations (no `FWD_` prefix — this is the one setting field without the `fwd_` prefix) |
+| `DATABASE_URL` | SQLite path for the daemon + Alembic migrations (the one setting without the `FWD_` prefix) |
 | `FWD_LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR` (default `INFO`) |
 | `FWD_DISABLE_MLOCK` | Set `1` only in dev/test to skip `mlockall` |
 | `FWD_URL` | CLI-side: the daemon URL `clifwd` HTTP commands target |

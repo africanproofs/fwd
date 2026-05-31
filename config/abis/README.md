@@ -25,6 +25,7 @@ config/abis/
   reward_manager.json            # FTSO RewardManager
   participant_register.json      # apregister (Coston2 + future Flare)
   erc20.json                     # canonical ERC-20 (transfer, approve)
+  flare_systems_manager.json     # FlareSystemsManager (FSP Leg-2 submit)
 ```
 
 `registry.yaml` shape:
@@ -35,6 +36,7 @@ abis:
   reward_manager: reward_manager.json
   participant_register: participant_register.json
   erc20: erc20.json
+  flare_systems_manager: flare_systems_manager.json
 ```
 
 The policy.yaml's `permissions.<path>.contracts.<addr>.abi` field
@@ -93,10 +95,13 @@ Deep dotted-path predicate projection for complex types (B3) is a
 Phase 10 follow-up scoped to whatever real consumer demands it (per
 "What FWD Deliberately IS NOT" — no speculative scope).
 
-## Why these three
+## Why these
 
 - **`reward_manager.json`** — the FTSO RewardManager; fwd signs FTSO
   `claim` calls for the reward claimer (`clif`).
+- **`flare_systems_manager.json`** — the FlareSystemsManager; fwd signs
+  the FSP Leg-2 submit transactions (`signUptimeVote` / `signRewards`)
+  that broadcast a caller's signed FSP vote (`clif`).
 - **`participant_register.json`** — apregister's ParticipantRegister,
   for the `apregister/` Coston2 signing path (contract
   `0x09f15b14D16BA645661c576348E4d4C201242bF2`).

@@ -47,7 +47,7 @@ Two Docker services and two named volumes. Backups go to a local `backup` volume
 
 | Service | Image | Role |
 |---|---|---|
-| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The signer. FastAPI on port 8080, reachable only intra-network (`internal: true` — no host port; admin via `docker exec`). |
+| `fwd` | Built from source by the operator: `docker compose` builds the local `Dockerfile` (tagged `${FWD_IMAGE_TAG:-dev}`). The installer git-clones the public repo (`github.com/africanproofs/fwd`) and builds locally — no registry pull. | The signer. FastAPI on port 8080, reachable only intra-network (`internal: true` — no host port; admin via `docker exec`). |
 | `litestream` | `litestream/litestream:<pinned>` | SQLite continuous replication to the local `backup` volume. |
 
 | Network | Purpose |

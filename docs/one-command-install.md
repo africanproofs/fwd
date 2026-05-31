@@ -51,13 +51,14 @@ fwd stands alone; clif is opt-in.
 
 ## Image delivery — build from source on the host
 
-The installer fetches **pinned source** (a release tag + commit sha) and
-`docker compose build`s locally. There is **no dependency on a published image
-registry** and **no trust in a prebuilt binary** for a custody tool — the
-operator builds from auditable, pinned source. The host needs `docker`,
-`docker compose v2`, and `git`; the language/build toolchain stays inside the
-Docker multi-stage build. First install is slower (a source build); that is the
-accepted trade for the zero-trust posture.
+The installer git-clones **pinned source** (a release tag + commit sha) from the
+public repository — `github.com/africanproofs/fwd` (and, under `--with-clif`,
+`github.com/africanproofs/clif`) — and `docker compose build`s locally. There is
+**no dependency on a published image registry** and **no trust in a prebuilt
+binary** for a custody tool — the operator builds from auditable, pinned source.
+The host needs `docker`, `docker compose v2`, and `git`; the language/build
+toolchain stays inside the Docker multi-stage build. First install is slower (a
+source build); that is the accepted trade for the zero-trust posture.
 
 ## Installer responsibilities
 
@@ -116,8 +117,8 @@ is **phased**:
 **Now — runbook + tooling (operator-driven, validated at each step):**
 1. `clifwd master generate` — done by the installer (the sealed master).
 2. `clifwd policy init --networks … --recipient … [--capabilities claim,fsp]`
-   → generate a correct a29-schema `policy.yaml` (chains, the non-scalar-arg
-   opt-in, the recipient pin, the FSP `fsp_self_submit` carve-out,
+   → generate a schema-correct `policy.yaml` (per-contract chains, the
+   non-scalar-arg opt-in, the recipient pin, the FSP `fsp_self_submit` carve-out,
    wallet_constraints). Rename wallets/callers to taste.
 3. `clifwd policy validate --schema-only` — quick schema check of the generated file.
 4. **`sudo fwd restart`** — **load the new policy. This MUST come before step 5:**
@@ -149,8 +150,8 @@ digests** (build-from-source):
 
 ```yaml
 version: 1.1.0
-fwd_source: { repo: https://gitlab.com/proofs.africa/fwd.git, tag: v1.1.0, sha: <hex> }
-clif_source: { repo: <public clif url>, tag: v0.5.x, sha: <hex> }   # --with-clif
+fwd_source:  { repo: https://github.com/africanproofs/fwd.git,  tag: v1.1.0, sha: <hex> }
+clif_source: { repo: https://github.com/africanproofs/clif.git, tag: v0.5.x, sha: <hex> }   # --with-clif
 compose_sha256: <hex>
 networks_sha256: <hex>
 ```
@@ -175,7 +176,8 @@ rollback steps on failure. **Never** overwrites operator policy or secrets.
 ## Security model of `curl | sh` for a custody tool
 
 - TLS, and the script pinned to an **immutable release tag**, published and
-  **auditable in the public repo** (the vanity URL only redirects).
+  **auditable in the public repo** (`github.com/africanproofs/fwd`; the vanity
+  URL only redirects).
 - **Checksums** on every fetched artifact; build from pinned source.
 - The installer **never fetches or handles key material** — the master is
   generated locally; provider keys are imported only at the post-gate step.

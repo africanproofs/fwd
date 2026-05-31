@@ -7,8 +7,7 @@ Every dependency `fwd` requires, grouped by tier. The "Status" column flags what
 | Dependency | Status | Notes |
 |---|---|---|
 | Docker + Docker Compose | Likely present, must be installed if absent | Any host. No K3s required. |
-| GitLab repo + CI runners | ✅ Exists | New repo at `gitlab.com/proofs.africa/fwd` |
-| GitLab Container Registry | ✅ Exists | Image: `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` |
+| `git` + the public source repo | ✅ Public | Install model is build-from-source: clone `github.com/africanproofs/fwd` and build the image locally. No registry pull required. |
 | **A local `backup` volume** | ⚠️ Provision one | Docker volume (or host bind) for Litestream SQLite replicas. Local only — no cloud, no IAM, ~€0/mo. |
 | The `master.key` file | ⚠️ Generate one | 32-byte mode-0600 sealed master via `clifwd master generate`. |
 
@@ -31,7 +30,7 @@ Notably **NOT required:**
 
 | Service | Image (tag-pinned; digest-pinning is a Phase 10 item) | Role |
 |---|---|---|
-| `fwd` | `registry.gitlab.com/proofs.africa/fwd/fwd:<tag>` | The signing daemon (FastAPI). Custody is in-process: `SealedMaster` AES-256-GCM under a mode-0600 host-file master. |
+| `fwd` | Built locally from the public source by `docker compose` (local `Dockerfile`, tagged `${FWD_IMAGE_TAG:-dev}`) | The signing daemon (FastAPI). Custody is in-process: `SealedMaster` AES-256-GCM under a mode-0600 host-file master. |
 | `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to a local `backup` volume (no cloud) |
 
 Two services deployed and managed by `docker-compose.yml`. Nothing manual to install on the host beyond Docker itself.
@@ -80,7 +79,7 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 | `types-pyyaml` | `^6.0` | PyYAML type stubs for `mypy --strict` (policy loader) |
 | Docker | Recent | For local image builds and `docker-compose` |
 | Docker Compose | v2 | Native CLI (`docker compose`, not `docker-compose`) |
-| GitLab CI runner | Existing | Lints, tests, builds the image, pushes to registry |
+| CI runner | Optional | Lints + tests on push. Not on the install path — operators build the image locally from source (a registry push is optional/internal, never how a provider installs). |
 
 ## Operator prerequisites (one-time, human-side)
 

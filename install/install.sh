@@ -15,7 +15,7 @@
 # Config (env or flags), k3s-style:
 #   FWD_DIR=/opt/fwd            install root        (--dir)
 #   FWD_BIN_DIR=/usr/local/bin  host wrapper dir
-#   FWD_REPO=https://gitlab.com/proofs.africa/fwd.git
+#   FWD_REPO=https://github.com/africanproofs/fwd.git
 #   FWD_REF=main               git ref to build    (--ref; a release pins a tag)
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
@@ -25,7 +25,7 @@ set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
 FWD_BIN_DIR="${FWD_BIN_DIR:-/usr/local/bin}"
-FWD_REPO="${FWD_REPO:-https://gitlab.com/proofs.africa/fwd.git}"
+FWD_REPO="${FWD_REPO:-https://github.com/africanproofs/fwd.git}"
 FWD_REF="${FWD_REF:-main}"
 FWD_SHA="${FWD_SHA:-}"
 FWD_IMAGE_TAG="${FWD_IMAGE_TAG:-local}"
