@@ -1,13 +1,19 @@
 # fwd policy.yaml — EXAMPLE (NOT loaded; documentation only).
 #
-# The real policy.yaml is operator-controlled and gitignored (Core
-# invariant #12: public repo, private config). This file documents the
-# caller-keyed schema (decisions.md D13/D14, src/fwd/domain/policy.py).
-# Copy to $FWD_POLICY_PATH (default /etc/fwd/policy.yaml) and edit.
+# This is the DEFAULT REWARD POLICY: the exact shape
+#   clifwd policy init --networks coston2 --recipient 0xYOURADDR --capabilities claim,fsp
+# generates — covering the two revenue operations, claiming FTSO rewards
+# (RewardManager.claim) and signing FSP rewards (signUptimeVote / signRewards).
+# DON'T hand-write this: run `clifwd policy init` (it derives the method
+# signatures from the shipped ABIs and fills the chains/carve-out for you), then
+# `clifwd policy validate`. For flare/songbird the addresses + chain id differ
+# (this example is coston2 = chain 114, the rehearsal network).
 #
-# Schema is strict (extra keys rejected). version MUST be 1.
+# The real policy.yaml is operator-controlled and gitignored (Core invariant #12:
+# public repo, private config). Copy to $FWD_POLICY_PATH (default
+# /etc/fwd/policy.yaml). Schema is strict (extra keys rejected). version MUST be 1.
 #
-# Evaluation (D14 + D22, default-deny — only step 10 returns Allow):
+# Evaluation (D14 + D22, default-deny — only the final step returns Allow):
 #   1 caller -> binding (by NAME; caller.policy_path must match binding;
 #               binding.policy_path must resolve to a permissions block)
 #   2 request.to -> permissions.<path>.contracts.<addr>  (addr case-insensitive)
@@ -28,59 +34,91 @@
 #     wallet_constraints: aggregate-value cap + wallet rate
 #  10 Allow.
 #
-# Startup fail-fast (infra/policy_loader.check_consistency): every
-# ACTIVE caller must be declared here by NAME with a matching
-# policy_path; every contract abi must be a registered ABI
-# (config/abis/registry.yaml); every method signature must exist in
-# that ABI; every wallet_allowlist entry must resolve AND have a
+# Startup fail-fast (infra/policy_loader.check_consistency): every ACTIVE caller
+# must be declared here by NAME with a matching policy_path; every contract abi
+# must be a registered ABI (config/abis/registry.yaml); every method signature
+# must exist in that ABI; every wallet_allowlist entry must resolve AND have a
 # policy.wallets binding; every wallets.<name>.policy_path must be a
 # wallet_constraints key. Every contract rule MUST declare chains.
 
 version: 1
 
-# Caller bearer-token identities (the `name` is the caller's name in
-# the callers table; policy_path indirects to a permissions block).
+# Caller bearer-token identities (the `name` is the caller's name in the callers
+# table; policy_path indirects to a permissions / fsp_permissions block).
+# Three callers — one per leg (fwd forbids one policy_path in both permissions
+# and fsp_permissions, so Leg-1 sign and Leg-2 submit use distinct callers):
 callers:
-  ftso-claimer:
-    policy_path: perm/ftso-claimer
+  claim-coston2:        # FTSO reward claimer
+    policy_path: perm/claim-coston2
+  fsp-sign-coston2:     # FSP Leg-1 — POST /v1/sign-fsp-message
+    policy_path: fsp/coston2
+  fsp-submit-coston2:   # FSP Leg-2 — POST /v1/sign-transaction (FlareSystemsManager)
+    policy_path: perm/fsp-submit-coston2
 
-# Wallet -> wallet_constraints indirection (per-wallet aggregate/rate).
+# Wallet -> wallet_constraints indirection (per-wallet aggregate/rate cap).
 wallets:
-  claim-recipient:
-    policy_path: wc/claim-recipient
+  claimer-coston2:      # claim executor — fwd generates+seals (clifwd wallets create)
+    policy_path: wc/claimer-coston2
+  fsp-signing-coston2:  # the REGISTERED signing-policy key — IMPORT it (clifwd wallets import)
+    policy_path: wc/fsp-coston2
+  fsp-sender:           # pays gas for the Leg-2 submit — fwd generates+seals; shared across networks
+    policy_path: wc/fsp-sender
 
 permissions:
-  perm/ftso-claimer:
+  # --- Claim rewards: RewardManager.claim ---
+  perm/claim-coston2:
     contracts:
-      # RewardManager (address is matched case-insensitively). The abi
-      # name must exist in config/abis/registry.yaml.
-      "0x0000000000000000000000000000000000000000":
+      "0xB4f43E342c5c77e6fe060c0481Fe313Ff2503454":   # Coston2 RewardManager (case-insensitive match)
         abi: reward_manager
-        # REQUIRED, non-empty: the chain IDs this contract rule is valid on.
-        # A signing request whose chain is not listed is denied (step 2).
-        # 14 = Flare, 19 = Songbird, 114 = Coston2.
-        chains: [14]
+        chains: [114]                                  # 14 Flare · 19 Songbird · 114 Coston2
         methods:
-          # Full canonical ABI signature. Non-scalar args (the proof
-          # array) are decoded but not predicatable (B1) — they are
-          # unconstrainable, so the method is denied UNLESS you accept that
-          # by setting allow_unconstrained_args: true. Bound the method by
-          # max_value_wei + rate instead.
+          # The proofs arg is a tuple[] (non-scalar, B1) → not predicatable, so
+          # allow_unconstrained_args is required; bound by max_value_wei + rate +
+          # the pinned recipient instead.
           "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])":
             max_value_wei: "0"
             allow_unconstrained_args: true
             arg_predicates:
-              # Pin YOUR reward recipient; "any" would allow any value.
-              _recipient: "0xYOUR_CLAIM_RECIPIENT_ADDRESS"
-    wallet_allowlist:
-      - claim-recipient
-    rate:
-      per_hour: 4
-      per_day: 8
+              _recipient: "0xYOUR_CLAIM_RECIPIENT_ADDRESS"   # pin YOUR reward destination
+    wallet_allowlist: [claimer-coston2]
+    rate: { per_hour: 4, per_day: 8 }
+
+  # --- Sign FSP rewards (Leg-2 submit): FlareSystemsManager ---
+  perm/fsp-submit-coston2:
+    contracts:
+      "0xbC1F76CEB521Eb5484b8943B5462D08ea96617A1":   # Coston2 FlareSystemsManager
+        abi: flare_systems_manager
+        chains: [114]
+        methods:
+          # Both carry tuple/array args → allow_unconstrained_args required.
+          "signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))":
+            max_value_wei: "0"
+            allow_unconstrained_args: true
+            arg_predicates: { _rewardEpochId: any }
+          "signRewards(uint24,(uint256,uint256)[],bytes32,(uint8,bytes32,bytes32))":
+            max_value_wei: "0"
+            allow_unconstrained_args: true
+            arg_predicates: { _rewardEpochId: any }
+    # The signing key self-submits (the carve-out below) + the dedicated
+    # sole-submitter sender pays gas. Both must be allowlisted here.
+    wallet_allowlist: [fsp-signing-coston2, fsp-sender]
+    rate: { per_hour: 50, per_day: 500 }
 
 wallet_constraints:
-  wc/claim-recipient:
-    max_aggregate_value_wei_per_day: "0"
-    rate:
-      per_hour: 4
-      per_day: 8
+  wc/claimer-coston2: { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 4, per_day: 8 } }
+  wc/fsp-coston2:     { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
+  wc/fsp-sender:      { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
+
+# FSP Leg-1: EIP-191 message signing (POST /v1/sign-fsp-message). No contract —
+# just the permitted message types + the signing wallet + rate.
+fsp_permissions:
+  fsp/coston2:
+    message_types: [UPTIME, REWARD_DISTRIBUTION]
+    wallet_allowlist: [fsp-signing-coston2]
+    rate: { per_hour: 50, per_day: 500 }
+
+# The signing-policy key signs FSP messages (Leg-1) AND appears as a self-submit
+# EVM signer (Leg-2) — the narrow carve-out to key-domain segmentation, honoured
+# only for the FSM signUptimeVote/signRewards max_value_wei=0 shape above.
+fsp_self_submit:
+  - fsp-signing-coston2

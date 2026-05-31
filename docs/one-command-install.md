@@ -109,37 +109,83 @@ policy, and custody backend as the daemon. For file-based ops (`wallets import`)
 the wrapper must make explicit that `--privkey-file` is evaluated **inside** the
 container.
 
-## Custody init + phased onboarding (the gate)
+## Reward onboarding — the default claim + FSP runbook (the custody gate)
 
-The installer stages the runtime but stops before keys/authorization. Onboarding
-is **phased**:
+The installer stages the runtime but stops before keys and on-chain authorization
+— that is your custody event, not the installer's. fwd boots **inert**: empty
+default-deny policy, zero wallets, signs nothing.
 
-**Now — runbook + tooling (operator-driven, validated at each step):**
-1. `clifwd master generate` — done by the installer (the sealed master).
-2. `clifwd policy init --networks … --recipient … [--capabilities claim,fsp]`
-   → generate a schema-correct `policy.yaml` (per-contract chains, the
-   non-scalar-arg opt-in, the recipient pin, the FSP `fsp_self_submit` carve-out,
-   wallet_constraints). Rename wallets/callers to taste.
-3. `clifwd policy validate --schema-only` — quick schema check of the generated file.
-4. **`sudo fwd restart`** — **load the new policy. This MUST come before step 5:**
-   `wallets`/`callers create` validate the requested `policy_path` against the
-   *loaded* (in-memory) policy, so the policy must be loaded first. (The policy
-   loads fine even though its wallets/callers don't exist yet — they are declared
-   in `policy.wallets`/`policy.callers`, so consistency passes; there are no
-   active callers to fail the startup check until you create them.)
-5. `clifwd wallets create|import …` — generate or import the executor / FSP
-   signing-policy / sender keys (key material handled only here, by the
-   operator).
-6. `clifwd callers create …` — mint the caller token(s); inject into clif's env.
-7. `clifwd policy validate` — the full gate: must pass.
-8. `clifwd nonce init …` — seed each sender wallet's nonce (fwd is zero-egress).
-9. **On-chain, from the operator's OFFLINE identity key** (fwd never custodies
-   it): `ClaimSetupManager.setClaimExecutors` to authorize the executor wallet,
-   `setAllowedClaimRecipient`, and FSP signing-policy registration.
-10. Rehearse on Coston2, then go live.
+You do **not** have to learn the policy schema. `clifwd policy init` ships a
+**default reward policy** covering the two revenue operations — claiming FTSO
+rewards (`RewardManager.claim`) and signing FSP rewards (`signUptimeVote` /
+`signRewards`) — and emits deterministic wallet + caller names. The runbook below
+is the exact ordered sequence for that default on **Coston2** (the rehearsal
+network); every name matches the generator's output, so it is copy-paste end to
+end. You change only **two** things: your reward recipient (step 2) and your
+imported signing key (step 5). For mainnet, swap `coston2` → `flare` / `songbird`
+everywhere — the generator fills the right contract addresses + chain id.
 
-**Later — `sudo fwd custody init` wizard** wraps steps 2–9 interactively and
-prints the exact on-chain commands; deferred to a later phase.
+`clifwd` runs each admin command inside the container; the `>` redirect (step 2)
+and `sudo fwd restart` (step 3) run on the **host**. Only **two** steps need a
+human decision — both are flagged GATE.
+
+```sh
+# 1. (the installer already generated the sealed master.)
+
+# 2. Generate the default reward policy and pin YOUR recipient. The '>' redirect
+#    runs on the host, so it writes the host file the container mounts read-only
+#    as the live policy. (Back up any existing one first: cp config/policy.yaml{,.bak})
+clifwd policy init --networks coston2 \
+  --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS \
+  > config/policy.yaml
+clifwd policy validate --schema-only          # reads the live mount; no daemon needed
+
+# 3. LOAD it. REQUIRED before step 4 — wallets/callers create validate the
+#    requested policy_path against the LOADED (in-memory) policy. (The policy
+#    loads fine though its wallets/callers don't exist yet: they're declared in
+#    policy.wallets / policy.callers, and there are no ACTIVE callers to fail the
+#    startup consistency check until you create them.)
+sudo fwd restart
+
+# 4. Create the two fwd-GENERATED wallets — the claim executor + the FSP gas payer:
+clifwd wallets create --name claimer-coston2 --policy wc/claimer-coston2
+clifwd wallets create --name fsp-sender      --policy wc/fsp-sender
+
+# 5. GATE 1 (operator-only) — IMPORT your registered signing-policy key. Key
+#    material is handled here and nowhere else; the file must be mode 0600, owned
+#    by you, and decode to exactly 32 bytes of hex:
+clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 \
+  --privkey-file /abs/path/to/signing.key --shred-source
+
+# 6. Mint the three caller tokens (each printed ONCE — inject into clif's env):
+clifwd callers create --name claim-coston2      --policy perm/claim-coston2
+clifwd callers create --name fsp-sign-coston2   --policy fsp/coston2
+clifwd callers create --name fsp-submit-coston2 --policy perm/fsp-submit-coston2
+
+# 7. Full gate — must pass (schema + live DB / ABI / wallet-binding consistency):
+clifwd policy validate
+
+# 8. Seed the next nonce for the two SENDER wallets (fwd is zero-egress — it can't
+#    read the chain). Both are freshly generated, so start at 0:
+clifwd nonce init --wallet claimer-coston2 --chain 114 --starting-nonce 0
+clifwd nonce init --wallet fsp-sender      --chain 114 --starting-nonce 0
+#    (The signing key signs detached FSP messages — no nonce. Seed it as well only
+#     if you opt it in as a self-submitter instead of using fsp-sender.)
+
+# 9. GATE 2 (operator-only) — on-chain, from your OFFLINE identity key (fwd never
+#    custodies it):
+#      ClaimSetupManager.setClaimExecutors   -> authorize claimer-coston2
+#      setAllowedClaimRecipients             -> allow 0xYOUR_CLAIM_RECIPIENT_ADDRESS
+#      FSP signing-policy registration       -> register fsp-signing-coston2 as a voter
+```
+
+Then rehearse a real claim + FSP sign on Coston2 through clif, verify the
+`RewardClaimed` event on-chain and `clifwd audit verify`, and only then add
+flare / songbird and go to mainnet.
+
+**Later — `fwd onboard rewards`** will run steps 2–8 as one command and print the
+step-9 checklist with your concrete addresses; until it ships, this runbook is the
+path.
 
 ## Release & pinning
 
@@ -204,7 +250,8 @@ and get a clear, working, **non-production-ready** stack with a precise next ste
 ```text
 fwd is installed. Runtime is healthy.
 Production custody is not initialized.
-Next: clifwd policy init … → wallets import … → policy validate → on-chain authorize.
+Next: the reward-onboarding runbook (default claim + FSP): policy init → restart →
+wallets create/import → callers create → policy validate → nonce init → on-chain authorize.
 ```
 Production readiness gate: custody init complete; `clifwd health` healthy;
 `clifwd audit verify` succeeds; a wallet imported without leaking key material to

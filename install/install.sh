@@ -198,16 +198,29 @@ printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
 printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently signs NOTHING (empty default-deny policy, zero wallets).\n'
 cat <<EOF
 
-Next (the custody gate — your security event, not the installer's):
-  1. clifwd policy init --networks <nets> --recipient 0xYOURADDR --out $SRC/config/policy.yaml
-  2. clifwd policy validate --schema-only      # quick schema check
-  3. sudo fwd restart                          # LOAD the new policy (REQUIRED before step 4 —
-                                               #   wallet/caller create validate against the LOADED policy)
-  4. clifwd wallets import|create ...          # your executor / FSP keys
-  5. clifwd callers create ...                 # caller token(s) for clif
-  6. clifwd policy validate                    # full gate: must pass
-  7. clifwd nonce init ...                     # seed sender nonces (zero-egress)
-  8. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors + FSP registration
-  9. rehearse on Coston2, then go live.
-See docs/one-command-install.md.
+Next — bring up reward signing (the custody gate; your security event, not the installer's).
+The default reward policy covers BOTH revenue ops: claiming (RewardManager.claim)
+and FSP signing (signUptimeVote / signRewards). This is the Coston2 REHEARSAL
+sequence — the names match what the generator emits, so it is copy-paste; you
+change only your recipient (step 2) and your imported key (step 5). For mainnet,
+swap coston2 -> flare / songbird everywhere.
+
+  1. (done) the sealed master is generated.
+  2. clifwd policy init --networks coston2 --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS > $SRC/config/policy.yaml
+     clifwd policy validate --schema-only      # the '>' runs on the host -> writes the mounted policy file
+  3. sudo fwd restart                          # LOAD the policy (REQUIRED before step 4 —
+                                               #   wallets/callers create validate against the LOADED policy)
+  4. clifwd wallets create --name claimer-coston2 --policy wc/claimer-coston2
+     clifwd wallets create --name fsp-sender      --policy wc/fsp-sender
+  5. clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 --privkey-file /abs/path/signing.key --shred-source   # GATE 1: your registered key
+  6. clifwd callers create --name claim-coston2      --policy perm/claim-coston2
+     clifwd callers create --name fsp-sign-coston2   --policy fsp/coston2
+     clifwd callers create --name fsp-submit-coston2 --policy perm/fsp-submit-coston2
+  7. clifwd policy validate                    # full gate: must pass
+  8. clifwd nonce init --wallet claimer-coston2 --chain 114 --starting-nonce 0
+     clifwd nonce init --wallet fsp-sender      --chain 114 --starting-nonce 0
+  9. GATE 2 — on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors
+     (authorize claimer-coston2) + setAllowedClaimRecipients + FSP signing-policy registration.
+ 10. rehearse a real claim + FSP sign on Coston2, then add flare / songbird and go live.
+Full detail + mainnet variants: docs/one-command-install.md
 EOF
