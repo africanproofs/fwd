@@ -1,6 +1,6 @@
 # fwd — Flare Wallet Daemon
 
-> Policy-gated signing service for African Proofs' EVM backend keys. Custody-first; substrate-minimal; Anthropic agents are first-class callers. The redesign of `keosd` for autonomous agents on Flare in 2026.
+> Policy-gated signing service for African Proofs' EVM backend keys. Custody-first; substrate-minimal; Anthropic agents are first-class callers. A purpose-built key-custody-and-signing daemon for autonomous agents on Flare in 2026.
 
 ## Identity
 
@@ -23,7 +23,7 @@ The project's history — per-version ship narratives + architectural decisions 
 These are not in scope until a real consumer or proven need surfaces. Re-introducing any requires explicit operator authorization tied to a concrete consumer:
 
 - **Not a user wallet.** Frontends (`apregister-web`, `proofs-website`) keep thirdweb v5. fwd is for *backend automation*, not user flows.
-- **Not multi-chain beyond EVM Flare-family.** Flare, Songbird, Coston2 only. No Bitcoin, Solana, Cosmos, Antelope.
+- **Not multi-chain beyond EVM Flare-family.** Flare, Songbird, Coston2 only. No Bitcoin, Solana, or Cosmos.
 - **Not clustered, not HA, not horizontally scalable.** A signer is a coherence boundary, not a scaling unit. One container, one wallet set, one nonce manager per (wallet, chain).
 - **No K8s, no Pulumi, no Helm.** `docker-compose.yml` is the deployment artifact. K3s exists in AP infra but `fwd` does not run on it.
 - **Not a broadcaster.** fwd signs and allocates nonces; **clients broadcast** the signed tx and report the outcome back (`/v1/transactions/{tx_id}/broadcast-result`, `/receipt`). fwd never calls `eth_sendRawTransaction`.
@@ -172,10 +172,10 @@ Per Core invariant #13: every ship bumps the next linear patch number in BOTH `p
 
 Neither ship-type relaxes Core invariant #18 (no silent drift; honest history) — each *narrows* it by forcing the reconciliation into one annotated, operator-visible, gate-anchored ship instead of leaking partial truth across feature ships.
 
-## Carryover from FICSM and from `keosd`
+## Carryover from FICSM
 
-`fwd` is not a fork of either. The workflow doctrine (Opus/Sonnet/Reviewer/Operator), the four-layer validation philosophy, the linear-forward versioning, the canonical-prompt completeness checklist, and the substrate ethos (SQLite, single-operator, framework-free) are inherited verbatim from FICSM as design — no FICSM code is imported.
+`fwd` is not a fork. The workflow doctrine (Opus/Sonnet/Reviewer/Operator), the four-layer validation philosophy, the linear-forward versioning, the canonical-prompt completeness checklist, and the substrate ethos (SQLite, single-operator, framework-free) are inherited verbatim from FICSM as design — no FICSM code is imported.
 
-The role itself — *daemon that holds keys and signs on behalf of clients* — is inherited from `keosd` (Antelope/EOSIO `programs/keosd/`). What `fwd` adds that `keosd` does not provide: intent decoding, default-deny per-caller policy, hash-chained audit, EVM-native signing flow, and a sealed-master custody backend (in-process AES-256-GCM envelope under a 32-byte mode-0600 host-file master) whose plaintext private keys exist in `fwd`'s memory only during the bounded signing operation.
+The role itself — *a daemon that holds keys and signs on behalf of clients* — is the classic custody-daemon pattern. What `fwd` builds on top of that pattern: intent decoding, default-deny per-caller policy, hash-chained audit, EVM-native signing flow, and a sealed-master custody backend (in-process AES-256-GCM envelope under a 32-byte mode-0600 host-file master) whose plaintext private keys exist in `fwd`'s memory only during the bounded signing operation.
 
 The ~50 banked feedback memories at `~/.claude/projects/-home-l-working-gitlab-com-proofs-africa-fics/memory/` and the FICSM doctrine doc at `../ficsm/CLAUDE.md` act as a Phase-0 checklist for `fwd`'s reviewers.

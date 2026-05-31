@@ -25,12 +25,11 @@ install flow and the custody gate.
 
 ## What fwd is
 
-`fwd` is what [`keosd`](https://github.com/AntelopeIO/spring/tree/main/programs/keosd)
-would look like if it were redesigned for autonomous agents on Flare in 2026. It
-holds the operator's automation private keys AES-256-GCM-sealed under a 32-byte master key (a
-mode-0600 host file), decrypts a key only for the bounded duration of a single
-signing operation, and zeroizes it immediately after. Four things `keosd` does not do
-that `fwd` does:
+`fwd` is a policy-gated key-custody-and-signing daemon for autonomous agents and
+backend automation on Flare. It holds the operator's automation private keys
+AES-256-GCM-sealed under a 32-byte master key (a mode-0600 host file), decrypts a
+key only for the bounded duration of a single signing operation, and zeroizes it
+immediately after. Four properties define it:
 
 1. **Decode intent.** Every `sign-transaction` request is ABI-decoded against the
    policy-bound contract; every `sign-fsp-message` request reconstructs the FSP
@@ -284,9 +283,9 @@ Briefly:
 
 - **Custody:** sealed local master (AES-256-GCM, 32-byte mode-0600 host file);
   signing in-process with `eth-account` post-decrypt.
-- **Role:** `keosd` (Antelope/EOSIO) is the lineage; `fwd` is the redesign — intent
-  decoding, default-deny policy, hash-chained audit, EVM-native + FSP signing, and
-  zero egress are what `fwd` adds.
+- **Role:** a custody daemon that holds keys and signs on behalf of clients —
+  with intent decoding, default-deny per-caller policy, a hash-chained audit log,
+  EVM-native + FSP signing, and zero egress.
 - **Workflow doctrine:** inherited from `ficsm` — Opus prescribes, Sonnet implements
   with deviation license, Opus reviews with overwrite authority, Operator drives +
   gates.
