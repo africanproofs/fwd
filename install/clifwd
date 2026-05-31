@@ -11,4 +11,4 @@
 #   clifwd audit verify
 #
 # NOTE: file paths (e.g. --privkey-file) are evaluated INSIDE the container.
-exec docker exec fwd clifwd "$@"
+exec docker exec "${FWD_CONTAINER:-fwd}" clifwd "$@"

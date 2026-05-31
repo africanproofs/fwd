@@ -4,7 +4,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fwd
+    # Default `fwd` (one stack per host — Core invariant #9). Overridable via
+    # FWD_CONTAINER so an isolated second instance can run for local testing
+    # without colliding with a production `fwd` container on the same host.
+    container_name: ${FWD_CONTAINER:-fwd}
     cap_add:
       # Per Core invariant #1 + #16: fwd's process memory must be lockable
       # against swap so plaintext privkeys (briefly held during signing) are
@@ -61,7 +64,7 @@ services:
 
   litestream:
     image: litestream/litestream:0.3.13
-    container_name: fwd-litestream
+    container_name: ${FWD_CONTAINER:-fwd}-litestream
     depends_on:
       - fwd
     command: ["replicate", "-config", "/etc/litestream.yml"]

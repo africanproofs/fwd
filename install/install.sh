@@ -29,6 +29,7 @@ FWD_REPO="${FWD_REPO:-https://gitlab.com/proofs.africa/fwd.git}"
 FWD_REF="${FWD_REF:-main}"
 FWD_SHA="${FWD_SHA:-}"
 FWD_IMAGE_TAG="${FWD_IMAGE_TAG:-local}"
+FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
 CLIF_REPO="${CLIF_REPO:-https://github.com/africanproofs/clif.git}"
 CLIF_REF="${CLIF_REF:-main}"
 WITH_CLIF=0
@@ -133,7 +134,7 @@ COMPOSE="-f $SRC/docker-compose.yml"
 # the install-root config we just provisioned via a symlink so source stays clean.
 [ -e "$SRC/config/policy.yaml" ] || ln -sf "$POLICY" "$SRC/config/policy.yaml"
 [ -e "$SRC/config/master.key" ] || true  # created next
-export FWD_IMAGE_TAG CLIF_SRC="${FWD_DIR}/clif" CLIF_ENV="${FWD_DIR}/clif/.env"
+export FWD_IMAGE_TAG FWD_CONTAINER CLIF_SRC="${FWD_DIR}/clif" CLIF_ENV="${FWD_DIR}/clif/.env"
 if [ "$BUILD" -eq 1 ]; then
   log "building image(s) from source (this is the slow first step)"
   ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE build ) || die "docker compose build failed"
@@ -168,22 +169,22 @@ if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/fwd" 2>/dev/null || true
   log "installed host wrappers: $FWD_BIN_DIR/fwd, $FWD_BIN_DIR/clifwd"
 else
-  log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec fwd clifwd ...)"
+  log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
 fi
 
 # --- 7. start (unless --no-start) ----------------------------------------
 if [ "$START" -eq 1 ]; then
   [ "$BUILD" -eq 1 ] || die "--no-build with start: nothing to start (build first)"
   log "starting fwd (inert) ..."
-  ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE up -d fwd litestream ) \
+  ( cd "$SRC" && docker compose $COMPOSE up -d fwd litestream ) \
     || die "docker compose up failed"
   log "waiting for health ..."
   i=0; while [ "$i" -lt 20 ]; do
-    st="$(docker inspect -f '{{.State.Health.Status}}' fwd 2>/dev/null || echo starting)"
+    st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
     [ "$st" = healthy ] && break
     i=$((i+1)); sleep 3
   done
-  docker exec fwd clifwd health || die "health check failed"
+  docker exec "$FWD_CONTAINER" clifwd health || die "health check failed"
 else
   log "--no-start: staged but not started. Start later with:  sudo fwd start"
 fi
