@@ -1,0 +1,216 @@
+#!/bin/sh
+# fwd onboard — host orchestrator for low-cognitive-load reward onboarding.
+#
+# Surfaced as `fwd onboard rewards`. Runs the claim + FSP custody sequence as a
+# single command: generate the default reward policy, validate it, load it
+# (restart), create the fwd-generated wallets, mint caller tokens, seed sender
+# nonces — and print the two operator-only GATES (FSP signing-key import +
+# on-chain authorization) explicitly.
+#
+# Idempotent: re-running skips wallets/callers/nonces that already exist, and
+# skips the restart if the regenerated policy is byte-identical to the current
+# one. Holds no keys: the FSP signing-key import stays an operator action (the
+# script only prints the exact command — it never reads or transits key bytes).
+#
+# Honors $FWD_DIR (the compose bundle + mounted config/policy.yaml) and
+# $FWD_CONTAINER (the daemon container). Admin commands run in-container, where
+# FWD_ADMIN_KEY lives.
+set -eu
+
+FWD_DIR="${FWD_DIR:-/opt/fwd}"
+FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
+POLICY="$FWD_DIR/config/policy.yaml"
+
+clifwd() { docker exec "$FWD_CONTAINER" clifwd "$@"; }
+die()  { printf 'onboard: %s\n' "$*" >&2; exit 1; }
+note() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
+
+usage() {
+  cat >&2 <<EOF
+usage: fwd onboard rewards --recipient 0xADDR [options]
+  --recipient 0xADDR     claim reward destination (required unless --fsp-only)
+  --networks  LIST       comma-separated (default: coston2)
+  --claim-only           policy + wallets for claiming only
+  --fsp-only             policy + wallets for FSP signing only
+  --skip-fsp-import      don't prompt for the FSP signing-key import (defer it)
+EOF
+  exit 2
+}
+
+# ---- arg parse ----
+MODE="${1:-}"; [ "$#" -gt 0 ] && shift
+[ "$MODE" = "rewards" ] || usage
+
+NETS="coston2"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --recipient)       RECIP="${2:-}"; shift 2 ;;
+    --networks)        NETS="${2:-}"; shift 2 ;;
+    --claim-only)      CAPS="claim"; shift ;;
+    --fsp-only)        CAPS="fsp"; shift ;;
+    --skip-fsp-import) SKIP_FSP_IMPORT=1; shift ;;
+    -h|--help)         usage ;;
+    *)                 die "unknown arg: $1 (try --help)" ;;
+  esac
+done
+
+case ",$CAPS," in *,claim,*) HAS_CLAIM=1 ;; *) HAS_CLAIM=0 ;; esac
+case ",$CAPS," in *,fsp,*)   HAS_FSP=1   ;; *) HAS_FSP=0   ;; esac
+[ "$HAS_CLAIM" -eq 1 ] && [ -z "$RECIP" ] && die "--recipient is required when claiming (omit only with --fsp-only)"
+[ -d "$FWD_DIR/config" ] || die "no $FWD_DIR/config — set FWD_DIR to the compose bundle"
+
+NETLIST="$(echo "$NETS" | tr ',' ' ')"
+
+# Resolve a network's chain id from the SAME networks.yaml the generator used
+# (baked in-container; honors an FWD_NETWORKS_FILE override) — no host-side drift.
+chain_of() {
+  docker exec "$FWD_CONTAINER" python -c \
+    'import os,sys,yaml;p=os.environ.get("FWD_NETWORKS_FILE","/app/config/networks.yaml");print(yaml.safe_load(open(p))[sys.argv[1]]["chain_id"])' \
+    "$1"
+}
+
+# ---- 1. preflight ----
+note "preflight: fwd health"
+clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
+
+# ---- 2. generate the default reward policy -> a host temp ----
+note "generating default reward policy: networks=$NETS capabilities=$CAPS"
+TMP="$(mktemp "${TMPDIR:-/tmp}/fwd-onboard-policy.XXXXXX")"
+trap 'rm -f "$TMP"' EXIT INT TERM
+set +e
+if [ "$HAS_CLAIM" -eq 1 ]; then
+  clifwd policy init --networks "$NETS" --capabilities "$CAPS" --recipient "$RECIP" > "$TMP"
+else
+  clifwd policy init --networks "$NETS" --capabilities "$CAPS" > "$TMP"
+fi
+rc=$?
+set -e
+{ [ "$rc" -eq 0 ] && [ -s "$TMP" ]; } || die "policy init failed (exit $rc) — nothing written, existing policy untouched"
+
+# ---- 3. write in place (only if changed) + validate BEFORE any restart ----
+# A single-file bind mount pins the inode: overwrite in place (cat > file keeps
+# the inode) so the container sees the new content live; `mv` would NOT be seen
+# until restart.
+BAK=""
+if [ -f "$POLICY" ] && cmp -s "$TMP" "$POLICY"; then
+  CHANGED=0
+  note "generated policy is byte-identical to the current one — no policy change"
+else
+  CHANGED=1
+  if [ -f "$POLICY" ]; then
+    BAK="$POLICY.bak-pre-onboard-$(date +%Y%m%d-%H%M%S)"
+    cp "$POLICY" "$BAK"
+    note "backed up existing policy -> $BAK"
+  fi
+  cat "$TMP" > "$POLICY"
+  note "wrote $POLICY"
+fi
+rm -f "$TMP"; trap - EXIT INT TERM
+
+note "validating policy (schema)"
+clifwd policy validate --schema-only || {
+  warn "schema validation FAILED — the new policy was NOT loaded."
+  [ -n "$BAK" ] && { cat "$BAK" > "$POLICY"; warn "restored prior policy from $BAK"; }
+  die "aborting before restart"
+}
+
+# ---- 4. load it (restart) unless unchanged ----
+if [ "$CHANGED" -eq 1 ]; then
+  note "loading policy: restarting fwd"
+  ( cd "$FWD_DIR"
+    COMPOSE="-f docker-compose.yml"
+    [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
+    docker compose $COMPOSE restart fwd >/dev/null ) || die "restart failed"
+  note "waiting for health"
+  i=0; while [ "$i" -lt 20 ]; do
+    st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
+    [ "$st" = healthy ] && break
+    i=$((i+1)); sleep 3
+  done
+  clifwd health >/dev/null 2>&1 || {
+    warn "fwd did not return healthy after restart."
+    [ -n "$BAK" ] && warn "restore: cat '$BAK' > '$POLICY' && sudo fwd restart"
+    die "health check failed post-restart"
+  }
+fi
+
+# ---- 5. fwd-generated wallets (idempotent: exit 3 = already exists) ----
+wallet_create() {
+  set +e; out="$(clifwd wallets create --name "$1" --policy "$2" 2>&1)"; rc=$?; set -e
+  case "$rc" in
+    0) note "wallet created: $1" ;;
+    3) note "wallet exists (skip): $1" ;;
+    *) die "wallets create $1 failed: $out" ;;
+  esac
+}
+note "creating fwd-generated wallets"
+for net in $NETLIST; do
+  [ "$HAS_CLAIM" -eq 1 ] && wallet_create "claimer-$net" "wc/claimer-$net"
+done
+[ "$HAS_FSP" -eq 1 ] && wallet_create "fsp-sender" "wc/fsp-sender"   # shared across networks
+
+# ---- 6. GATE 1 — FSP signing-key import (operator-only; never run by us) ----
+if [ "$HAS_FSP" -eq 1 ] && [ "$SKIP_FSP_IMPORT" -eq 0 ]; then
+  printf '\n\033[1;31mGATE 1 (operator-only)\033[0m — import your REGISTERED FSP signing-policy key.\n'
+  printf 'fwd never reads or transits key bytes; run this yourself (file mode 0600,\n'
+  printf 'owned by you, 32-byte hex). In another shell:\n'
+  for net in $NETLIST; do
+    printf '  clifwd wallets import --name fsp-signing-%s --policy wc/fsp-%s --privkey-file /abs/path/signing.key --shred-source\n' "$net" "$net"
+  done
+  printf 'Press Enter when done, or type s + Enter to skip for now: '
+  read -r ans || ans=""
+  [ "$ans" = s ] && warn "FSP signing-key import skipped — claiming can go live; FSP signing cannot until you import + register the key."
+fi
+
+# ---- 7. caller tokens (each shown ONCE; exit 3 = exists -> warn, never re-emit) ----
+caller_create() {
+  set +e; key="$(clifwd callers create --name "$1" --policy "$2" 2>/dev/null)"; rc=$?; set -e
+  case "$rc" in
+    0) printf '\033[1;32mCALLER TOKEN (shown ONCE)\033[0m %-18s -> set as clif'"'"'s API key for this caller\n  %s\n' "$1" "$key" ;;
+    3) warn "caller exists (skip): $1 — its token was shown only once and cannot be re-displayed; revoke+recreate if lost: clifwd callers revoke --name $1" ;;
+    *) die "callers create $1 failed (exit $rc)" ;;
+  esac
+  unset key
+}
+note "minting caller tokens"
+for net in $NETLIST; do
+  [ "$HAS_CLAIM" -eq 1 ] && caller_create "claim-$net" "perm/claim-$net"
+  if [ "$HAS_FSP" -eq 1 ]; then
+    caller_create "fsp-sign-$net"   "fsp/$net"
+    caller_create "fsp-submit-$net" "perm/fsp-submit-$net"
+  fi
+done
+
+# ---- 8. seed sender nonces (fresh = 0; idempotent via already-initialized) ----
+nonce_seed() {
+  set +e; out="$(clifwd nonce init --wallet "$1" --chain "$2" --starting-nonce 0 2>&1)"; rc=$?; set -e
+  if [ "$rc" -eq 0 ]; then note "nonce seeded: $1 @ chain $2 = 0"
+  elif printf '%s' "$out" | grep -q nonce_already_initialized; then note "nonce exists (skip): $1 @ chain $2"
+  else die "nonce init $1/$2 failed: $out"
+  fi
+}
+note "seeding sender nonces"
+for net in $NETLIST; do
+  cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
+  [ "$HAS_CLAIM" -eq 1 ] && nonce_seed "claimer-$net" "$cid"
+  [ "$HAS_FSP" -eq 1 ]   && nonce_seed "fsp-sender" "$cid"
+done
+
+# ---- 9. GATE 2 — on-chain authorization (operator-only, offline identity key) ----
+printf '\n=============================================================================\n'
+printf '\033[1;31mGATE 2 (operator-only)\033[0m — on-chain authorization, from your OFFLINE identity\n'
+printf 'key (fwd never custodies it). Per network:\n'
+for net in $NETLIST; do
+  printf '  [%s]\n' "$net"
+  if [ "$HAS_CLAIM" -eq 1 ]; then
+    printf '    ClaimSetupManager.setClaimExecutors  -> authorize claimer-%s\n' "$net"
+    printf '    setAllowedClaimRecipients            -> allow %s\n' "$RECIP"
+  fi
+  [ "$HAS_FSP" -eq 1 ] && printf '    FSP signing-policy registration      -> register fsp-signing-%s as a voter\n' "$net"
+done
+printf '\nThen rehearse a real claim + FSP sign on Coston2 through clif, verify the\n'
+printf "RewardClaimed event on-chain and 'clifwd audit verify', before mainnet.\n"
+printf 'Full detail: docs/one-command-install.md\n'
+printf '=============================================================================\n'
+note "onboard complete — policy loaded; wallets/callers/nonces ready. The GATES above are your actions."
