@@ -95,6 +95,11 @@ if [ "$WITH_CLIF" -eq 1 ]; then
     git clone --depth 1 --branch "$CLIF_REF" "$CLIF_REPO" "$CLIF_SRC" 2>/dev/null \
       || die "git clone failed: $CLIF_REPO (clif must be public for --with-clif)"
   fi
+  # clif's compose service defs reference an env_file; compose validates it even
+  # for the (stopped) clif daemons. Seed a placeholder from .env.example so the
+  # merged compose parses — the operator fills in real values (NETWORK, the fwd
+  # caller tokens, wallet names) during onboarding before starting the daemons.
+  [ -f "$CLIF_SRC/.env" ] || { [ -f "$CLIF_SRC/.env.example" ] && cp "$CLIF_SRC/.env.example" "$CLIF_SRC/.env" && log "seeded placeholder $CLIF_SRC/.env (fill in during onboarding)"; }
 fi
 
 # --- 3. config: .env (admin key) + inert default-deny policy --------------
