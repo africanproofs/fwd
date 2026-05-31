@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     fwd_policy_path: str = Field(default="/etc/fwd/policy.yaml")
     fwd_abis_dir: str = Field(default="/app/config/abis")
 
+    # Network constants data file for `clifwd policy init` ONLY (not read by the
+    # daemon's signing path — fwd stays chain-agnostic). v1.1.0a31.
+    fwd_networks_file: str = Field(default="/app/config/networks.yaml")
+
     # Admin auth
     fwd_admin_key: str = Field(default="")
 

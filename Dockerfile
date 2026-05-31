@@ -50,6 +50,10 @@ COPY alembic/ /app/alembic/
 # policy.yaml, the sealed master, and any backups are operator-controlled and
 # bind-mounted at runtime, NEVER baked into an image layer (Core invariant #12).
 COPY config/abis/ /app/config/abis/
+# networks.yaml is non-secret public Flare network constants, read ONLY by the
+# `clifwd policy init` generator (not the daemon). Explicit single-file COPY
+# (never broaden to `COPY config/` — Core invariant #12 / v1.1.0a28).
+COPY config/networks.yaml /app/config/networks.yaml
 
 # D16 promises `docker exec fwd clifwd audit verify` as the canonical
 # walker invocation, but `poetry install --no-root` does not install the

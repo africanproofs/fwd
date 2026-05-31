@@ -18,9 +18,10 @@ from typing import Optional
 import typer
 
 from fwd.app.policy_check import PolicyLoadError, consistency_errors, load_policy_schema
+from fwd.app.policy_init import PolicyInitError, generate_policy
 from fwd.settings import get_settings
 
-app = typer.Typer(name="policy", help="Operator policy tooling (validate).")
+app = typer.Typer(name="policy", help="Operator policy tooling (validate, init).")
 
 
 @app.command()
@@ -88,3 +89,58 @@ def validate(
         raise typer.Exit(code=2)
 
     typer.echo("VALID (schema + consistency)")
+
+
+@app.command()
+def init(
+    networks: str = typer.Option(  # noqa: B008
+        ...,
+        "--networks",
+        help="Comma-separated networks (flare,songbird,coston2).",
+    ),
+    capabilities: str = typer.Option(  # noqa: B008
+        "claim,fsp",
+        "--capabilities",
+        help="Comma-separated: claim,fsp (default both).",
+    ),
+    recipient: Optional[str] = typer.Option(  # noqa: B008,UP007
+        None,
+        "--recipient",
+        help="Claim recipient address, pinned in the claim arg-predicate (required for 'claim').",
+    ),
+    out: Optional[str] = typer.Option(  # noqa: B008,UP007
+        None,
+        "--out",
+        help="Write to this path instead of stdout.",
+    ),
+) -> None:
+    """Generate a correct a29-schema policy.yaml from networks + recipient.
+
+    Emits required `chains`, `allow_unconstrained_args`, the recipient
+    arg-predicate, the fsp_self_submit carve-out, and wallet_constraints (method
+    signatures derived from the shipped ABIs). The output is a STARTING POINT:
+    rename wallets/callers to taste, create/import each wallet + mint each caller
+    token in fwd, then `clifwd policy validate` before deploy. Prints to stdout
+    by default — never writes over an existing policy.yaml unless you point
+    --out at one.
+
+    Exit: 0 = generated; 2 = bad input.
+    """
+    s = get_settings()
+    try:
+        text = generate_policy(
+            networks=networks.split(","),
+            capabilities=capabilities.split(","),
+            recipient=recipient,
+            abis_dir=Path(s.fwd_abis_dir),
+            networks_file=Path(s.fwd_networks_file),
+        )
+    except PolicyInitError as exc:
+        typer.echo(f"policy init failed: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if out:
+        Path(out).write_text(text)
+        typer.echo(f"wrote {out}", err=True)
+    else:
+        typer.echo(text)

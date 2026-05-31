@@ -1,0 +1,27 @@
+# Flare-family network constants — DATA for `clifwd policy init` only.
+#
+# fwd's signing daemon is deliberately chain-agnostic: it reads contract
+# addresses + chains ONLY from the operator's policy.yaml. This file is NOT
+# read by the daemon's signing path — it is convenience data the `policy init`
+# generator uses to emit a correct policy.yaml (the RewardManager /
+# FlareSystemsManager addresses + chain ids per network). Public, non-secret
+# (these are well-known Flare network constants); ships in the image like
+# config/abis/. Operator-overridable via FWD_NETWORKS_FILE; extend it to add a
+# new chain.
+#
+# chain_id: 14 = Flare, 19 = Songbird, 114 = Coston2.
+
+flare:
+  chain_id: 14
+  reward_manager: "0xC8f55c5aA2C752eE285Bd872855C749f4ee6239B"
+  flare_systems_manager: "0x89e50DC0380e597ecE79c8494bAAFD84537AD0D4"
+
+songbird:
+  chain_id: 19
+  reward_manager: "0xE26AD68b17224951b5740F33926Cc438764eB9a7"
+  flare_systems_manager: "0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"
+
+coston2:
+  chain_id: 114
+  reward_manager: "0xB4f43E342c5c77e6fe060c0481Fe313Ff2503454"
+  flare_systems_manager: "0xbC1F76CEB521Eb5484b8943B5462D08ea96617A1"
