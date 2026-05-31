@@ -98,8 +98,11 @@ if [ "$WITH_CLIF" -eq 1 ]; then
 fi
 
 # --- 3. config: .env (admin key) + inert default-deny policy --------------
-mkdir -p "$FWD_DIR/config"
-ENV_FILE="$FWD_DIR/.env"
+# Co-located in the compose dir ($SRC), where docker-compose.yml resolves
+# `env_file: .env` and the `./config/*` mounts (gitignored — preserved across
+# the re-fetch/upgrade `git checkout`).
+mkdir -p "$SRC/config"
+ENV_FILE="$SRC/.env"
 if [ ! -f "$ENV_FILE" ]; then
   admin="$(od -An -tx1 -N24 /dev/urandom | tr -d ' \n')"
   umask 077
@@ -113,7 +116,7 @@ else
   log "preserving existing $ENV_FILE"
 fi
 
-POLICY="$FWD_DIR/config/policy.yaml"
+POLICY="$SRC/config/policy.yaml"
 if [ ! -f "$POLICY" ]; then
   cat > "$POLICY" <<'YAML'
 # fwd INERT default-deny policy (installed). Empty on purpose — fwd signs
@@ -130,10 +133,6 @@ fi
 # --- 4. build the image from source --------------------------------------
 COMPOSE="-f $SRC/docker-compose.yml"
 [ "$WITH_CLIF" -eq 1 ] && COMPOSE="$COMPOSE -f $SRC/docker-compose.clif.yml"
-# The compose mounts ./config/* relative to its own dir ($SRC). Point those at
-# the install-root config we just provisioned via a symlink so source stays clean.
-[ -e "$SRC/config/policy.yaml" ] || ln -sf "$POLICY" "$SRC/config/policy.yaml"
-[ -e "$SRC/config/master.key" ] || true  # created next
 export FWD_IMAGE_TAG FWD_CONTAINER CLIF_SRC="${FWD_DIR}/clif" CLIF_ENV="${FWD_DIR}/clif/.env"
 if [ "$BUILD" -eq 1 ]; then
   log "building image(s) from source (this is the slow first step)"
@@ -143,11 +142,11 @@ else
 fi
 
 # --- 5. custody: generate the sealed master locally (never transmitted) ----
-MASTER="$FWD_DIR/config/master.key"
+MASTER="$SRC/config/master.key"
 if [ ! -f "$MASTER" ]; then
   if [ "$BUILD" -eq 1 ]; then
     log "generating sealed master (local, mode 0600)"
-    docker run --rm -v "$FWD_DIR/config:/out" \
+    docker run --rm -v "$SRC/config:/out" \
       "registry.gitlab.com/proofs.africa/fwd/fwd:${FWD_IMAGE_TAG}" \
       clifwd master generate --out /out/master.key >/dev/null \
       || die "master generate failed"
@@ -159,7 +158,6 @@ if [ ! -f "$MASTER" ]; then
 else
   log "preserving existing sealed master $MASTER"
 fi
-[ -e "$SRC/config/master.key" ] || { [ -f "$MASTER" ] && ln -sf "$MASTER" "$SRC/config/master.key"; }
 
 # --- 6. install host wrappers --------------------------------------------
 if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
@@ -196,12 +194,15 @@ printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently
 cat <<EOF
 
 Next (the custody gate — your security event, not the installer's):
-  1. clifwd policy init --networks <nets> --recipient 0xYOURADDR --out $FWD_DIR/config/policy.yaml
-  2. clifwd wallets import|create ...        # your executor / FSP keys
-  3. clifwd callers create ...               # caller token(s) for clif
-  4. clifwd policy validate                  # gate: must pass
-  5. clifwd nonce init ...                   # seed sender nonces (zero-egress)
-  6. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors + FSP registration
-  7. rehearse on Coston2, then go live.
+  1. clifwd policy init --networks <nets> --recipient 0xYOURADDR --out $SRC/config/policy.yaml
+  2. clifwd policy validate --schema-only      # quick schema check
+  3. sudo fwd restart                          # LOAD the new policy (REQUIRED before step 4 —
+                                               #   wallet/caller create validate against the LOADED policy)
+  4. clifwd wallets import|create ...          # your executor / FSP keys
+  5. clifwd callers create ...                 # caller token(s) for clif
+  6. clifwd policy validate                    # full gate: must pass
+  7. clifwd nonce init ...                     # seed sender nonces (zero-egress)
+  8. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors + FSP registration
+  9. rehearse on Coston2, then go live.
 See docs/one-command-install.md.
 EOF

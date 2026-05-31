@@ -119,18 +119,25 @@ is **phased**:
    → generate a correct a29-schema `policy.yaml` (chains, the non-scalar-arg
    opt-in, the recipient pin, the FSP `fsp_self_submit` carve-out,
    wallet_constraints). Rename wallets/callers to taste.
-3. `clifwd wallets create|import …` — generate or import the executor / FSP
+3. `clifwd policy validate --schema-only` — quick schema check of the generated file.
+4. **`sudo fwd restart`** — **load the new policy. This MUST come before step 5:**
+   `wallets`/`callers create` validate the requested `policy_path` against the
+   *loaded* (in-memory) policy, so the policy must be loaded first. (The policy
+   loads fine even though its wallets/callers don't exist yet — they are declared
+   in `policy.wallets`/`policy.callers`, so consistency passes; there are no
+   active callers to fail the startup check until you create them.)
+5. `clifwd wallets create|import …` — generate or import the executor / FSP
    signing-policy / sender keys (key material handled only here, by the
    operator).
-4. `clifwd callers create …` — mint the caller token(s); inject into clif's env.
-5. `clifwd policy validate` — the gate: must pass before recreate.
-6. `clifwd nonce init …` — seed each sender wallet's nonce (fwd is zero-egress).
-7. **On-chain, from the operator's OFFLINE identity key** (fwd never custodies
+6. `clifwd callers create …` — mint the caller token(s); inject into clif's env.
+7. `clifwd policy validate` — the full gate: must pass.
+8. `clifwd nonce init …` — seed each sender wallet's nonce (fwd is zero-egress).
+9. **On-chain, from the operator's OFFLINE identity key** (fwd never custodies
    it): `ClaimSetupManager.setClaimExecutors` to authorize the executor wallet,
    `setAllowedClaimRecipient`, and FSP signing-policy registration.
-8. Rehearse on Coston2, then go live.
+10. Rehearse on Coston2, then go live.
 
-**Later — `sudo fwd custody init` wizard** wraps steps 2–7 interactively and
+**Later — `sudo fwd custody init` wizard** wraps steps 2–9 interactively and
 prints the exact on-chain commands; deferred to a later phase.
 
 ## Release & pinning
