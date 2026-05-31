@@ -70,8 +70,8 @@ permissions:
             max_value_wei: "0"
             allow_unconstrained_args: true
             arg_predicates:
-              # Pin the reward recipient; "any" would allow any value.
-              _recipient: "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294"
+              # Pin YOUR reward recipient; "any" would allow any value.
+              _recipient: "0xYOUR_CLAIM_RECIPIENT_ADDRESS"
     wallet_allowlist:
       - claim-recipient
     rate:

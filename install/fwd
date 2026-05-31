@@ -1,0 +1,44 @@
+#!/bin/sh
+# Host `fwd` lifecycle wrapper — Compose is an implementation detail of these.
+# Installed to /usr/local/bin/fwd by install.sh.
+#
+# Operates from $FWD_DIR (default /opt/fwd), which holds the compose bundle +
+# fetched source. The `--with-clif` overlay is included automatically when
+# docker-compose.clif.yml is present.
+#
+#   sudo fwd start | stop | restart | status | logs
+#
+# `upgrade` and `backup` are finalized with install.sh in Phase 1 (they need the
+# release-manifest fetch + the documented restore runbook); stubbed here so the
+# command contract is visible and honest.
+set -eu
+
+FWD_DIR="${FWD_DIR:-/opt/fwd}"
+cd "$FWD_DIR"
+
+COMPOSE="-f docker-compose.yml"
+[ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift
+
+case "$cmd" in
+  start)   exec docker compose $COMPOSE up -d "$@" ;;
+  stop)    exec docker compose $COMPOSE stop "$@" ;;
+  restart) exec docker compose $COMPOSE restart "$@" ;;
+  status)  exec docker compose $COMPOSE ps "$@" ;;
+  logs)    exec docker compose $COMPOSE logs "$@" ;;
+  upgrade|backup)
+    echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
+    exit 2
+    ;;
+  ""|help|-h|--help)
+    echo "usage: fwd {start|stop|restart|status|logs} [compose args...]" >&2
+    echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
+    [ "$cmd" = "" ] && exit 2 || exit 0
+    ;;
+  *)
+    echo "fwd: unknown command '$cmd' (try: fwd help)" >&2
+    exit 2
+    ;;
+esac

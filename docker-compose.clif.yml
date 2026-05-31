@@ -1,0 +1,61 @@
+# `--with-clif` overlay — the keyless clif claim/FSP layer on top of fwd.
+#
+# Use WITH the base compose (one merged project, so the `fwd-callers` network
+# and the `fwd` service name are shared):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.clif.yml up -d
+#
+# The host `fwd` wrapper (install/fwd) includes this file automatically when it
+# is present. Inert without it — the base `docker compose up` is fwd-only.
+#
+# Build-from-source: clif is a SEPARATE repo. The installer (build-from-source)
+# places clif's pinned source at $CLIF_SRC (default ./clif, relative to this
+# file) so `build:` has a context. clif holds ZERO private keys — it asks fwd to
+# sign, then broadcasts itself (dual-homed: `fwd-callers` to reach fwd:8080,
+# `egress` for its own RPC/broadcast). fwd is NOT on `egress` (zero-egress).
+#
+# Per-provider config lives in clif's gitignored .env (NETWORK, the fwd caller
+# tokens, wallet names, recipient) — never committed. The FSP daemon stays
+# hard-off unless FSP_AUTO_ENABLED=true in that .env (clif enforces).
+
+services:
+  clif-auto:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-auto
+    command: ["auto"]            # keyless reward-claim daemon
+    env_file:
+      - ${CLIF_ENV:-./clif/.env}
+    networks: [fwd-callers, egress]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-fsp-auto:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-fsp-auto
+    command: ["fsp", "auto"]     # keyless FSP signing daemon (hard-off unless FSP_AUTO_ENABLED=true)
+    env_file:
+      - ${CLIF_ENV:-./clif/.env}
+    networks: [fwd-callers, egress]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "fsp", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+networks:
+  # `fwd-callers` is defined by the base docker-compose.yml (internal: true) and
+  # shared in the merged project — do NOT redeclare it here. `egress` is a normal
+  # bridge giving clif (only) an internet route for RPC + broadcast.
+  egress:
+    driver: bridge

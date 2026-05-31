@@ -1,9 +1,12 @@
 # fwd — Flare Wallet Daemon
 
-Policy-gated, **zero-egress, sign-only** signing service for African Proofs' EVM
-backend keys (Flare, Songbird, Coston2). It replaces every `.env PRIVATE_KEY` across
-AP automation with one HTTP endpoint, one sealed custody backend, and one
-tamper-evident audit log — and it **never connects to the internet**.
+Policy-gated, **zero-egress, sign-only** signing service for a Flare FTSO
+provider's EVM backend keys (Flare, Songbird, Coston2). It replaces every
+`.env PRIVATE_KEY` across an operator's automation with one HTTP endpoint, one
+sealed custody backend, and one tamper-evident audit log — and it **never
+connects to the internet**. Each provider runs their own single-host stack
+(`curl -sfL https://get.proofs.africa/fwd | sh -`); see
+`docs/one-command-install.md`.
 
 > **Status: production-deployed**, proven on Coston2 + Flare/Songbird mainnet. fwd
 > **signs** EVM transactions and Flare FSP protocol messages; it does **not** broadcast
@@ -15,7 +18,7 @@ tamper-evident audit log — and it **never connects to the internet**.
 
 `fwd` is what [`keosd`](https://github.com/AntelopeIO/spring/tree/main/programs/keosd)
 would look like if it were redesigned for autonomous agents on Flare in 2026. It
-holds AP's automation private keys AES-256-GCM-sealed under a 32-byte master key (a
+holds the operator's automation private keys AES-256-GCM-sealed under a 32-byte master key (a
 mode-0600 host file), decrypts a key only for the bounded duration of a single
 signing operation, and zeroizes it immediately after. Four things `keosd` does not do
 that `fwd` does:

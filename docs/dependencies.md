@@ -1,10 +1,10 @@
 # Dependencies
 
-Every dependency `fwd` requires, grouped by tier. The "Status for AP" column flags what is genuinely new for AP versus already in place.
+Every dependency `fwd` requires, grouped by tier. The "Status" column flags what is genuinely new for an operator versus already in place in a typical Flare-provider stack.
 
 ## Infrastructure dependencies (must exist before `fwd` starts)
 
-| Dependency | Status for AP | Notes |
+| Dependency | Status | Notes |
 |---|---|---|
 | Docker + Docker Compose | Likely present, must be installed if absent | Any host. No K3s required. |
 | GitLab repo + CI runners | ✅ Exists | New repo at `gitlab.com/proofs.africa/fwd` |
@@ -70,13 +70,13 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 
 | Tool | Version | Notes |
 |---|---|---|
-| Python | 3.12 | AP standard. Pinned in `.python-version`. |
-| Poetry | ≥ 1.8 | AP standard for dependency management |
+| Python | 3.12 | standard. Pinned in `.python-version`. |
+| Poetry | ≥ 1.8 | standard for dependency management |
 | `pytest` | `^8.3` | Test framework |
 | `pytest-asyncio` | `^0.24` | Async test support |
 | `pytest-cov` | `^6.0` | Coverage reporting (CI gate) |
-| `ruff` | `^0.8` | Lint + format (AP standard) |
-| `mypy` | `^1.13` | Strict type-checking (AP standard) |
+| `ruff` | `^0.8` | Lint + format (standard) |
+| `mypy` | `^1.13` | Strict type-checking (standard) |
 | `types-pyyaml` | `^6.0` | PyYAML type stubs for `mypy --strict` (policy loader) |
 | Docker | Recent | For local image builds and `docker-compose` |
 | Docker Compose | v2 | Native CLI (`docker compose`, not `docker-compose`) |
@@ -88,7 +88,7 @@ Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Update
 |---|---|---|
 | `master.key` (32-byte sealed master) | Custody root — generate via `clifwd master generate`, mode-0600, bind-mounted, backed up off-host out-of-band. | Generate before first boot |
 | Off-host copy of the `backup` volume + `master.key` | Disaster recovery (litestream restore + the master file). Operator's own transport (rsync/restic/USB/NAS) — `fwd` does not ship backups off-host (no egress). | Operator-driven |
-| Hardware wallet for identity rotation | `ClaimSetupManager.setClaimExecutors` transaction signed by the identity address | Already in use by AP |
+| Hardware wallet for identity rotation | `ClaimSetupManager.setClaimExecutors` transaction signed by the identity address | Operator-held, offline |
 
 ## Cross-project dependencies (callers, not `fwd`'s deps)
 
@@ -120,7 +120,7 @@ Listed because earlier design drafts implied otherwise; making the absences expl
 
 ## Honest summary
 
-The only genuinely net-new operational dependencies AP picks up by building `fwd` are **a local `backup` volume for Litestream** and the operator-held **`master.key`** sealed-master file (no AWS, no cloud account). Everything else is either already operating, already in AP's standard stack, or trivially provisioned.
+The only genuinely net-new operational dependencies an operator picks up by building `fwd` are **a local `backup` volume for Litestream** and the operator-held **`master.key`** sealed-master file (no AWS, no cloud account). Everything else is either already operating in a typical Flare-provider stack or trivially provisioned.
 
 Compared to the AWS-KMS alternative, `fwd` adds *less* total dependency surface — no cloud account, no KMS, one daemon + one backup sidecar. Compared to the K3s alternative, `fwd` removes the K8s control-plane dependency at the cost of slightly weaker caller authentication (bearer keys vs SA tokens), with a documented Phase 10 mTLS upgrade path.
 

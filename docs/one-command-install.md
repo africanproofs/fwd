@@ -1,261 +1,203 @@
-# One-Command Install Target
+# One-command install — the FTSO provider stack
 
-`fwd` should install with the same operational simplicity as tools such as
-K3s:
-
-```sh
-curl -sfL https://get.proofs.africa/fwd | sh -
-```
-
-That command is the target operator experience. It is not a requirement to
-remove Docker Compose from the runtime. The installer may use Docker and
-Compose underneath; the point is that normal operators should not need to
-manually copy compose files, remember `docker exec`, or understand container
-volume names for day-to-day use.
-
-## Goal
-
-Install a complete single-host `fwd` appliance with one command, then expose a
-small host-native command surface:
+`fwd` (and, optionally, the `clif` claim/FSP layer) should install with the same
+operational simplicity as tools such as K3s:
 
 ```sh
-sudo fwd start
-sudo fwd stop
-sudo fwd status
-sudo fwd upgrade
-clifwd health
-clifwd wallets list
-clifwd audit verify
+curl -sfL https://get.proofs.africa/fwd | sh -            # fwd custody daemon
+curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif   # + clif layer
 ```
 
-The system remains the same product: a local, single-operator signing daemon
-that replaces AP backend `.env PRIVATE_KEY` usage with policy-gated HTTP
-signing and audit trails.
+This is the **target operator experience** for any Flare FTSO provider running
+their own stack (not just AP). It does not remove Docker Compose from the
+runtime — the installer uses Compose underneath; the point is that a normal
+operator should not have to copy compose files, remember `docker exec`, or learn
+container volume names for day-to-day use.
 
-## Installer Responsibilities
+## Positioning
+
+A **single-host installation is a fully-functional FTSO provider signing
+stack** — `fwd` (the policy-gated custody/signing daemon), optionally `clif`
+(keyless reward-claiming + FSP signing), and all the sealed-key custody, nonce,
+and hash-chained audit state needed to operate. It is **not necessary — and by
+design not possible — to add more signer nodes**: `fwd` is a *coherence
+boundary, not a scaling unit* (one container, one wallet set, one nonce manager
+per (wallet, chain) — Core invariant #9). Signing is low-rate, so capacity is
+never the constraint; resilience is **restore-from-backup** (the local
+Litestream replica + regenerate-key-and-re-authorize-on-chain), not failover or
+clustering.
+
+## Two layers, one hard custody gate
+
+Mirroring K3s for the *software*, with an explicit gate for the
+*secrets/authorization* — which, unlike a stateless K3s node, cannot be safely
+defaulted for a signer:
+
+1. **Software install (reversible).** `curl … | sh -` brings the stack up
+   **inert**: an empty default-deny policy, zero wallets, healthy. The worst case
+   of running the installer is a daemon that can sign **nothing** — that is the
+   safety property that makes `curl | sh` acceptable for a custody tool.
+2. **Custody init (a security event).** The installer **stops** before any key
+   or on-chain authorization. The operator then runs the gated onboarding
+   (below). *Installing software is reversible; initializing custody is not.*
+
+## Install unit — fwd core, `--with-clif` opt-in
+
+The base unit is **fwd** (the reusable signer): its own `internal: true`
+network, no egress, no host port. `--with-clif` layers a Compose overlay
+(`docker-compose.clif.yml`) adding the `clif` claim/FSP daemons, dual-homed to
+fwd's `fwd-callers` network plus an `egress` bridge for their own RPC/broadcast.
+fwd stands alone; clif is opt-in.
+
+## Image delivery — build from source on the host
+
+The installer fetches **pinned source** (a release tag + commit sha) and
+`docker compose build`s locally. There is **no dependency on a published image
+registry** and **no trust in a prebuilt binary** for a custody tool — the
+operator builds from auditable, pinned source. The host needs `docker`,
+`docker compose v2`, and `git`; the language/build toolchain stays inside the
+Docker multi-stage build. First install is slower (a source build); that is the
+accepted trade for the zero-trust posture.
+
+## Installer responsibilities
 
 The install script should:
 
-1. Detect OS, architecture, and required host tools.
-2. Install Docker Engine and Docker Compose v2 if absent, or stop with a clear
-   instruction if the host policy forbids automatic package installation.
-3. Create stable host paths:
-
+1. Detect OS, architecture, and required host tools (`docker`,
+   `docker compose v2`, `git`); stop with a clear instruction if a tool is
+   missing and host policy forbids auto-install.
+2. Resolve the target version from a pinned manifest (never blindly track
+   `main`); honor `FWD_VERSION` / `--channel`.
+3. Create stable host paths (operator-overridable via `FWD_DIR`):
    ```text
-   /opt/fwd              release files and compose bundle
-   /etc/fwd              operator configuration
-   /var/lib/fwd          persistent state mount root, if host paths are used
-   /var/backups/fwd      local backup export point
-   /var/log/fwd          installer and lifecycle logs, if needed
+   /opt/fwd          release files + compose bundle + fetched source
+   /etc/fwd          operator configuration (.env, mounted policy.yaml)
+   /var/lib/fwd      persistent state mount root (if host paths are used)
+   /var/backups/fwd  local backup export point
    ```
+4. Fetch + checksum-verify the pinned source (fwd; clif too under `--with-clif`).
+5. `docker compose build` from that source.
+6. Generate the sealed master **locally** (`clifwd master generate`, mode 0600,
+   owned by the `fwd` uid) — it is **never fetched or transmitted**.
+7. Generate a strong `FWD_ADMIN_KEY` into `/etc/fwd/fwd.env` (preserving
+   existing operator values on re-run).
+8. Install the host `fwd` lifecycle wrapper and the `clifwd` CLI wrapper.
+9. Start the stack **inert** (empty default-deny policy, zero wallets); under
+   `--with-clif`, build clif but leave its daemons stopped until onboarding
+   completes.
+10. Run `clifwd health`, then print the next required operator action — and
+    refuse to imply production custody is complete before it is.
 
-4. Fetch a release-pinned `docker-compose.yml` and companion files.
-5. Pull release-pinned images.
-6. Write an initial `/etc/fwd/fwd.env` from a template, preserving existing
-   operator values on re-run.
-7. Install a host `fwd` lifecycle wrapper.
-8. Install a host `clifwd` wrapper.
-9. Start or stage the Compose stack according to the selected mode.
-10. Print the next required operator action and refuse to imply production
-    custody is complete before it is.
+## Host command contract
 
-## Host Command Contract
-
-### `fwd`
-
-`fwd` is the host lifecycle wrapper. It owns appliance operations:
-
+### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd install
-sudo fwd start
-sudo fwd stop
-sudo fwd restart
-sudo fwd status
-sudo fwd logs
-sudo fwd upgrade
+sudo fwd start | stop | restart | status | logs | upgrade
 sudo fwd backup status
-sudo fwd custody init
 ```
+Compose is an implementation detail of these.
 
-The wrapper may call `docker compose` internally, but Compose should be an
-implementation detail for normal operation.
-
-### `clifwd`
-
-`clifwd` remains the application CLI. The host-installed `clifwd` should
-delegate into the running `fwd` container by default:
-
+### `clifwd` (application CLI, delegates into the container)
 ```sh
 #!/bin/sh
 exec docker exec fwd clifwd "$@"
 ```
+So normal usage is `clifwd health` / `clifwd policy validate` / `clifwd wallets
+import …` / `clifwd audit verify` — same Python package, env, mounted state,
+policy, and custody backend as the daemon. For file-based ops (`wallets import`),
+the wrapper must make explicit that `--privkey-file` is evaluated **inside** the
+container.
 
-This keeps the CLI pointed at the same Python package, environment, mounted
-state, policy files, and custody backend as the daemon. It also removes the
-need for operators to type:
+## Custody init + phased onboarding (the gate)
 
-```sh
-docker exec fwd clifwd ...
-```
+The installer stages the runtime but stops before keys/authorization. Onboarding
+is **phased**:
 
-Normal usage becomes:
+**Now — runbook + tooling (operator-driven, validated at each step):**
+1. `clifwd master generate` — done by the installer (the sealed master).
+2. `clifwd policy init --networks … --recipient … [--capabilities claim,fsp]`
+   → generate a correct a29-schema `policy.yaml` (chains, the non-scalar-arg
+   opt-in, the recipient pin, the FSP `fsp_self_submit` carve-out,
+   wallet_constraints). Rename wallets/callers to taste.
+3. `clifwd wallets create|import …` — generate or import the executor / FSP
+   signing-policy / sender keys (key material handled only here, by the
+   operator).
+4. `clifwd callers create …` — mint the caller token(s); inject into clif's env.
+5. `clifwd policy validate` — the gate: must pass before recreate.
+6. `clifwd nonce init …` — seed each sender wallet's nonce (fwd is zero-egress).
+7. **On-chain, from the operator's OFFLINE identity key** (fwd never custodies
+   it): `ClaimSetupManager.setClaimExecutors` to authorize the executor wallet,
+   `setAllowedClaimRecipient`, and FSP signing-policy registration.
+8. Rehearse on Coston2, then go live.
 
-```sh
-clifwd health
-clifwd wallets create --name ftso-claim-flare-prod --policy ftso-claim-flare-prod
-clifwd wallets import --name old-wallet --policy legacy --privkey-file /tmp/key.hex
-clifwd callers create --name ftso-fee-claimer --policy ftso-claim-flare-prod
-clifwd audit verify
-```
+**Later — `sudo fwd custody init` wizard** wraps steps 2–7 interactively and
+prints the exact on-chain commands; deferred to a later phase.
 
-For file-based operations such as `wallets import`, the wrapper must make the
-container path rule explicit: `--privkey-file` is evaluated inside the
-container unless the wrapper grows a deliberate `--host-file` helper. A helper
-may safely copy a host file into a `0600` temporary file inside the container,
-run the import, then shred the container copy.
+## Release & pinning
 
-## Custody Gate
-
-The installer must not silently create production custody.
-
-It may stage the runtime, create config templates, and start services, but it
-must stop before production private keys are generated or imported until the
-operator runs an explicit custody command:
-
-```sh
-sudo fwd custody init
-```
-
-That command should walk the operator through the selected custody backend,
-backup expectations, share or master-key handling, and the first wallet
-creation or import. If Vault is the selected backend, this is where the
-production wipe-and-redo, unseal-share distribution, and audit-device check
-belong. If a sealed-master backend is selected in a later release, this command
-owns that initialization instead.
-
-This boundary matters because installing software is reversible; initializing
-custody is a security event.
-
-## Release And Pinning
-
-The install URL should resolve to a small script. That script should fetch a
-versioned manifest, not blindly track whatever happens to be on `main`.
-
-Minimum manifest fields:
+The install URL resolves to a small, auditable POSIX script pinned to a release
+tag (the vanity URL only redirects to the in-repo `install/install.sh` at that
+tag). It fetches a versioned manifest — **source refs + checksums, not image
+digests** (build-from-source):
 
 ```yaml
-version: 1.0.0
-compose_url: https://get.proofs.africa/fwd/releases/1.0.0/docker-compose.yml
+version: 1.1.0
+fwd_source: { repo: https://gitlab.com/proofs.africa/fwd.git, tag: v1.1.0, sha: <hex> }
+clif_source: { repo: <public clif url>, tag: v0.5.x, sha: <hex> }   # --with-clif
 compose_sha256: <hex>
-images:
-  fwd: registry.gitlab.com/proofs.africa/fwd/fwd:1.0.0
-  vault: hashicorp/vault:1.18.2
-  litestream: litestream/litestream:0.3.13
+networks_sha256: <hex>
 ```
 
-The installer should verify checksums for downloaded scripts and static
-artifacts. Image digests should be preferred once the release process supports
-them.
+The installer verifies every fetched artifact's checksum.
 
 ## Modes
 
-### Development Mode
+- **Dev / Coston2** — `… | sh -s -- --dev`: relaxed defaults for test keys and
+  live Coston2 rehearsal only.
+- **Production** — `… | sh -s -- --production`: conservative; requires explicit
+  custody init before the first production wallet, and refuses known-unsafe
+  states (e.g. a dev master reused for production).
 
-Development mode may use relaxed custody setup and local-only defaults. It is
-for test keys and live Coston2 drills only.
+## Upgrade
 
-```sh
-curl -sfL https://get.proofs.africa/fwd | sh -s -- --dev
-```
+`sudo fwd upgrade`: read current version → fetch target manifest → fetch + build
+new source → stop only after the build succeeds → preserve `/etc/fwd` + state →
+run migrations via the container entrypoint → start → `clifwd health` → print
+rollback steps on failure. **Never** overwrites operator policy or secrets.
 
-### Production Mode
+## Security model of `curl | sh` for a custody tool
 
-Production mode must be conservative:
+- TLS, and the script pinned to an **immutable release tag**, published and
+  **auditable in the public repo** (the vanity URL only redirects).
+- **Checksums** on every fetched artifact; build from pinned source.
+- The installer **never fetches or handles key material** — the master is
+  generated locally; provider keys are imported only at the post-gate step.
+- **Default-deny inert bring-up** — nothing is signable until the operator
+  authors policy and imports keys.
+- Inspect-first is documented: `curl -o install.sh <url>; less install.sh; sh install.sh`.
 
-```sh
-curl -sfL https://get.proofs.africa/fwd | sh -s -- --production
-```
+## Non-goals
 
-Production mode should require an explicit custody initialization step before
-the first production wallet can exist. It should also refuse known-unsafe
-states, such as a dev custody file being reused for production.
+The installer is **not**: a public hosted service; a Kubernetes migration; a
+reason to expose `fwd` on the public internet; a multi-tenant key host (Core
+invariant #9 — one operator, one host); a replacement for custody init; a place
+to paste private keys; a published-image pipeline (build-from-source by choice).
 
-## Upgrade Behavior
+## Acceptance checklist
 
-`sudo fwd upgrade` should:
-
-1. Read the current installed version.
-2. Fetch the selected target manifest.
-3. Pull new images.
-4. Stop the stack only after downloads succeed.
-5. Preserve `/etc/fwd` and persistent state.
-6. Run database migrations through the `fwd` container entrypoint.
-7. Start the stack.
-8. Run `clifwd health`.
-9. Print rollback instructions if health fails.
-
-No upgrade command should overwrite operator policy or secrets.
-
-## Backup And Restore Integration
-
-The installer should not replace the existing restore runbook. It should make
-the common paths predictable so the runbook is easier to execute.
-
-Expected commands:
-
-```sh
-sudo fwd backup status
-sudo fwd backup export /path/to/off-host/media
-sudo fwd restore prepare
-```
-
-Off-host transport remains the operator's responsibility unless a later phase
-explicitly adds a transport tool.
-
-## Non-Goals
-
-The one-command installer is not:
-
-- a public hosted service;
-- a Kubernetes migration;
-- a reason to expose `fwd` on the public internet;
-- a replacement for custody initialization;
-- a place to paste private keys;
-- a new policy engine;
-- a new backup transport system.
-
-## Acceptance Checklist
-
-The installer is good enough when a fresh supported host can run:
-
+A fresh supported host can run:
 ```sh
 curl -sfL https://get.proofs.africa/fwd | sh -
-sudo fwd status
-clifwd health
+sudo fwd status        # healthy
+clifwd health          # master=ok
 ```
-
-and get a clear, working, non-production-ready stack with a precise next step:
-
+and get a clear, working, **non-production-ready** stack with a precise next step:
 ```text
-fwd is installed.
-Runtime is healthy.
+fwd is installed. Runtime is healthy.
 Production custody is not initialized.
-Next: sudo fwd custody init
+Next: clifwd policy init … → wallets import … → policy validate → on-chain authorize.
 ```
-
-For production readiness, the full gate is:
-
-1. `sudo fwd custody init` completes.
-2. `clifwd health` reports healthy service and custody backend.
-3. `clifwd audit verify` succeeds.
-4. A wallet can be created or imported without leaking private key material to
-   HTTP, shell history, logs, or audit rows.
-5. The first Phase 8 caller can be issued a policy-bound API key.
-
-## Phase Placement
-
-This is operator UX work for the first production era. It should not block the
-custody or policy correctness gates, but it should be treated as part of making
-Phase 8 repeatable by a human operator who should not need to memorize Docker
-internals.
-
+Production readiness gate: custody init complete; `clifwd health` healthy;
+`clifwd audit verify` succeeds; a wallet imported without leaking key material to
+HTTP/shell-history/logs/audit; the first caller issued a policy-bound token;
+`clifwd policy validate` green.

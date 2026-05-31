@@ -141,7 +141,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 **Mitigations.**
 - Docker images pinned by tag in `docker-compose.yml` (`fwd` via `${FWD_IMAGE_TAG}`, `litestream:0.3.13`); digest-pinning is a Phase 10 hardening item, not yet applied.
 - Python dependencies pinned in `poetry.lock`; no floating versions.
-- `fwd`'s own image built from source by AP's CI; not pulled from a registry someone else controls.
+- `fwd`'s own image built from source by the operator (the installer builds locally from pinned source); not pulled from a registry someone else controls.
 - Renovate or Dependabot for proposed updates; updates reviewed before merge.
 - `fwd`'s own hash-chained audit log records every signing decision — a supply-chain attack that drives signatures through `fwd`'s code paths still leaves audit traces (and `fwd` has no egress to phone home).
 
@@ -180,7 +180,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 ## The honest one-line summary
 
-**`fwd` does not make AP's keys unstealable.** It makes them dramatically more expensive to steal, makes abuse *through* `fwd` visible in its hash-chained audit log (use of an extracted key elsewhere requires external chain monitoring to detect), and bounds the blast radius of caller compromises to the policy envelope of that caller. Combined with policy-bounded per-caller damage, that is the upgrade. Perfect requires hardware (YubiHSM), which is a Phase 10 option, not a v1 requirement.
+**`fwd` does not make the operator's keys unstealable.** It makes them dramatically more expensive to steal, makes abuse *through* `fwd` visible in its hash-chained audit log (use of an extracted key elsewhere requires external chain monitoring to detect), and bounds the blast radius of caller compromises to the policy envelope of that caller. Combined with policy-bounded per-caller damage, that is the upgrade. Perfect requires hardware (YubiHSM), which is a Phase 10 option, not a v1 requirement.
 
 ## When this document is wrong
 

@@ -1,0 +1,14 @@
+#!/bin/sh
+# Host `clifwd` wrapper — delegates the application CLI into the running fwd
+# container, so the CLI runs against the same Python package, mounted state,
+# policy.yaml, and sealed-master custody as the daemon.
+#
+# Installed to /usr/local/bin/clifwd by install.sh. Normal usage:
+#   clifwd health
+#   clifwd policy init --networks flare,songbird --recipient 0x...
+#   clifwd policy validate
+#   clifwd wallets import --name ... --privkey-file /path/in/container ...
+#   clifwd audit verify
+#
+# NOTE: file paths (e.g. --privkey-file) are evaluated INSIDE the container.
+exec docker exec fwd clifwd "$@"
