@@ -28,14 +28,13 @@ case "$cmd" in
   restart) exec docker compose $COMPOSE restart "$@" ;;
   status)  exec docker compose $COMPOSE ps "$@" ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
-  onboard) exec "$FWD_DIR/install/onboard" "$@" ;;
   upgrade|backup)
     echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
     exit 2
     ;;
   ""|help|-h|--help)
     echo "usage: fwd {start|stop|restart|status|logs} [compose args...]" >&2
-    echo "       fwd onboard rewards --recipient 0xADDR [--networks coston2]" >&2
+    echo "       (reward onboarding: clifwd onboard rewards — see docs/one-command-install.md)" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0
     ;;

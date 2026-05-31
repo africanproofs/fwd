@@ -95,21 +95,23 @@ The install script should:
 ```sh
 sudo fwd start | stop | restart | status | logs | upgrade
 sudo fwd backup status
-sudo fwd onboard rewards --recipient 0xADDR [--networks coston2]
 ```
-Compose is an implementation detail of these. `onboard` is the one-command reward
-custody setup (see below).
+Compose is an implementation detail of these.
 
-### `clifwd` (application CLI, delegates into the container)
+### `clifwd` (application CLI + reward onboarding)
 ```sh
-#!/bin/sh
-exec docker exec fwd clifwd "$@"
+clifwd health
+clifwd policy init --networks … --recipient 0x…
+clifwd wallets import --name … --privkey-file /path/in/container …
+clifwd onboard rewards --recipient 0x… --networks coston2   # runs on the HOST
 ```
-So normal usage is `clifwd health` / `clifwd policy validate` / `clifwd wallets
-import …` / `clifwd audit verify` — same Python package, env, mounted state,
-policy, and custody backend as the daemon. For file-based ops (`wallets import`),
-the wrapper must make explicit that `--privkey-file` is evaluated **inside** the
-container.
+Normal usage delegates into the container (`docker exec "${FWD_CONTAINER:-fwd}"
+clifwd …`) — same Python package, env, mounted state, policy, and custody backend
+as the daemon; for file-based ops (`wallets import`), `--privkey-file` is evaluated
+**inside** the container. The one exception is `clifwd onboard …`, which runs on
+the **host** (it `docker compose restart`s the daemon and writes the host policy
+file — neither possible from inside the container) — see the reward-onboarding
+section below.
 
 ## Reward onboarding — the default claim + FSP policy (the custody gate)
 
@@ -125,24 +127,28 @@ policy** covering the two revenue operations — claiming FTSO rewards
 ### The one command
 
 ```sh
-sudo fwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
+clifwd onboard rewards fsp --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
 ```
 
-`fwd onboard rewards` runs the whole sequence — generate the default policy,
+`clifwd onboard rewards` runs the whole sequence — generate the default policy,
 validate it, load it (restart), create the fwd-generated wallets, mint the caller
 tokens (printed once), seed the sender nonces — and prints the two operator-only
 **GATES** (your FSP signing-key import + the on-chain authorization). It is
 **idempotent**: re-running skips anything already created and skips the restart
-if the policy hasn't changed. Flags: `--claim-only` / `--fsp-only`,
+if the policy hasn't changed. Flags: `--claim-only` / `--sign-only`,
 `--skip-fsp-import` (defer the FSP key), and a comma list for `--networks`. For
 mainnet, use `--networks flare` / `--networks songbird` (the generator fills the
 right contract addresses + chain id).
 
-That is the whole onboarding. The manual runbook below is exactly what the one
-command does, step by step — use it if you want to drive each step yourself or
-`fwd` isn't on your `PATH`.
+**Reward class.** The command takes a class: `rewards fsp` (the default — FTSO
+claim + FSP signing, today's provider rewards) or `rewards validator`
+(staking/validator rewards — a future class, not yet implemented). Bare
+`clifwd onboard rewards` means `fsp`.
 
-### The manual runbook (what `fwd onboard rewards` does)
+That is the whole onboarding. The manual runbook below is exactly what the one
+command does, step by step — use it if you want to drive each step yourself.
+
+### The manual runbook (what `clifwd onboard rewards` does)
 
 The runbook is the exact ordered sequence for the default on **Coston2** (the
 rehearsal network); every name matches the generator's output, so it is
@@ -208,7 +214,7 @@ Then rehearse a real claim + FSP sign on Coston2 through clif, verify the
 `RewardClaimed` event on-chain and `clifwd audit verify`, and only then add
 flare / songbird and go to mainnet.
 
-(`fwd onboard rewards` above runs exactly steps 2–8 and prints the step-9
+(`clifwd onboard rewards` above runs exactly steps 2–8 and prints the step-9
 checklist with your concrete addresses — the runbook is the manual equivalent.)
 
 ## Release & pinning

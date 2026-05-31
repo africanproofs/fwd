@@ -168,8 +168,11 @@ fi
 if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   install -m 0755 "$SRC/install/fwd" "$FWD_BIN_DIR/fwd"
   install -m 0755 "$SRC/install/clifwd" "$FWD_BIN_DIR/clifwd"
-  # Bake the install dir into the host `fwd` wrapper so it finds the compose bundle.
+  # Bake the install dir into the host wrappers so they find the compose bundle
+  # ($FWD_DIR): `fwd` for compose ops, and `clifwd` for `onboard` routing
+  # (clifwd onboard -> $FWD_DIR/install/onboard).
   sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/fwd" 2>/dev/null || true
+  sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/clifwd" 2>/dev/null || true
   log "installed host wrappers: $FWD_BIN_DIR/fwd, $FWD_BIN_DIR/clifwd"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
@@ -197,6 +200,10 @@ printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
   "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
 printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently signs NOTHING (empty default-deny policy, zero wallets).\n'
 cat <<EOF
+
+One command does all of the below:
+  clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
+(idempotent; ends by printing the two operator-only GATES). The manual sequence:
 
 Next — bring up reward signing (the custody gate; your security event, not the installer's).
 The default reward policy covers BOTH revenue ops: claiming (RewardManager.claim)

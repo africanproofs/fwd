@@ -11,4 +11,17 @@
 #   clifwd audit verify
 #
 # NOTE: file paths (e.g. --privkey-file) are evaluated INSIDE the container.
+#
+# EXCEPTION — `clifwd onboard …` runs on the HOST, not in the container: it
+# orchestrates `docker compose restart` + writes the host policy file, neither of
+# which the in-container CLI can do. It is routed to the host orchestrator below.
+set -eu
+
+FWD_DIR="${FWD_DIR:-/opt/fwd}"
+
+if [ "${1:-}" = "onboard" ]; then
+  shift
+  exec "$FWD_DIR/install/onboard" "$@"
+fi
+
 exec docker exec "${FWD_CONTAINER:-fwd}" clifwd "$@"
