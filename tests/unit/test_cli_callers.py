@@ -177,3 +177,71 @@ def test_callers_revoke_409_exits_5(monkeypatch: pytest.MonkeyPatch) -> None:
     with patch("fwd.cli.callers.httpx.delete", return_value=fake):
         result = runner.invoke(app, ["callers", "revoke", "--name", "alice"])
     assert result.exit_code == 5
+
+
+# ---------------------------------------------------------------------------
+# clifwd callers create --replace
+# ---------------------------------------------------------------------------
+
+
+def test_callers_create_replace_sends_replace_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create --replace sends "replace": true in the POST body."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")
+    api_key = "fwd_live_" + "c" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {
+            "name": "rotating-caller",
+            "policy_path": "policies/ftso.yaml",
+            "api_key_prefix": "cccccccc",
+            "api_key": api_key,
+        },
+    )
+    with patch("fwd.cli.callers.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app,
+            [
+                "callers",
+                "create",
+                "--name",
+                "rotating-caller",
+                "--policy",
+                "policies/ftso.yaml",
+                "--replace",
+            ],
+        )
+    assert result.exit_code == 0
+    sent_json = mock_post.call_args.kwargs["json"]
+    assert sent_json["replace"] is True
+
+
+def test_callers_create_no_replace_flag_sends_replace_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting --replace sends "replace": false in the POST body."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")
+    api_key = "fwd_live_" + "d" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {
+            "name": "normal-caller",
+            "policy_path": "policies/ftso.yaml",
+            "api_key_prefix": "dddddddd",
+            "api_key": api_key,
+        },
+    )
+    with patch("fwd.cli.callers.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app,
+            [
+                "callers",
+                "create",
+                "--name",
+                "normal-caller",
+                "--policy",
+                "policies/ftso.yaml",
+            ],
+        )
+    assert result.exit_code == 0
+    sent_json = mock_post.call_args.kwargs["json"]
+    assert sent_json["replace"] is False

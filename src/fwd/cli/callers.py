@@ -33,13 +33,18 @@ def create(
         "--policy",
         help="policy_path that maps to permissions in policy.yaml (Phase 7).",
     ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Re-mint a REVOKED caller of the same name (rotation). Fails on an active caller.",
+    ),
 ) -> None:
     """Create a fresh caller. Returns the API key ONCE — capture it."""
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
     try:
         r = httpx.post(
             f"{url}/v1/admin/callers",
-            json={"name": name, "policy_path": policy},
+            json={"name": name, "policy_path": policy, "replace": replace},
             headers={**_admin_headers(), "Content-Type": "application/json"},
             timeout=30.0,
         )

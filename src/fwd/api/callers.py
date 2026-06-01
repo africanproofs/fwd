@@ -43,6 +43,7 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 class CreateCallerBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     policy_path: str = Field(..., min_length=1, max_length=128)
+    replace: bool = Field(False)
 
 
 class CreateCallerResponse(BaseModel):
@@ -103,7 +104,7 @@ async def post_callers(
     try:
         async with admin_scope_cm as scope:
             result = await create_caller(
-                CallerCreateRequest(name=body.name, policy_path=body.policy_path),
+                CallerCreateRequest(name=body.name, policy_path=body.policy_path, replace=body.replace),
                 scope.caller_repo,
                 audit_repo=scope.audit_repo,
             )

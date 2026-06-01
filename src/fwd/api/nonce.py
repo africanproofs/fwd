@@ -23,10 +23,12 @@ from pydantic import BaseModel, Field
 from fwd.api.admin_auth import admin_required
 from fwd.app.dependencies import (
     AdminScopeCM,
+    NonceRepoCM,
     NonceWalletNotFoundError,
     TransactionRepoCM,
     _canonical_json,
     get_admin_scope,
+    get_nonce_repo,
     get_transaction_repo,
 )
 from fwd.settings import get_settings
@@ -313,3 +315,49 @@ async def get_nonce_holes(
         )
         for tx in stale
     ]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/admin/nonce/{wallet}/{chain}
+# ---------------------------------------------------------------------------
+
+
+class NonceGetResponse(BaseModel):
+    wallet: str
+    chain: int
+    next_nonce: int
+    last_confirmed: int | None
+
+
+@router.get(
+    "/v1/admin/nonce/{wallet}/{chain}",
+    response_model=NonceGetResponse,
+    dependencies=[admin_required],
+)
+async def get_nonce(
+    wallet: str,
+    chain: int,
+    nonce_repo_cm: NonceRepoCM = Depends(get_nonce_repo),  # noqa: B008
+) -> NonceGetResponse:
+    """Read the current next_nonce + last_confirmed for a (wallet, chain).
+
+    Lets an egressing client / the onboarding wizard branch absent vs in-sync
+    vs ahead/behind WITHOUT a write or an audit row (read-only, mirrors GET
+    /v1/admin/nonce/holes). 404 if the row does not exist.
+    """
+    async with nonce_repo_cm as repo:
+        row = await repo.get(wallet, chain, missing_ok=True)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "nonce_not_initialized",
+                "message": f"(wallet={wallet}, chain={chain}) has no nonce row",
+            },
+        )
+    return NonceGetResponse(
+        wallet=row.wallet,
+        chain=row.chain,
+        next_nonce=row.next_nonce,
+        last_confirmed=row.last_confirmed,
+    )

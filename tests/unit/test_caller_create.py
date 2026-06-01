@@ -95,3 +95,29 @@ async def test_create_caller_api_key_not_in_repo_call() -> None:
     assert "api_key" not in call_kwargs
     assert "api_key_hash" in call_kwargs
     assert not call_kwargs["api_key_hash"].startswith("fwd_live_")
+
+
+@pytest.mark.asyncio
+async def test_create_caller_threads_replace_true_to_repo() -> None:
+    """create_caller threads replace=True into repo.create and includes it in audit request_json."""
+    import json
+
+    repo = MagicMock()
+    repo.create = AsyncMock(return_value=_mock_caller("rotating"))
+    audit = _mock_audit_repo()
+
+    await create_caller(
+        CallerCreateRequest(name="rotating", policy_path="policies/rotating.yaml", replace=True),
+        repo,
+        audit_repo=audit,
+    )
+
+    # repo received replace=True
+    call_kwargs = repo.create.call_args.kwargs
+    assert call_kwargs["replace"] is True
+
+    # audit request_json includes "replace"
+    audit_call_kwargs = audit.append.call_args.kwargs
+    request_json = json.loads(audit_call_kwargs["request_json"])
+    assert "replace" in request_json
+    assert request_json["replace"] is True

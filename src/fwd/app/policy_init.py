@@ -67,15 +67,17 @@ def generate_policy(
     recipient: str | None,
     abis_dir: Path,
     networks_file: Path,
+    fsp_sender_mode: str = "shared",
     claim_rate: tuple[int, int] = (4, 8),
     fsp_rate: tuple[int, int] = (50, 500),
 ) -> str:
     """Build a policy.yaml string. See module docstring.
 
     `recipient` is required when CLAIM is in capabilities (it is pinned in the
-    claim arg-predicate). The FSP sender wallet `fsp-sender` is shared across
-    networks (chain is a runtime parameter on fwd's side); each network gets its
-    own signing wallet `fsp-signing-<net>` (the fsp_self_submit carve-out key).
+    claim arg-predicate). The FSP sender wallet is `fsp-sender-<net>` per network
+    (fsp_sender_mode='per-network') or a single shared `fsp-sender`
+    (fsp_sender_mode='shared'); each network always gets its own signing wallet
+    `fsp-signing-<net>` (the fsp_self_submit carve-out key).
     """
     nets = [n.strip() for n in networks if n.strip()]
     caps = {c.strip().lower() for c in capabilities if c.strip()}
@@ -86,6 +88,10 @@ def generate_policy(
         raise PolicyInitError(f"unknown capabilities: {sorted(bad_caps)} (valid: {_VALID_CAPS})")
     if not caps:
         raise PolicyInitError(f"no capabilities given (valid: {_VALID_CAPS})")
+    if fsp_sender_mode not in ("per-network", "shared"):
+        raise PolicyInitError(
+            f"unknown fsp_sender_mode {fsp_sender_mode!r} (valid: 'per-network', 'shared')"
+        )
     if CLAIM in caps and not recipient:
         raise PolicyInitError("recipient is required when 'claim' is in capabilities")
 
@@ -146,11 +152,15 @@ def generate_policy(
             sign_caller = f"fsp-sign-{net}"
             submit_caller = f"fsp-submit-{net}"
             signing_wallet = f"fsp-signing-{net}"
-            sender_wallet = "fsp-sender"  # shared across networks
+            if fsp_sender_mode == "per-network":
+                sender_wallet = f"fsp-sender-{net}"
+                wc_sender = f"wc/fsp-sender-{net}"
+            else:
+                sender_wallet = "fsp-sender"  # shared across networks
+                wc_sender = "wc/fsp-sender"
             fsp_pp = f"fsp/{net}"
             submit_pp = f"perm/fsp-submit-{net}"
             wc_signing = f"wc/fsp-{net}"
-            wc_sender = "wc/fsp-sender"
 
             callers[sign_caller] = {"policy_path": fsp_pp}
             callers[submit_caller] = {"policy_path": submit_pp}

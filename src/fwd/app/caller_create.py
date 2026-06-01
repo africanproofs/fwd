@@ -30,6 +30,7 @@ logger = structlog.get_logger(__name__)
 class CallerCreateRequest:
     name: str
     policy_path: str
+    replace: bool = False
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,9 @@ async def create_caller(
     D16: one audit row per call. caller=None (admin action). request_json
     carries name + policy_path only — NEVER api_key or key_hash.
     """
-    _request_json = _canonical_json({"name": request.name, "policy_path": request.policy_path})
+    _request_json = _canonical_json(
+        {"name": request.name, "policy_path": request.policy_path, "replace": request.replace}
+    )
     generated = generate_api_key()
     try:
         caller = await repo.create(
@@ -67,6 +70,7 @@ async def create_caller(
             api_key_hash=generated.key_hash,
             api_key_prefix=generated.key_prefix,
             policy_path=request.policy_path,
+            replace=request.replace,
         )
     except CallerExistsError as exc:
         logger.info("caller.create.exists", name=request.name)

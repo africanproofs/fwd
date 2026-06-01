@@ -146,3 +146,109 @@ async def test_list_all_includes_revoked(session: AsyncSession) -> None:
     await session.commit()
     results = await repo.list_all(include_revoked=True)
     assert any(c.name == "frank" for c in results)
+
+
+# ---------------------------------------------------------------------------
+# replace=True tests (capability 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_replace_true_on_revoked_remints(session: AsyncSession) -> None:
+    """create(..., replace=True) on a REVOKED caller re-mints with new key, revoked_at=None."""
+    import time
+
+    repo = CallerRepo(session)
+    original = await repo.create(
+        name="grace",
+        api_key_hash="hashG1",
+        api_key_prefix="gggg1111",
+        policy_path="policies/grace.yaml",
+    )
+    await session.commit()
+    await repo.revoke("grace")
+    await session.commit()
+
+    # Small sleep so created_at timestamp is later.
+    time.sleep(0.01)
+
+    reminted = await repo.create(
+        name="grace",
+        api_key_hash="hashG2",
+        api_key_prefix="gggg2222",
+        policy_path="policies/grace.yaml",
+        replace=True,
+    )
+    await session.commit()
+
+    assert reminted.revoked_at is None
+    assert reminted.api_key_hash == "hashG2"
+    assert reminted.api_key_prefix == "gggg2222"
+    assert reminted.created_at >= original.created_at
+
+    # Row count for that name stays 1.
+    got = await repo.get_by_name("grace")
+    assert got is not None
+    assert got.revoked_at is None
+    assert got.api_key_prefix == "gggg2222"
+
+
+@pytest.mark.asyncio
+async def test_create_replace_true_on_active_raises(session: AsyncSession) -> None:
+    """create(..., replace=True) on an ACTIVE caller still raises CallerExistsError."""
+    repo = CallerRepo(session)
+    await repo.create(
+        name="henry",
+        api_key_hash="hashH",
+        api_key_prefix="hhhh1234",
+        policy_path="policies/henry.yaml",
+    )
+    await session.commit()
+
+    with pytest.raises(CallerExistsError):
+        await repo.create(
+            name="henry",
+            api_key_hash="hashH2",
+            api_key_prefix="hhhh5678",
+            policy_path="policies/henry.yaml",
+            replace=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_replace_false_on_revoked_raises(session: AsyncSession) -> None:
+    """create(..., replace=False) on a REVOKED caller still raises CallerExistsError."""
+    repo = CallerRepo(session)
+    await repo.create(
+        name="iris",
+        api_key_hash="hashI",
+        api_key_prefix="iiii1234",
+        policy_path="policies/iris.yaml",
+    )
+    await session.commit()
+    await repo.revoke("iris")
+    await session.commit()
+
+    with pytest.raises(CallerExistsError):
+        await repo.create(
+            name="iris",
+            api_key_hash="hashI2",
+            api_key_prefix="iiii5678",
+            policy_path="policies/iris.yaml",
+            replace=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_no_replace_fresh_unchanged(session: AsyncSession) -> None:
+    """A fresh create (no existing row) is unchanged — works as before."""
+    repo = CallerRepo(session)
+    c = await repo.create(
+        name="jake",
+        api_key_hash="hashJ",
+        api_key_prefix="jjjj1234",
+        policy_path="policies/jake.yaml",
+    )
+    await session.commit()
+    assert c.name == "jake"
+    assert c.revoked_at is None

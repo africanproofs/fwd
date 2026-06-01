@@ -108,6 +108,11 @@ def init(
         "--recipient",
         help="Claim recipient address, pinned in the claim arg-predicate (required for 'claim').",
     ),
+    fsp_sender: str = typer.Option(  # noqa: B008
+        "shared",
+        "--fsp-sender",
+        help="FSP gas-paying sender wallet scope: per-network (fsp-sender-<net>) or shared (fsp-sender).",
+    ),
     out: Optional[str] = typer.Option(  # noqa: B008,UP007
         None,
         "--out",
@@ -134,6 +139,7 @@ def init(
             recipient=recipient,
             abis_dir=Path(s.fwd_abis_dir),
             networks_file=Path(s.fwd_networks_file),
+            fsp_sender_mode=fsp_sender,
         )
     except PolicyInitError as exc:
         typer.echo(f"policy init failed: {exc}", err=True)

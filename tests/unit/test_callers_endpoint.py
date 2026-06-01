@@ -182,6 +182,61 @@ def test_delete_caller_409_already_revoked(monkeypatch: pytest.MonkeyPatch) -> N
     assert r.json()["detail"]["error"] == "caller_already_revoked"
 
 
+# --- POST /v1/admin/callers with replace ------------------------------------
+
+
+def test_post_callers_replace_after_revoke_201(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST {"replace": true} after revoking the same name → 201 with fresh api_key."""
+    from unittest.mock import patch
+
+    result = CallerCreateResult(
+        name="rotating-caller",
+        api_key="fwd_live_" + "b" * 43,
+        api_key_prefix="bbbbbbbb",
+        policy_path="policies/rotating.yaml",
+    )
+    with patch("fwd.api.callers.create_caller", new=AsyncMock(return_value=result)):
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={"name": "rotating-caller", "policy_path": "policies/rotating.yaml", "replace": True},
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 201
+    body = r.json()
+    assert "api_key" in body
+    assert body["name"] == "rotating-caller"
+
+
+def test_post_callers_replace_false_after_revoke_409(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST without replace (or replace:false) after revoke → 409 caller_exists."""
+    from unittest.mock import patch
+
+    with patch("fwd.api.callers.create_caller", new=AsyncMock(side_effect=CallerNameTaken("dup"))):
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={"name": "dup", "policy_path": "policies/x.yaml", "replace": False},
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "caller_exists"
+
+
+def test_post_callers_active_name_409_even_with_replace(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST replace:true on an ACTIVE name → 409 (repo raises CallerExistsError → 409)."""
+    from unittest.mock import patch
+
+    with patch("fwd.api.callers.create_caller", new=AsyncMock(side_effect=CallerNameTaken("active"))):
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={"name": "active", "policy_path": "policies/x.yaml", "replace": True},
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 409
+
+
 # --- GET /v1/admin/callers --------------------------------------------------
 
 

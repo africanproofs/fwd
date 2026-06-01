@@ -461,3 +461,75 @@ async def test_nonce_init_force_on_non_existing_creates_201(
     assert nonce.next_nonce == 7
 
     await session.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/admin/nonce/{wallet}/{chain} tests (capability 1)
+# ---------------------------------------------------------------------------
+
+
+async def test_nonce_get_200_for_initialized_row(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /v1/admin/nonce/{wallet}/{chain} returns 200 with next_nonce + last_confirmed."""
+    from fwd.app.dependencies import get_nonce_repo
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
+    settings_mod.get_settings.cache_clear()
+
+    session = await _make_real_db_session(tmp_path)
+    await _seed_wallet(session, "grace")
+
+    # Seed a nonce row.
+    await NonceRepo(session).init_for_wallet("grace", 14, 5)
+    await session.commit()
+
+    class _NonceCM:
+        async def __aenter__(self) -> NonceRepo:
+            return NonceRepo(session)
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[get_nonce_repo] = lambda: _NonceCM()
+
+    client = TestClient(test_app, raise_server_exceptions=False)
+    r = client.get("/v1/admin/nonce/grace/14", headers=_ADMIN_HDR)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["wallet"] == "grace"
+    assert body["chain"] == 14
+    assert body["next_nonce"] == 5
+    assert body["last_confirmed"] is None
+
+    await session.close()
+
+
+def test_nonce_get_404_for_absent_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /v1/admin/nonce/{wallet}/{chain} returns 404 nonce_not_initialized for an absent row."""
+    from fwd.app.dependencies import get_nonce_repo
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
+    settings_mod.get_settings.cache_clear()
+
+    nonce_repo = MagicMock()
+    nonce_repo.get = AsyncMock(return_value=None)
+
+    class _NonceCM:
+        async def __aenter__(self) -> MagicMock:
+            return nonce_repo
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+    test_app = FastAPI()
+    test_app.include_router(router)
+    test_app.dependency_overrides[get_nonce_repo] = lambda: _NonceCM()
+
+    client = TestClient(test_app, raise_server_exceptions=False)
+    r = client.get("/v1/admin/nonce/ghost/114", headers=_ADMIN_HDR)
+    assert r.status_code == 404
+    assert r.json()["detail"]["error"] == "nonce_not_initialized"

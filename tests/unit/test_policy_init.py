@@ -92,3 +92,74 @@ def test_unknown_network_rejected() -> None:
 def test_unknown_capability_rejected() -> None:
     with pytest.raises(PolicyInitError, match="unknown capabilities"):
         _gen("flare", "staking")
+
+
+# ---------------------------------------------------------------------------
+# fsp_sender_mode tests (capability 4)
+# ---------------------------------------------------------------------------
+
+
+def _gen_mode(networks: str, capabilities: str, fsp_sender_mode: str) -> str:
+    return generate_policy(
+        networks=networks.split(","),
+        capabilities=capabilities.split(","),
+        recipient=RECIPIENT,
+        abis_dir=ABIS_DIR,
+        networks_file=NETWORKS_FILE,
+        fsp_sender_mode=fsp_sender_mode,
+    )
+
+
+def test_fsp_sender_mode_per_network_yields_per_net_wallet(tmp_path: Path) -> None:
+    """fsp_sender_mode='per-network' → wallet key fsp-sender-<net>, constraint wc/fsp-sender-<net>."""
+    text = _gen_mode("songbird", "fsp", "per-network")
+    doc = yaml.safe_load(text)
+
+    assert "fsp-sender-songbird" in doc["wallets"]
+    assert "fsp-sender" not in doc["wallets"]
+    assert doc["wallets"]["fsp-sender-songbird"]["policy_path"] == "wc/fsp-sender-songbird"
+    assert "wc/fsp-sender-songbird" in doc["wallet_constraints"]
+
+    # Submit permission wallet_allowlist includes fsp-sender-songbird.
+    submit = doc["permissions"]["perm/fsp-submit-songbird"]
+    assert "fsp-sender-songbird" in submit["wallet_allowlist"]
+
+    # fsp-signing-songbird still present in fsp_self_submit.
+    assert "fsp-signing-songbird" in doc["fsp_self_submit"]
+
+
+def test_fsp_sender_mode_per_network_multinetwork(tmp_path: Path) -> None:
+    """Per-network mode with flare+songbird → fsp-sender-flare and fsp-sender-songbird (no shared)."""
+    text = _gen_mode("flare,songbird", "fsp", "per-network")
+    doc = yaml.safe_load(text)
+
+    assert "fsp-sender-flare" in doc["wallets"]
+    assert "fsp-sender-songbird" in doc["wallets"]
+    assert "fsp-sender" not in doc["wallets"]
+
+    flare_submit = doc["permissions"]["perm/fsp-submit-flare"]
+    assert "fsp-sender-flare" in flare_submit["wallet_allowlist"]
+
+    sgb_submit = doc["permissions"]["perm/fsp-submit-songbird"]
+    assert "fsp-sender-songbird" in sgb_submit["wallet_allowlist"]
+
+
+def test_fsp_sender_mode_shared_default_unchanged(tmp_path: Path) -> None:
+    """Default (no fsp_sender_mode / shared) still yields fsp-sender and wc/fsp-sender."""
+    text_default = _gen("songbird", "fsp")
+    text_explicit = _gen_mode("songbird", "fsp", "shared")
+
+    doc_default = yaml.safe_load(text_default)
+    doc_explicit = yaml.safe_load(text_explicit)
+
+    # Both are identical in wallet keys.
+    assert "fsp-sender" in doc_default["wallets"]
+    assert "fsp-sender" in doc_explicit["wallets"]
+    assert "fsp-sender-songbird" not in doc_default["wallets"]
+    assert doc_default["wallets"]["fsp-sender"]["policy_path"] == "wc/fsp-sender"
+
+
+def test_fsp_sender_mode_unknown_raises() -> None:
+    """An unknown fsp_sender_mode raises PolicyInitError."""
+    with pytest.raises(PolicyInitError, match="unknown fsp_sender_mode"):
+        _gen_mode("flare", "fsp", "per-chain")

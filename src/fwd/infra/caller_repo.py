@@ -77,10 +77,36 @@ class CallerRepo:
         api_key_hash: str,
         api_key_prefix: str,
         policy_path: str,
+        replace: bool = False,
     ) -> Caller:
         existing = await self.get_by_name(name, missing_ok=True)
         if existing is not None:
-            raise CallerExistsError(name)
+            # An ACTIVE caller is never overwritten. A REVOKED caller may be
+            # re-minted under the same name when replace=True: the prior key
+            # stays cryptographically dead (new hash/prefix), but the name is
+            # reused so policy caller references stay stable across a rotation.
+            if existing.revoked_at is None or not replace:
+                raise CallerExistsError(name)
+            now = datetime.now(UTC)
+            await self._session.execute(
+                callers.update()
+                .where(callers.c.name == name)
+                .values(
+                    api_key_hash=api_key_hash,
+                    api_key_prefix=api_key_prefix,
+                    policy_path=policy_path,
+                    created_at=now,
+                    revoked_at=None,
+                )
+            )
+            return Caller(
+                name=name,
+                api_key_hash=api_key_hash,
+                api_key_prefix=api_key_prefix,
+                policy_path=policy_path,
+                created_at=now,
+                revoked_at=None,
+            )
         now = datetime.now(UTC)
         await self._session.execute(
             callers.insert().values(
