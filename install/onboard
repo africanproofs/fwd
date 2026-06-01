@@ -5,10 +5,10 @@
 # routes `onboard` here), and run by default at install time. Class `fsp`
 # (default) sets up the two revenue operations — claiming FTSO rewards
 # (RewardManager.claim) and signing FSP rewards (signUptimeVote / signRewards):
-# it generates the reward policy, loads it, provisions the wallets fwd signs
-# from, mints the caller tokens your client (clif) uses, seeds the sender nonces,
-# and narrates every step. Class `validator` (staking/validator rewards) is a
-# future class — reserved, not yet implemented.
+# it generates the reward policy, loads it, then provisions each function in its
+# own clearly-demarcated section (wallets, caller tokens, nonces), echoing every
+# wallet's address, and ends with the on-chain step. Class `validator`
+# (staking/validator rewards) is a future class — reserved, not yet implemented.
 #
 # Wallets: by default the executor + sender are GENERATED fresh inside fwd's
 # sealed vault (their private keys never exist outside it). `--import-existing`
@@ -45,6 +45,13 @@ step() {  # title [explanation]
   [ -n "${2:-}" ] && printf '   %s\n' "$2"
   return 0
 }
+FN=0
+fsection() {  # title [explanation] — a clearly-demarcated per-function section
+  FN=$((FN + 1))
+  printf '\n\033[1;35m═══════════════ Function %s/%s — %s ═══════════════\033[0m\n' "$FN" "$NFUNC" "$1"
+  [ -n "${2:-}" ] && printf '   %s\n' "$2"
+  return 0
+}
 
 # Single-terminal I/O: read from the controlling terminal, not stdin (which under
 # `curl|sh` is the piped script). TTY_OK gates interactive prompts.
@@ -68,8 +75,9 @@ usage() {
   cat >&2 <<EOF
 usage: clifwd onboard rewards [fsp|validator] [--recipient 0xADDR] [options]
 
-  Guided single-terminal wizard. Prompts (on the terminal) for your recipient
-  and, at the import step, for each private key (pasted, hidden).
+  Guided single-terminal wizard, organized by function (fee claiming, FSP reward
+  signing). Prompts (on the terminal) for your recipient and, in each function's
+  section, for the private key(s) it needs (pasted, hidden).
 
   fsp                    (default) FTSO claim + FSP signing provider rewards
   validator              staking/validator rewards — future class (not yet supported)
@@ -80,7 +88,7 @@ usage: clifwd onboard rewards [fsp|validator] [--recipient 0xADDR] [options]
                          instead of generating fresh ones; prompts each real nonce
   --claim-only           policy + wallets for claiming only
   --sign-only            policy + wallets for FSP signing only
-  --skip-fsp-import      skip the key-paste gate (defer imports)
+  --skip-fsp-import      skip the key-paste gates (defer imports)
 EOF
   exit 2
 }
@@ -116,11 +124,14 @@ done
 
 case ",$CAPS," in *,claim,*) HAS_CLAIM=1 ;; *) HAS_CLAIM=0 ;; esac
 case ",$CAPS," in *,fsp,*)   HAS_FSP=1   ;; *) HAS_FSP=0   ;; esac
+NFUNC=0
+[ "$HAS_CLAIM" -eq 1 ] && NFUNC=$((NFUNC + 1))
+[ "$HAS_FSP" -eq 1 ] && NFUNC=$((NFUNC + 1))
 [ -d "$FWD_DIR/config" ] || die "no $FWD_DIR/config — set FWD_DIR to the compose bundle"
 
 # Recipient: prompt if claiming and not supplied.
 if [ "$HAS_CLAIM" -eq 1 ] && [ -z "$RECIP" ]; then
-  if ask_tty "Your claim reward recipient address (0x..): " && [ -n "$REPLY" ]; then
+  if ask_tty "Your claim recipient (RewardManager.claim _recipient / setAllowedClaimRecipients) 0x..: " && [ -n "$REPLY" ]; then
     RECIP="$REPLY"
   else
     die "--recipient is required when claiming (or use --sign-only)"
@@ -141,16 +152,16 @@ chain_of() {
 }
 
 printf '\033[1;36m=== fwd reward onboarding (%s) ===\033[0m\n' "$CLASS"
-printf 'Setting up %s on networks: %s.\n' \
-  "$( [ "$HAS_CLAIM" -eq 1 ] && [ "$HAS_FSP" -eq 1 ] && echo 'fee claiming + FSP reward signing' || { [ "$HAS_CLAIM" -eq 1 ] && echo 'fee claiming' || echo 'FSP reward signing'; } )" \
-  "$NETS"
+printf 'Onboarding %s function(s) on %s — each in its own section below:\n' "$NFUNC" "$NETS"
+[ "$HAS_CLAIM" -eq 1 ] && printf '  • Fee claiming        — RewardManager.claim, called by your claim executor for _rewardOwner -> _recipient\n'
+[ "$HAS_FSP" -eq 1 ]   && printf '  • FSP reward signing  — FlareSystemsManager.signUptimeVote / signRewards, signed by your signing policy address\n'
 
 # ---- Step 1: preflight ----
 step "Checking fwd" "It must be running and sealed before we configure it."
 clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
 note "healthy"
 
-# ---- Step 2: build the reward policy ----
+# ---- Step 2: build the reward policy (covers all enabled functions) ----
 step "Building your reward policy" \
   "The allow-list of exactly what fwd may sign — RewardManager.claim (claiming) and FlareSystemsManager signUptimeVote/signRewards (FSP). Your recipient is pinned, so a claim can only ever pay you."
 TMP="$(mktemp "${TMPDIR:-/tmp}/fwd-onboard-policy.XXXXXX")"
@@ -212,85 +223,53 @@ else
   note "already loaded — skipping restart"
 fi
 
-# ---- Step 4: provision the wallets fwd signs from ----
-# fsp-signing-<net> is operator-imported in BOTH modes (it must be the registered
-# key). --import-existing additionally imports the executor + sender instead of
-# generating them. IMPORT_LIST = space-separated "name:policy" tokens.
-wallet_create() {
-  set +e; out="$(clifwd wallets create --name "$1" --policy "$2" 2>&1)"; rc=$?; set -e
-  case "$rc" in
-    0) note "generated in-vault: $1" ;;
-    3) note "exists (skip): $1" ;;
-    *) die "wallets create $1 failed: $out" ;;
-  esac
+# ============================ helpers (provisioning) ============================
+wallet_addr() {  # name -> stored address (what fwd derived) or a placeholder
+  _a="$(clifwd wallets list 2>/dev/null | awk -v n="$1" '$1==n {print $2}')"
+  [ -n "$_a" ] && printf '%s' "$_a" || printf '<not present>'
 }
 wallet_exists() { clifwd wallets list 2>/dev/null | awk '{print $1}' | grep -qx "$1"; }
 
-IMPORT_LIST=""
-add_import() { IMPORT_LIST="$IMPORT_LIST $1:$2"; }
+wallet_create() {  # name policy role — generate fresh in-vault; echo the derived address + contract role
+  role="${3:-wallet}"
+  set +e; out="$(clifwd wallets create --name "$1" --policy "$2" 2>&1)"; rc=$?; set -e
+  case "$rc" in
+    0) note "generated in-vault: $1 @ $(wallet_addr "$1") — $role" ;;
+    3) note "exists (skip): $1 @ $(wallet_addr "$1") — $role" ;;
+    *) die "wallets create $1 failed: $out" ;;
+  esac
+}
 
-if [ "$IMPORT_EXISTING" -eq 1 ]; then
-  step "Preparing wallets (import-existing)" "You'll provide your existing executor + signing + sender keys at the next step — nothing is generated."
-  for net in $NETLIST; do
-    [ "$HAS_CLAIM" -eq 1 ] && add_import "claimer-$net" "wc/claimer-$net"
-    [ "$HAS_FSP" -eq 1 ]   && add_import "fsp-signing-$net" "wc/fsp-$net"
-  done
-  [ "$HAS_FSP" -eq 1 ] && add_import "fsp-sender" "wc/fsp-sender"
-else
-  step "Preparing wallets" "Generating fresh keys inside fwd's sealed vault — the private keys never exist outside it. (Your registered FSP signing key is imported at the next step.)"
-  for net in $NETLIST; do
-    [ "$HAS_CLAIM" -eq 1 ] && wallet_create "claimer-$net" "wc/claimer-$net"
-  done
-  [ "$HAS_FSP" -eq 1 ] && wallet_create "fsp-sender" "wc/fsp-sender"   # shared across networks
-  for net in $NETLIST; do
-    [ "$HAS_FSP" -eq 1 ] && add_import "fsp-signing-$net" "wc/fsp-$net"
-  done
-fi
-
-# ---- Step 5: GATE 1 — paste your key(s) ----
 # Paste reaches the in-container importer via a 0600 fwd-owned temp + --shred-source;
 # never on host disk, never on the network.
-import_pasted() {  # name policy
-  if wallet_exists "$1"; then note "already imported: $1"; return 0; fi
+import_pasted() {  # name policy role
+  role="${3:-key}"
+  if wallet_exists "$1"; then note "already imported: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
   if [ "$SKIP_FSP_IMPORT" -eq 1 ]; then
-    warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"
-    return 0
+    warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
   if [ "$TTY_OK" -ne 1 ]; then
-    warn "no terminal to paste $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"
-    return 0
+    warn "no terminal to paste $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
-  _hint=""
-  case "$1" in fsp-signing-*) _hint=" (your REGISTERED signing-policy key)" ;; esac
-  ask_secret "  paste the private key for $1$_hint (hex, hidden) — or press Enter to skip: "
+  ask_secret "  paste the private key for $1 — $role (hex, hidden) — or press Enter to skip: "
   if [ -z "$SECRET" ]; then
-    warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"
-    return 0
+    warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
   if ! printf '%s' "$SECRET" | tr -d ' \t\r\n' | sed 's/^0[xX]//' \
        | docker exec -i "$FWD_CONTAINER" sh -c 'umask 077; cat > /tmp/.fwd-onboard.key'; then
-    SECRET=''; unset SECRET
-    warn "could not stage the $1 key into the container — skipped"
-    return 0
+    SECRET=''; unset SECRET; warn "could not stage the $1 key into the container — skipped"; return 0
   fi
   SECRET=''; unset SECRET
   set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
   docker exec "$FWD_CONTAINER" sh -c 'rm -f /tmp/.fwd-onboard.key' 2>/dev/null || true
   case "$rc" in
-    0) note "imported + sealed: $1 (pasted input shredded)" ;;
-    3) note "already imported (skip): $1" ;;
+    0) note "imported + sealed: $1 @ $(wallet_addr "$1") — $role (input shredded — confirm this is the address you expect)" ;;
+    3) note "already imported (skip): $1 @ $(wallet_addr "$1") — $role" ;;
     *) warn "import $1 FAILED: $out — retry: clifwd wallets import --name $1 --policy $2 --privkey-file <file>" ;;
   esac
 }
-if [ -n "$IMPORT_LIST" ]; then
-  step "Importing your key(s)" "Paste each key (hidden). fwd seals it under its master key and shreds the input — the key never touches this host's disk and never leaves the box."
-  for tok in $IMPORT_LIST; do
-    import_pasted "${tok%%:*}" "${tok#*:}"
-  done
-fi
 
-# ---- Step 6: caller tokens (each shown ONCE) ----
-caller_create() {
+caller_create() {  # name policy
   set +e; key="$(clifwd callers create --name "$1" --policy "$2" 2>/dev/null)"; rc=$?; set -e
   case "$rc" in
     0) printf '   \033[1;32mTOKEN (shown ONCE)\033[0m %-18s -> clif API key for this caller\n     %s\n' "$1" "$key" ;;
@@ -299,16 +278,7 @@ caller_create() {
   esac
   unset key
 }
-step "Minting access tokens" "These bearer tokens are what your claim/FSP client (clif) uses to ask fwd to sign. Shown ONCE — copy them into clif's .env now."
-for net in $NETLIST; do
-  [ "$HAS_CLAIM" -eq 1 ] && caller_create "claim-$net" "perm/claim-$net"
-  if [ "$HAS_FSP" -eq 1 ]; then
-    caller_create "fsp-sign-$net"   "fsp/$net"
-    caller_create "fsp-submit-$net" "perm/fsp-submit-$net"
-  fi
-done
 
-# ---- Step 7: seed sender nonces ----
 nonce_seed() {  # name chain starting_nonce
   set +e; out="$(clifwd nonce init --wallet "$1" --chain "$2" --starting-nonce "$3" 2>&1)"; rc=$?; set -e
   if [ "$rc" -eq 0 ]; then note "nonce seeded: $1 @ chain $2 = $3"
@@ -319,41 +289,64 @@ nonce_seed() {  # name chain starting_nonce
 ask_nonce() {  # name -> echoes the starting nonce to stdout
   if [ "$IMPORT_EXISTING" -eq 1 ] && [ "$TTY_OK" -eq 1 ]; then
     ask_tty "  current on-chain nonce (tx count) for imported $1 [default 0]: "
-    if [ -z "$REPLY" ]; then
-      warn "no nonce for $1 — using 0 (fix via nonce-sync if the key has already sent txs)"; printf '0'
-    else
-      printf '%s' "$REPLY"
-    fi
+    if [ -z "$REPLY" ]; then warn "no nonce for $1 — using 0 (fix via nonce-sync if the key has already sent txs)"; printf '0'
+    else printf '%s' "$REPLY"; fi
   else
     printf '0'
   fi
 }
-step "Seeding transaction counters" "fwd is offline (it never reads the chain), so each sending wallet needs its next nonce. Fresh wallets start at 0; imported keys use their current on-chain count."
-for net in $NETLIST; do
-  cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
-  senders=""
-  [ "$HAS_CLAIM" -eq 1 ] && senders="$senders claimer-$net"
-  [ "$HAS_FSP" -eq 1 ]   && senders="$senders fsp-sender"
-  for s in $senders; do
-    if wallet_exists "$s"; then
-      nonce_seed "$s" "$cid" "$(ask_nonce "$s")"
-    else
-      warn "$s not present (import deferred) — after importing: clifwd nonce init --wallet $s --chain $cid --starting-nonce <n>"
-    fi
-  done
-done
+seed_sender() {  # name chain — seed nonce if the wallet exists, else a deferred note
+  if wallet_exists "$1"; then nonce_seed "$1" "$2" "$(ask_nonce "$1")"
+  else warn "$1 not present (import deferred) — after importing: clifwd nonce init --wallet $1 --chain $2 --starting-nonce <n>"; fi
+}
 
-# ---- Step 8: GATE 2 — on-chain (operator-only, offline identity key) ----
-step "On-chain authorization (your last step)" "fwd is now configured. This final step is on-chain and uses your OFFLINE identity key — fwd never holds it."
+# ====================== Function: FEE CLAIMING ======================
+if [ "$HAS_CLAIM" -eq 1 ]; then
+  fsection "FEE CLAIMING" "RewardManager.claim(_rewardOwner, _recipient, ...): your claim executor claims on behalf of _rewardOwner and pays the allowed _recipient. Needs: the executor wallet, a clif token, a seeded nonce."
+  for net in $NETLIST; do
+    cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
+    if [ "$IMPORT_EXISTING" -eq 1 ]; then
+      import_pasted "claimer-$net" "wc/claimer-$net" "the claim executor — ClaimSetupManager.setClaimExecutors authorizes it to call RewardManager.claim"
+    else
+      wallet_create "claimer-$net" "wc/claimer-$net" "the claim executor — RewardManager.claim caller (authorized via ClaimSetupManager.setClaimExecutors)"
+    fi
+    caller_create "claim-$net" "perm/claim-$net"
+    seed_sender "claimer-$net" "$cid"
+  done
+fi
+
+# ====================== Function: FSP REWARD SIGNING ======================
+if [ "$HAS_FSP" -eq 1 ]; then
+  fsection "FSP REWARD SIGNING" "FlareSystemsManager.signUptimeVote(_rewardEpochId, _uptimeVoteHash, _signature) / signRewards(...): your signing policy address produces the _signature FSM recovers; a sender submits the tx (msg.sender, gas). Needs: the signing policy key (imported), a sender, two clif tokens, a seeded nonce."
+  # the tx sender is one wallet (msg.sender / gas payer), shared across networks
+  if [ "$IMPORT_EXISTING" -eq 1 ]; then
+    import_pasted "fsp-sender" "wc/fsp-sender" "the msg.sender that submits signUptimeVote/signRewards (pays gas; FSM checks the _signature, not the sender)"
+  else
+    wallet_create "fsp-sender" "wc/fsp-sender" "the msg.sender that submits signUptimeVote/signRewards (gas payer; FSM checks the _signature, not the sender)"
+  fi
+  for net in $NETLIST; do
+    cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
+    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your signing policy address — the _signature signer FlareSystemsManager.signUptimeVote/signRewards recovers"
+    caller_create "fsp-sign-$net"   "fsp/$net"
+    caller_create "fsp-submit-$net" "perm/fsp-submit-$net"
+    seed_sender "fsp-sender" "$cid"
+  done
+fi
+
+# ====================== Final — on-chain (operator-only, offline identity key) ======================
+printf '\n\033[1;36m── Final — on-chain authorization (you, offline)\033[0m\n'
+printf '   fwd is configured. This last step is on-chain, from your OFFLINE identity key (fwd never holds it).\n'
 printf '\n=============================================================================\n'
 if [ "$IMPORT_EXISTING" -eq 1 ]; then
-  printf '\033[1;31mCUTOVER\033[0m — Your imported keys are already authorized/registered on-chain, so\n'
-  printf 'no new authorization is needed. Instead:\n'
+  printf '\033[1;31mCUTOVER\033[0m — your imported keys are already authorized/registered on-chain; instead:\n'
   for net in $NETLIST; do
     printf '  [%s]\n' "$net"
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    STOP the old claimer for claimer-%s — fwd is now its sole user\n' "$net"
-    [ "$HAS_FSP" -eq 1 ]   && printf '    STOP the old submitter for fsp-sender / fsp-signing-%s (sole-submitter cutover)\n' "$net"
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    verify %s is still an allowed claim recipient\n' "$RECIP"
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    Fee claiming:  STOP the old claimer for claimer-%s (%s) — fwd is now its sole user\n' "$net" "$(wallet_addr "claimer-$net")"
+    if [ "$HAS_FSP" -eq 1 ]; then
+      printf '    FSP signing:   STOP the old submitter for fsp-sender (%s)\n' "$(wallet_addr fsp-sender)"
+      printf '                   and fsp-signing-%s (%s) — sole-submitter cutover\n' "$net" "$(wallet_addr "fsp-signing-$net")"
+    fi
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    Fee claiming:  verify %s is still an allowed claim recipient\n' "$RECIP"
   done
   printf 'If the old flare-system-client / ftso-fee-claimer keeps submitting from these\n'
   printf 'accounts, it and fwd will collide on nonces — stop it first.\n'
@@ -362,10 +355,10 @@ else
   for net in $NETLIST; do
     printf '  [%s]\n' "$net"
     if [ "$HAS_CLAIM" -eq 1 ]; then
-      printf '    ClaimSetupManager.setClaimExecutors  -> authorize claimer-%s\n' "$net"
-      printf '    setAllowedClaimRecipients            -> allow %s\n' "$RECIP"
+      printf '    Fee claiming:  ClaimSetupManager.setClaimExecutors -> authorize claimer-%s (%s) as a claim executor\n' "$net" "$(wallet_addr "claimer-$net")"
+      printf '                   setAllowedClaimRecipients           -> allow recipient %s\n' "$RECIP"
     fi
-    [ "$HAS_FSP" -eq 1 ] && printf '    FSP signing-policy registration      -> register fsp-signing-%s as a voter\n' "$net"
+    [ "$HAS_FSP" -eq 1 ] && printf '    FSP signing:   register fsp-signing-%s (%s) as your signing policy address (voter)\n' "$net" "$(wallet_addr "fsp-signing-$net")"
   done
 fi
 printf '\nThen rehearse a real claim + FSP sign through clif (Songbird is the canary),\n'

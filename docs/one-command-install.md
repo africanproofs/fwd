@@ -130,12 +130,16 @@ Songbird / Flare for AP. `coston2` is a testnet: use it only if you are a regist
 Coston2 voter (otherwise an FSP signature is rejected on-chain). The claim path has
 no such constraint.
 
-You do **not** have to learn the policy schema. The wizard **narrates each step**
-and does the whole sequence: generate the default reward policy (the allow-list for
-claiming `RewardManager.claim` + signing FSP `signUptimeVote`/`signRewards`, your
-recipient pinned), validate it, load it (restart out of inert), provision the
-wallets fwd signs from, mint the caller tokens (shown once), seed the sender nonces,
-and print the final on-chain step. It is **idempotent** (re-running skips what
+You do **not** have to learn the policy schema. The wizard **narrates each step**,
+**groups the work into a clearly-demarcated section per function** (fee claiming;
+FSP reward signing), **echoes each wallet's address** (so you can confirm a pasted
+key derived the address you expect), and describes each key in the contract's own
+terms (the claim executor that calls `RewardManager.claim`; your signing policy
+address that signs `signUptimeVote`/`signRewards`; the `msg.sender` that submits the
+tx). It does the whole sequence: build the default reward policy (your recipient
+pinned), validate it, load it (restart out of inert), provision the wallets fwd
+signs from, mint the caller tokens (shown once), seed the sender nonces, and print
+the final on-chain step. It is **idempotent** (re-running skips what
 exists; no restart if the policy is unchanged). Flags: `--import-existing`
 (migration — see below), `--claim-only` / `--sign-only`, `--skip-fsp-import` (defer
 the key gate), and a comma list for `--networks` (`flare` / `songbird` for mainnet).
