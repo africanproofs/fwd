@@ -251,22 +251,35 @@ import_pasted() {  # name policy role
   if [ "$TTY_OK" -ne 1 ]; then
     warn "no terminal to paste $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
-  ask_secret "  paste the private key for $1 — $role (hex, hidden) — or press Enter to skip: "
-  if [ -z "$SECRET" ]; then
-    warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
-  fi
-  if ! printf '%s' "$SECRET" | tr -d ' \t\r\n' | sed 's/^0[xX]//' \
-       | docker exec -i "$FWD_CONTAINER" sh -c 'umask 077; cat > /tmp/.fwd-onboard.key'; then
-    SECRET=''; unset SECRET; warn "could not stage the $1 key into the container — skipped"; return 0
-  fi
-  SECRET=''; unset SECRET
-  set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
-  docker exec "$FWD_CONTAINER" sh -c 'rm -f /tmp/.fwd-onboard.key' 2>/dev/null || true
-  case "$rc" in
-    0) note "imported + sealed: $1 @ $(wallet_addr "$1") — $role (input shredded — confirm this is the address you expect)" ;;
-    3) note "already imported (skip): $1 @ $(wallet_addr "$1") — $role" ;;
-    *) warn "import $1 FAILED: $out — retry: clifwd wallets import --name $1 --policy $2 --privkey-file <file>" ;;
-  esac
+  _attempt=0
+  while [ "$_attempt" -lt 5 ]; do
+    _attempt=$((_attempt + 1))
+    ask_secret "  paste the private key for $1 — $role (hex, hidden) — or press Enter to skip: "
+    if [ -z "$SECRET" ]; then
+      warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
+    fi
+    # normalize (strip whitespace + 0x) and validate on the host BEFORE staging:
+    # a raw secp256k1 key is exactly 64 hex chars (32 bytes).
+    _k="$(printf '%s' "$SECRET" | tr -d ' \t\r\n' | sed 's/^0[xX]//')"; SECRET=''; unset SECRET
+    case "$_k" in
+      *[!0-9a-fA-F]*) _k=''; warn "that has non-hex characters — paste the RAW hex key (a keystore/base64/mnemonic must be converted to hex first). Try again, or Enter to skip."; continue ;;
+    esac
+    if [ "${#_k}" -ne 64 ]; then
+      warn "expected 64 hex chars (a 32-byte key); got ${#_k}. Try again, or Enter to skip."; _k=''; continue
+    fi
+    if ! printf '%s' "$_k" | docker exec -i "$FWD_CONTAINER" sh -c 'umask 077; cat > /tmp/.fwd-onboard.key'; then
+      _k=''; warn "could not stage the key into the container — try again."; continue
+    fi
+    _k=''
+    set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
+    docker exec "$FWD_CONTAINER" sh -c 'rm -f /tmp/.fwd-onboard.key' 2>/dev/null || true
+    case "$rc" in
+      0) note "imported + sealed: $1 @ $(wallet_addr "$1") — $role (input shredded — confirm this is the address you expect)"; return 0 ;;
+      3) note "already imported (skip): $1 @ $(wallet_addr "$1") — $role"; return 0 ;;
+      *) warn "import failed: $out. Try again, or Enter to skip." ;;
+    esac
+  done
+  warn "gave up on $1 after $_attempt attempts — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"
 }
 
 caller_create() {  # name policy
