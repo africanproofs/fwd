@@ -1,13 +1,15 @@
 # fwd policy.yaml — EXAMPLE (NOT loaded; documentation only).
 #
 # This is the DEFAULT REWARD POLICY: the exact shape
-#   clifwd policy init --networks coston2 --recipient 0xYOURADDR --capabilities claim,fsp
+#   clifwd policy init --networks songbird --recipient 0xYOURADDR --capabilities claim,fsp
 # generates — covering the two revenue operations, claiming FTSO rewards
 # (RewardManager.claim) and signing FSP rewards (signUptimeVote / signRewards).
 # DON'T hand-write this: run `clifwd policy init` (it derives the method
 # signatures from the shipped ABIs and fills the chains/carve-out for you), then
-# `clifwd policy validate`. For flare/songbird the addresses + chain id differ
-# (this example is coston2 = chain 114, the rehearsal network).
+# `clifwd policy validate`. For flare/coston2 the addresses + chain id differ
+# (this example is songbird = chain 19, the default onboarding network — AP's
+# canary). FSP signing requires your key to be a registered voter on the chosen
+# network; coston2 is a testnet (register there first if you rehearse on it).
 #
 # The real policy.yaml is operator-controlled and gitignored (Core invariant #12:
 # public repo, private config). Copy to $FWD_POLICY_PATH (default
@@ -48,29 +50,29 @@ version: 1
 # Three callers — one per leg (fwd forbids one policy_path in both permissions
 # and fsp_permissions, so Leg-1 sign and Leg-2 submit use distinct callers):
 callers:
-  claim-coston2:        # FTSO reward claimer
-    policy_path: perm/claim-coston2
-  fsp-sign-coston2:     # FSP Leg-1 — POST /v1/sign-fsp-message
-    policy_path: fsp/coston2
-  fsp-submit-coston2:   # FSP Leg-2 — POST /v1/sign-transaction (FlareSystemsManager)
-    policy_path: perm/fsp-submit-coston2
+  claim-songbird:        # FTSO reward claimer
+    policy_path: perm/claim-songbird
+  fsp-sign-songbird:     # FSP Leg-1 — POST /v1/sign-fsp-message
+    policy_path: fsp/songbird
+  fsp-submit-songbird:   # FSP Leg-2 — POST /v1/sign-transaction (FlareSystemsManager)
+    policy_path: perm/fsp-submit-songbird
 
 # Wallet -> wallet_constraints indirection (per-wallet aggregate/rate cap).
 wallets:
-  claimer-coston2:      # claim executor — fwd generates+seals (clifwd wallets create)
-    policy_path: wc/claimer-coston2
-  fsp-signing-coston2:  # the REGISTERED signing-policy key — IMPORT it (clifwd wallets import)
-    policy_path: wc/fsp-coston2
-  fsp-sender:           # pays gas for the Leg-2 submit — fwd generates+seals; shared across networks
+  claimer-songbird:      # claim executor — fwd generates+seals (clifwd wallets create)
+    policy_path: wc/claimer-songbird
+  fsp-signing-songbird:  # the REGISTERED signing-policy key — IMPORT it (clifwd wallets import)
+    policy_path: wc/fsp-songbird
+  fsp-sender:            # pays gas for the Leg-2 submit — fwd generates+seals; shared across networks
     policy_path: wc/fsp-sender
 
 permissions:
   # --- Claim rewards: RewardManager.claim ---
-  perm/claim-coston2:
+  perm/claim-songbird:
     contracts:
-      "0xB4f43E342c5c77e6fe060c0481Fe313Ff2503454":   # Coston2 RewardManager (case-insensitive match)
+      "0xE26AD68b17224951b5740F33926Cc438764eB9a7":   # Songbird RewardManager (case-insensitive match)
         abi: reward_manager
-        chains: [114]                                  # 14 Flare · 19 Songbird · 114 Coston2
+        chains: [19]                                   # 14 Flare · 19 Songbird · 114 Coston2
         methods:
           # The proofs arg is a tuple[] (non-scalar, B1) → not predicatable, so
           # allow_unconstrained_args is required; bound by max_value_wei + rate +
@@ -80,15 +82,15 @@ permissions:
             allow_unconstrained_args: true
             arg_predicates:
               _recipient: "0xYOUR_CLAIM_RECIPIENT_ADDRESS"   # pin YOUR reward destination
-    wallet_allowlist: [claimer-coston2]
+    wallet_allowlist: [claimer-songbird]
     rate: { per_hour: 4, per_day: 8 }
 
   # --- Sign FSP rewards (Leg-2 submit): FlareSystemsManager ---
-  perm/fsp-submit-coston2:
+  perm/fsp-submit-songbird:
     contracts:
-      "0xbC1F76CEB521Eb5484b8943B5462D08ea96617A1":   # Coston2 FlareSystemsManager
+      "0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516":   # Songbird FlareSystemsManager
         abi: flare_systems_manager
-        chains: [114]
+        chains: [19]
         methods:
           # Both carry tuple/array args → allow_unconstrained_args required.
           "signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))":
@@ -101,24 +103,24 @@ permissions:
             arg_predicates: { _rewardEpochId: any }
     # The signing key self-submits (the carve-out below) + the dedicated
     # sole-submitter sender pays gas. Both must be allowlisted here.
-    wallet_allowlist: [fsp-signing-coston2, fsp-sender]
+    wallet_allowlist: [fsp-signing-songbird, fsp-sender]
     rate: { per_hour: 50, per_day: 500 }
 
 wallet_constraints:
-  wc/claimer-coston2: { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 4, per_day: 8 } }
-  wc/fsp-coston2:     { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
-  wc/fsp-sender:      { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
+  wc/claimer-songbird: { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 4, per_day: 8 } }
+  wc/fsp-songbird:     { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
+  wc/fsp-sender:       { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
 
 # FSP Leg-1: EIP-191 message signing (POST /v1/sign-fsp-message). No contract —
 # just the permitted message types + the signing wallet + rate.
 fsp_permissions:
-  fsp/coston2:
+  fsp/songbird:
     message_types: [UPTIME, REWARD_DISTRIBUTION]
-    wallet_allowlist: [fsp-signing-coston2]
+    wallet_allowlist: [fsp-signing-songbird]
     rate: { per_hour: 50, per_day: 500 }
 
 # The signing-policy key signs FSP messages (Leg-1) AND appears as a self-submit
 # EVM signer (Leg-2) — the narrow carve-out to key-domain segmentation, honoured
 # only for the FSM signUptimeVote/signRewards max_value_wei=0 shape above.
 fsp_self_submit:
-  - fsp-signing-coston2
+  - fsp-signing-songbird

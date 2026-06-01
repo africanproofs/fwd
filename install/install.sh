@@ -23,7 +23,7 @@
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
 #   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
-#   onboarding: --recipient 0xADDR  --networks LIST(=coston2)  --import-existing  --inert
+#   onboarding: --recipient 0xADDR  --networks LIST(=songbird)  --import-existing  --inert
 #   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --help
 set -eu
 
@@ -42,7 +42,7 @@ BUILD=1
 MODE=dev
 INERT=0
 RECIPIENT=""
-ONB_NETWORKS=coston2
+ONB_NETWORKS=songbird
 IMPORT_EXISTING=0
 
 log()  { printf '\033[1;33m[fwd-install]\033[0m %s\n' "$*"; }
@@ -233,28 +233,30 @@ else
   cat <<EOF
 
 Set up reward signing + fee claiming with one guided, single-terminal command:
-  clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
+  clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
 (idempotent; narrates each step, pastes your key, ends with the on-chain step).
 Migrating an existing provider? add --import-existing to import your existing
 executor + sender keys instead of generating fresh ones.
+FSP signing needs your key registered as a voter on the chosen network — Songbird /
+Flare for AP; coston2 only if you are a registered Coston2 voter.
 
-The manual equivalent (what the wizard does), for Coston2:
+The manual equivalent (what the wizard does), for Songbird:
   1. (done) the sealed master is generated.
-  2. clifwd policy init --networks coston2 --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS > $SRC/config/policy.yaml
+  2. clifwd policy init --networks songbird --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS > $SRC/config/policy.yaml
      clifwd policy validate --schema-only      # the '>' runs on the host -> writes the mounted policy file
   3. sudo fwd restart                          # LOAD the policy (REQUIRED before step 4)
-  4. clifwd wallets create --name claimer-coston2 --policy wc/claimer-coston2
-     clifwd wallets create --name fsp-sender      --policy wc/fsp-sender
-  5. clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 --privkey-file /abs/path/signing.key --shred-source
-  6. clifwd callers create --name claim-coston2      --policy perm/claim-coston2
-     clifwd callers create --name fsp-sign-coston2   --policy fsp/coston2
-     clifwd callers create --name fsp-submit-coston2 --policy perm/fsp-submit-coston2
+  4. clifwd wallets create --name claimer-songbird --policy wc/claimer-songbird
+     clifwd wallets create --name fsp-sender       --policy wc/fsp-sender
+  5. clifwd wallets import --name fsp-signing-songbird --policy wc/fsp-songbird --privkey-file /abs/path/signing.key --shred-source
+  6. clifwd callers create --name claim-songbird      --policy perm/claim-songbird
+     clifwd callers create --name fsp-sign-songbird   --policy fsp/songbird
+     clifwd callers create --name fsp-submit-songbird --policy perm/fsp-submit-songbird
   7. clifwd policy validate
-  8. clifwd nonce init --wallet claimer-coston2 --chain 114 --starting-nonce 0
-     clifwd nonce init --wallet fsp-sender      --chain 114 --starting-nonce 0
+  8. clifwd nonce init --wallet claimer-songbird --chain 19 --starting-nonce 0
+     clifwd nonce init --wallet fsp-sender        --chain 19 --starting-nonce 0
   9. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors
-     (authorize claimer-coston2) + setAllowedClaimRecipients + FSP signing-policy registration.
- 10. rehearse a real claim + FSP sign on Coston2, then add flare / songbird and go live.
+     (authorize claimer-songbird) + setAllowedClaimRecipients + FSP signing-policy registration.
+ 10. rehearse on Songbird (the canary), then go to Flare.
 Full detail + mainnet variants: docs/one-command-install.md
 EOF
 fi

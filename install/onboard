@@ -74,7 +74,8 @@ usage: clifwd onboard rewards [fsp|validator] [--recipient 0xADDR] [options]
   fsp                    (default) FTSO claim + FSP signing provider rewards
   validator              staking/validator rewards — future class (not yet supported)
   --recipient 0xADDR     claim reward destination (prompted if omitted)
-  --networks  LIST       comma-separated (default: coston2)
+  --networks  LIST       comma-separated (default: songbird; flare for mainnet,
+                         coston2 only if you're a registered voter there)
   --import-existing      import your existing executor + sender keys (migration)
                          instead of generating fresh ones; prompts each real nonce
   --claim-only           policy + wallets for claiming only
@@ -99,7 +100,7 @@ if [ "$CLASS" = validator ]; then
   exit 2
 fi
 
-NETS="coston2"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
+NETS="songbird"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --recipient)       RECIP="${2:-}"; shift 2 ;;
@@ -367,8 +368,8 @@ else
     [ "$HAS_FSP" -eq 1 ] && printf '    FSP signing-policy registration      -> register fsp-signing-%s as a voter\n' "$net"
   done
 fi
-printf '\nThen rehearse a real claim + FSP sign on Coston2 through clif, verify the\n'
-printf "RewardClaimed event on-chain and 'clifwd audit verify', before mainnet.\n"
+printf '\nThen rehearse a real claim + FSP sign through clif (Songbird is the canary),\n'
+printf "verify the RewardClaimed event on-chain and 'clifwd audit verify', before Flare.\n"
 printf 'Full detail: docs/one-command-install.md\n'
 printf '=============================================================================\n'
 printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'

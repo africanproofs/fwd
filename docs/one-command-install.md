@@ -103,7 +103,7 @@ Compose is an implementation detail of these.
 clifwd health
 clifwd policy init --networks … --recipient 0x…
 clifwd wallets import --name … --privkey-file /path/in/container …
-clifwd onboard rewards --recipient 0x… --networks coston2   # runs on the HOST
+clifwd onboard rewards --recipient 0x… --networks songbird   # runs on the HOST
 ```
 Normal usage delegates into the container (`docker exec "${FWD_CONTAINER:-fwd}"
 clifwd …`) — same Python package, env, mounted state, policy, and custody backend
@@ -122,8 +122,13 @@ it and brings fwd up signing nothing — see the fallback runbook below.) You ca
 run the wizard any time:
 
 ```sh
-clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
+clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
 ```
+
+**FSP signing needs your key registered as a voter on the chosen network** —
+Songbird / Flare for AP. `coston2` is a testnet: use it only if you are a registered
+Coston2 voter (otherwise an FSP signature is rejected on-chain). The claim path has
+no such constraint.
 
 You do **not** have to learn the policy schema. The wizard **narrates each step**
 and does the whole sequence: generate the default reward policy (the allow-list for
@@ -165,11 +170,11 @@ command does, step by step — use it if you want to drive each step yourself.
 
 ### The manual runbook (what `clifwd onboard rewards` does)
 
-The runbook is the exact ordered sequence for the default on **Coston2** (the
-rehearsal network); every name matches the generator's output, so it is
-copy-paste end to end. You change only **two** things: your reward recipient
-(step 2) and your imported signing key (step 5). For mainnet, swap `coston2` →
-`flare` / `songbird` everywhere.
+The runbook is the exact ordered sequence for the default on **Songbird** (AP's
+canary); every name matches the generator's output, so it is copy-paste end to
+end. You change only **two** things: your reward recipient (step 2) and your
+imported signing key (step 5). For Flare, swap `songbird` → `flare` (chain 19 →
+14) everywhere; `coston2` only if you are a registered Coston2 voter.
 
 `clifwd` runs each admin command inside the container; the `>` redirect (step 2)
 and `sudo fwd restart` (step 3) run on the **host**. Only **two** steps need a
@@ -181,7 +186,7 @@ human decision — both are flagged GATE.
 # 2. Generate the default reward policy and pin YOUR recipient. The '>' redirect
 #    runs on the host, so it writes the host file the container mounts read-only
 #    as the live policy. (Back up any existing one first: cp config/policy.yaml{,.bak})
-clifwd policy init --networks coston2 \
+clifwd policy init --networks songbird \
   --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS \
   > config/policy.yaml
 clifwd policy validate --schema-only          # reads the live mount; no daemon needed
@@ -194,40 +199,40 @@ clifwd policy validate --schema-only          # reads the live mount; no daemon 
 sudo fwd restart
 
 # 4. Create the two fwd-GENERATED wallets — the claim executor + the FSP gas payer:
-clifwd wallets create --name claimer-coston2 --policy wc/claimer-coston2
-clifwd wallets create --name fsp-sender      --policy wc/fsp-sender
+clifwd wallets create --name claimer-songbird --policy wc/claimer-songbird
+clifwd wallets create --name fsp-sender       --policy wc/fsp-sender
 
 # 5. GATE 1 (operator-only) — IMPORT your registered signing-policy key. Key
 #    material is handled here and nowhere else; the file must be mode 0600, owned
 #    by you, and decode to exactly 32 bytes of hex:
-clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 \
+clifwd wallets import --name fsp-signing-songbird --policy wc/fsp-songbird \
   --privkey-file /abs/path/to/signing.key --shred-source
 
 # 6. Mint the three caller tokens (each printed ONCE — inject into clif's env):
-clifwd callers create --name claim-coston2      --policy perm/claim-coston2
-clifwd callers create --name fsp-sign-coston2   --policy fsp/coston2
-clifwd callers create --name fsp-submit-coston2 --policy perm/fsp-submit-coston2
+clifwd callers create --name claim-songbird      --policy perm/claim-songbird
+clifwd callers create --name fsp-sign-songbird   --policy fsp/songbird
+clifwd callers create --name fsp-submit-songbird --policy perm/fsp-submit-songbird
 
 # 7. Full gate — must pass (schema + live DB / ABI / wallet-binding consistency):
 clifwd policy validate
 
 # 8. Seed the next nonce for the two SENDER wallets (fwd is zero-egress — it can't
 #    read the chain). Both are freshly generated, so start at 0:
-clifwd nonce init --wallet claimer-coston2 --chain 114 --starting-nonce 0
-clifwd nonce init --wallet fsp-sender      --chain 114 --starting-nonce 0
+clifwd nonce init --wallet claimer-songbird --chain 19 --starting-nonce 0
+clifwd nonce init --wallet fsp-sender       --chain 19 --starting-nonce 0
 #    (The signing key signs detached FSP messages — no nonce. Seed it as well only
 #     if you opt it in as a self-submitter instead of using fsp-sender.)
 
 # 9. GATE 2 (operator-only) — on-chain, from your OFFLINE identity key (fwd never
 #    custodies it):
-#      ClaimSetupManager.setClaimExecutors   -> authorize claimer-coston2
+#      ClaimSetupManager.setClaimExecutors   -> authorize claimer-songbird
 #      setAllowedClaimRecipients             -> allow 0xYOUR_CLAIM_RECIPIENT_ADDRESS
-#      FSP signing-policy registration       -> register fsp-signing-coston2 as a voter
+#      FSP signing-policy registration       -> register fsp-signing-songbird as a voter
 ```
 
-Then rehearse a real claim + FSP sign on Coston2 through clif, verify the
-`RewardClaimed` event on-chain and `clifwd audit verify`, and only then add
-flare / songbird and go to mainnet.
+Then rehearse a real claim + FSP sign on Songbird (the canary) through clif, verify
+the `RewardClaimed` event on-chain and `clifwd audit verify`, and only then go to
+Flare.
 
 (`clifwd onboard rewards` above runs exactly steps 2–8 and prints the step-9
 checklist with your concrete addresses — the runbook is the manual equivalent.)
