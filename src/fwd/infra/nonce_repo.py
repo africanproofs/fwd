@@ -51,21 +51,37 @@ class NonceRepo:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def init_for_wallet(self, wallet: str, chain: int, starting_nonce: int) -> Nonce:
-        """Insert a nonces row with next_nonce=starting_nonce. Idempotent:
-        if row exists, return the existing row UNCHANGED (do not overwrite)."""
+    async def init_for_wallet(
+        self, wallet: str, chain: int, starting_nonce: int, force: bool = False
+    ) -> Nonce:
+        """Insert a nonces row with next_nonce=starting_nonce.
+
+        Default (force=False): idempotent — if row exists, return the existing
+        row UNCHANGED (do not overwrite).
+
+        force=True: overwrite an existing row to the exact state a fresh init
+        produces (next_nonce=starting_nonce, last_confirmed=None). Use to
+        correct a mis-seeded nonce.
+        """
         now = datetime.now(UTC)
-        stmt = (
-            sqlite_insert(nonces)
-            .values(
-                wallet=wallet,
-                chain=chain,
-                next_nonce=starting_nonce,
-                last_confirmed=None,
-                last_reconciled_at=now,
-            )
-            .on_conflict_do_nothing()
+        base_stmt = sqlite_insert(nonces).values(
+            wallet=wallet,
+            chain=chain,
+            next_nonce=starting_nonce,
+            last_confirmed=None,
+            last_reconciled_at=now,
         )
+        if force:
+            stmt = base_stmt.on_conflict_do_update(
+                index_elements=["wallet", "chain"],
+                set_={
+                    "next_nonce": starting_nonce,
+                    "last_confirmed": None,
+                    "last_reconciled_at": now,
+                },
+            )
+        else:
+            stmt = base_stmt.on_conflict_do_nothing()
         try:
             await self._session.execute(stmt)
         except IntegrityError as exc:

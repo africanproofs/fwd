@@ -17,7 +17,12 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from fwd.infra.nonce_repo import Nonce, NonceNotInitializedError, NonceRepo
+from fwd.infra.nonce_repo import (
+    Nonce,
+    NonceNotInitializedError,
+    NonceRepo,
+    NonceWalletNotFoundError,
+)
 from fwd.infra.nonce_repo import metadata as nonces_metadata
 from fwd.infra.wallet_repo import metadata as wallets_metadata
 from fwd.infra.wallet_repo import wallets
@@ -262,3 +267,111 @@ async def test_concurrent_reservations_are_monotonic_no_gaps(  # type: ignore[no
         f"expected [100..109] but got {sorted(reserved)} — " f"BEGIN IMMEDIATE serialization failed"
     )
     assert len(set(reserved)) == 10, f"duplicate reservations: {reserved}"
+
+
+# ---------------------------------------------------------------------------
+# force=True overwrite tests (a50)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_init_for_wallet_force_overwrites_existing_row(session: AsyncSession) -> None:
+    """force=True on an existing row resets next_nonce to starting_nonce and clears last_confirmed."""
+    await _seed_wallet(session)
+    repo = NonceRepo(session)
+    # Create the initial row and advance the nonce so last_confirmed is also set.
+    await repo.init_for_wallet("test-wallet", 114, 5)
+    await session.commit()
+    await repo.mark_confirmed("test-wallet", 114, 4)
+    await session.commit()
+
+    # Sanity: existing row has the old values.
+    before = await repo.get("test-wallet", 114)
+    assert before.next_nonce == 5
+    assert before.last_confirmed == 4
+
+    # Force overwrite to nonce 0.
+    result = await repo.init_for_wallet("test-wallet", 114, 0, force=True)
+    await session.commit()
+
+    assert result.next_nonce == 0
+    assert result.last_confirmed is None
+
+    # Verify via a fresh read.
+    after = await repo.get("test-wallet", 114)
+    assert after.next_nonce == 0
+    assert after.last_confirmed is None
+
+
+@pytest.mark.asyncio
+async def test_init_for_wallet_force_false_leaves_existing_unchanged(session: AsyncSession) -> None:
+    """force=False (default) on an existing row returns the existing row unchanged."""
+    await _seed_wallet(session)
+    repo = NonceRepo(session)
+    await repo.init_for_wallet("test-wallet", 114, 42)
+    await session.commit()
+
+    # Second call with a different starting_nonce and force=False — must be a no-op.
+    result = await repo.init_for_wallet("test-wallet", 114, 99, force=False)
+    await session.commit()
+
+    assert result.next_nonce == 42  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_init_for_wallet_missing_wallet_raises_nonce_wallet_not_found(  # type: ignore[no-untyped-def]
+    tmp_path,
+) -> None:
+    """FK violation (wallet not in wallets table) raises NonceWalletNotFoundError even with force=True.
+
+    Uses raw DDL with REFERENCES + PRAGMA foreign_keys=ON (the FK is in the alembic migration
+    DDL, not in the SQLAlchemy Table metadata, so metadata.create_all does not create it).
+    """
+    from sqlalchemy import event, text
+    from sqlalchemy.engine import Engine
+
+    db = tmp_path / "fk_test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db}")
+
+    @event.listens_for(Engine, "connect")
+    def _pragmas(conn, _record) -> None:  # type: ignore[no-untyped-def]
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+
+    async with engine.begin() as conn:
+        # Create wallets table (no FK — just needs to exist for the nonces FK to reference it).
+        await conn.execute(
+            text(
+                "CREATE TABLE wallets ("
+                "  name TEXT PRIMARY KEY,"
+                "  address TEXT NOT NULL,"
+                "  privkey_ciphertext TEXT NOT NULL,"
+                "  vault_master_key TEXT NOT NULL,"
+                "  policy_path TEXT NOT NULL,"
+                "  created_at DATETIME NOT NULL"
+                ")"
+            )
+        )
+        # Create nonces WITH the FK constraint (mirrors the alembic migration DDL).
+        await conn.execute(
+            text(
+                "CREATE TABLE nonces ("
+                "  wallet TEXT NOT NULL,"
+                "  chain INTEGER NOT NULL,"
+                "  next_nonce INTEGER NOT NULL,"
+                "  last_confirmed INTEGER,"
+                "  last_reconciled_at DATETIME NOT NULL,"
+                "  PRIMARY KEY (wallet, chain),"
+                "  FOREIGN KEY (wallet) REFERENCES wallets(name)"
+                ")"
+            )
+        )
+
+    async with AsyncSession(engine) as session:
+        repo = NonceRepo(session)
+        with pytest.raises(NonceWalletNotFoundError):
+            await repo.init_for_wallet("ghost-wallet", 114, 0, force=True)
+
+    await engine.dispose()

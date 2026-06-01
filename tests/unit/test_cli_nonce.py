@@ -93,3 +93,39 @@ def test_nonce_init_unreachable_exits_2(monkeypatch: pytest.MonkeyPatch) -> None
         result = runner.invoke(app, _NONCE_INIT_CMD)
 
     assert result.exit_code == 2
+
+
+def test_nonce_init_force_flag_sends_force_true_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--force sends force: true in the JSON body."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")
+    fake = MagicMock(
+        status_code=201,
+        text='{"wallet":"alice","chain":114,"next_nonce":0}',
+    )
+    with patch("fwd.cli.nonce.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app, ["nonce", "init", "--wallet", "alice", "--chain", "114", "--starting-nonce", "0", "--force"]
+        )
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    mock_post.assert_called_once()
+    sent_json = mock_post.call_args.kwargs["json"]
+    assert sent_json["force"] is True
+
+
+def test_nonce_init_no_force_flag_sends_force_false_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting --force sends force: false in the JSON body."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")
+    fake = MagicMock(
+        status_code=201,
+        text='{"wallet":"alice","chain":114,"next_nonce":0}',
+    )
+    with patch("fwd.cli.nonce.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(app, _NONCE_INIT_CMD)
+
+    assert result.exit_code == 0, result.stdout + (result.stderr or "")
+    mock_post.assert_called_once()
+    sent_json = mock_post.call_args.kwargs["json"]
+    assert sent_json["force"] is False

@@ -24,6 +24,9 @@ def init(
     starting_nonce: int = typer.Option(
         ..., "--starting-nonce", help="Initial next_nonce (a fresh wallet = 0)."
     ),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing nonce (correct a mis-seed). Audited."
+    ),
 ) -> None:
     """Seed the next_nonce for a (wallet, chain). Admin-authenticated."""
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
@@ -34,7 +37,7 @@ def init(
     try:
         r = httpx.post(
             f"{url}/v1/admin/nonce-init",
-            json={"wallet": wallet, "chain": chain, "starting_nonce": starting_nonce},
+            json={"wallet": wallet, "chain": chain, "starting_nonce": starting_nonce, "force": force},
             headers={"Authorization": f"Bearer {admin}"},
             timeout=30.0,
         )

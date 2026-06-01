@@ -38,6 +38,7 @@ class NonceInitBody(BaseModel):
     wallet: str = Field(..., min_length=1, max_length=64)
     chain: int = Field(..., ge=1)
     starting_nonce: int = Field(..., ge=0)
+    force: bool = Field(False)
 
 
 class NonceInitResponse(BaseModel):
@@ -48,7 +49,12 @@ class NonceInitResponse(BaseModel):
 
 def _req_json(body: NonceInitBody) -> str:
     return _canonical_json(
-        {"wallet": body.wallet, "chain": body.chain, "starting_nonce": body.starting_nonce}
+        {
+            "wallet": body.wallet,
+            "chain": body.chain,
+            "starting_nonce": body.starting_nonce,
+            "force": body.force,
+        }
     )
 
 
@@ -64,7 +70,7 @@ async def post_nonce_init(
 ) -> NonceInitResponse:
     async with admin_scope_cm as scope:
         existing = await scope.nonce_repo.get(body.wallet, body.chain, missing_ok=True)
-        if existing is not None:
+        if existing is not None and not body.force:
             await scope.audit_repo.append(
                 action="nonce-init",
                 decision="denied",
@@ -86,7 +92,7 @@ async def post_nonce_init(
             )
         try:
             row = await scope.nonce_repo.init_for_wallet(
-                body.wallet, body.chain, body.starting_nonce
+                body.wallet, body.chain, body.starting_nonce, force=body.force
             )
         except NonceWalletNotFoundError as exc:
             await scope.audit_repo.append(
@@ -102,16 +108,28 @@ async def post_nonce_init(
                 status_code=404,
                 detail={"error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"},
             ) from exc
-        await scope.audit_repo.append(
-            action="nonce-init",
-            decision="approved",
-            caller=None,
-            request_json=_req_json(body),
-            decision_reason=None,
-            outcome=_canonical_json({"next_nonce": row.next_nonce}),
-        )
+        if existing is not None:
+            # Force-overwrite path: approved with before→after outcome (sensitive, Core #5).
+            await scope.audit_repo.append(
+                action="nonce-init",
+                decision="approved",
+                caller=None,
+                request_json=_req_json(body),
+                decision_reason="force_overwrite",
+                outcome=_canonical_json({"from": existing.next_nonce, "to": row.next_nonce}),
+            )
+        else:
+            # Create path: approved with next_nonce outcome.
+            await scope.audit_repo.append(
+                action="nonce-init",
+                decision="approved",
+                caller=None,
+                request_json=_req_json(body),
+                decision_reason=None,
+                outcome=_canonical_json({"next_nonce": row.next_nonce}),
+            )
         # Approved path: no explicit commit — AdminScopeCM.__aexit__ commits the
-        # shared session once (seed + audit row atomic under one BEGIN IMMEDIATE).
+        # shared session once (seed/overwrite + audit row atomic under one BEGIN IMMEDIATE).
     return NonceInitResponse(wallet=row.wallet, chain=row.chain, next_nonce=row.next_nonce)
 
 

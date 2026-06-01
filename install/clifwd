@@ -17,7 +17,8 @@
 # which the in-container CLI can do. It is routed to the host orchestrator below.
 set -eu
 
-FWD_DIR="${FWD_DIR:-/opt/fwd}"
+export FWD_DIR="${FWD_DIR:-/opt/fwd}"
+export FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
 
 if [ "${1:-}" = "onboard" ]; then
   shift

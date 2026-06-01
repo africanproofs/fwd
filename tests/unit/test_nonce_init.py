@@ -331,3 +331,133 @@ async def test_nonce_init_audit_rows(
     assert denied_rows[0]["decision_reason"] == "already_initialized"
 
     await session.close()
+
+
+# ---------------------------------------------------------------------------
+# force=True overwrite tests (a50)
+# ---------------------------------------------------------------------------
+
+
+async def test_nonce_init_force_overwrites_existing_201(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force=true on an existing (wallet, chain) → 201; row reflects new value; approved audit row
+    with decision_reason=force_overwrite and from/to outcome."""
+    import json
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
+    settings_mod.get_settings.cache_clear()
+
+    session = await _make_real_db_session(tmp_path)
+    await _seed_wallet(session, "dave")
+
+    # Pre-seed the nonce at 50.
+    await NonceRepo(session).init_for_wallet("dave", 114, 50)
+    await session.commit()
+
+    cm = _RealAdminScopeCM(session)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_admin_scope] = lambda: cm
+
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post(
+        "/v1/admin/nonce-init",
+        json={"wallet": "dave", "chain": 114, "starting_nonce": 10, "force": True},
+        headers=_ADMIN_HDR,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["next_nonce"] == 10
+
+    # Verify the DB row was overwritten.
+    nonce = await NonceRepo(session).get("dave", 114, missing_ok=True)
+    assert nonce is not None
+    assert nonce.next_nonce == 10
+    assert nonce.last_confirmed is None
+
+    # Verify the audit row.
+    rows = await _all_audit_rows(session)
+    force_rows = [
+        row for row in rows
+        if row["action"] == "nonce-init"
+        and row["decision"] == "approved"
+        and row["decision_reason"] == "force_overwrite"
+    ]
+    assert len(force_rows) == 1, f"expected exactly one force_overwrite audit row, got {force_rows}"
+    outcome = json.loads(force_rows[0]["outcome"])  # type: ignore[arg-type]
+    assert outcome["from"] == 50
+    assert outcome["to"] == 10
+
+    await session.close()
+
+
+async def test_nonce_init_non_force_on_existing_still_409(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force=false (omitted) on an existing (wallet, chain) still → 409."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
+    settings_mod.get_settings.cache_clear()
+
+    session = await _make_real_db_session(tmp_path)
+    await _seed_wallet(session, "eve")
+
+    await NonceRepo(session).init_for_wallet("eve", 114, 3)
+    await session.commit()
+
+    cm = _RealAdminScopeCM(session)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_admin_scope] = lambda: cm
+
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post(
+        "/v1/admin/nonce-init",
+        json={"wallet": "eve", "chain": 114, "starting_nonce": 99},  # no force field
+        headers=_ADMIN_HDR,
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["error"] == "nonce_already_initialized"
+
+    # next_nonce must remain unchanged.
+    nonce = await NonceRepo(session).get("eve", 114, missing_ok=True)
+    assert nonce is not None
+    assert nonce.next_nonce == 3
+
+    await session.close()
+
+
+async def test_nonce_init_force_on_non_existing_creates_201(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """force=true on a non-existing (wallet, chain) creates the row → 201."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-secret")
+    settings_mod.get_settings.cache_clear()
+
+    session = await _make_real_db_session(tmp_path)
+    await _seed_wallet(session, "frank")
+
+    cm = _RealAdminScopeCM(session)
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_admin_scope] = lambda: cm
+
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post(
+        "/v1/admin/nonce-init",
+        json={"wallet": "frank", "chain": 114, "starting_nonce": 7, "force": True},
+        headers=_ADMIN_HDR,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["next_nonce"] == 7
+
+    # Verify the row exists.
+    nonce = await NonceRepo(session).get("frank", 114, missing_ok=True)
+    assert nonce is not None
+    assert nonce.next_nonce == 7
+
+    await session.close()
