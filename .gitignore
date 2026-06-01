@@ -50,6 +50,10 @@ config/callers.yaml
 # These patterns catch the common in-repo dev placements.
 policy.yaml
 /policy.yaml
+
+# DR/restore runbook — references the sealed-master backup; local-only (Core #12).
+/RESTORE-RUNBOOK.md
+
 # Dev Vault unseal output (Core invariant #17 dev shortcut).
 # These hold all 5 unseal shares + root token. NEVER commit.
 vault-init-output.json

@@ -18,6 +18,8 @@ The workflow doctrine below is settled — transferred verbatim from FICSM (`../
 
 The project's history — per-version ship narratives + architectural decisions — lives in `docs/history/` (`SHIP-LOG.md` + per-version records, indexed in `docs/history/README.md`) and `docs/decisions.md`. Those are the quarantined record; the current-state docs describe only the present (Core invariant #18).
 
+Disaster recovery — restoring fwd's wallets from the sealed-master backup (`master.key` + `state.db`) onto a new or rebuilt host — is documented in `RESTORE-RUNBOOK.md` (gitignored, Core invariant #12: it references the backup bundle and is kept with the off-host bundle, never committed).
+
 ## What FWD Deliberately IS NOT
 
 These are not in scope until a real consumer or proven need surfaces. Re-introducing any requires explicit operator authorization tied to a concrete consumer:
