@@ -288,8 +288,9 @@ nonce_seed() {  # name chain starting_nonce
 }
 ask_nonce() {  # name -> echoes the starting nonce to stdout
   if [ "$IMPORT_EXISTING" -eq 1 ] && [ "$TTY_OK" -eq 1 ]; then
-    ask_tty "  current on-chain nonce (tx count) for imported $1 [default 0]: "
-    if [ -z "$REPLY" ]; then warn "no nonce for $1 — using 0 (fix via nonce-sync if the key has already sent txs)"; printf '0'
+    printf '   %s sends transactions, so fwd needs its next nonce (fwd is offline; it cannot read the chain).\n' "$1" >/dev/tty
+    ask_tty "   nonce for $1 = its current on-chain transaction count (look up $(wallet_addr "$1") on the block explorer; enter 0 if this key has never sent a tx) [default 0]: "
+    if [ -z "$REPLY" ]; then warn "no nonce given for $1 — using 0 (fix later via clifwd nonce-sync if the key has already sent txs)"; printf '0'
     else printf '%s' "$REPLY"; fi
   else
     printf '0'
@@ -306,9 +307,9 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
   for net in $NETLIST; do
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "claimer-$net" "wc/claimer-$net" "the claim executor — ClaimSetupManager.setClaimExecutors authorizes it to call RewardManager.claim"
+      import_pasted "claimer-$net" "wc/claimer-$net" "the claim executor (authorized via ClaimSetupManager.setClaimExecutors to call RewardManager.claim)"
     else
-      wallet_create "claimer-$net" "wc/claimer-$net" "the claim executor — RewardManager.claim caller (authorized via ClaimSetupManager.setClaimExecutors)"
+      wallet_create "claimer-$net" "wc/claimer-$net" "the claim executor (RewardManager.claim caller; authorized via ClaimSetupManager.setClaimExecutors)"
     fi
     caller_create "claim-$net" "perm/claim-$net"
     seed_sender "claimer-$net" "$cid"
@@ -326,7 +327,7 @@ if [ "$HAS_FSP" -eq 1 ]; then
   fi
   for net in $NETLIST; do
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
-    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your signing policy address — the _signature signer FlareSystemsManager.signUptimeVote/signRewards recovers"
+    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your signing policy address (the _signature signer FlareSystemsManager.signUptimeVote/signRewards recovers)"
     caller_create "fsp-sign-$net"   "fsp/$net"
     caller_create "fsp-submit-$net" "perm/fsp-submit-$net"
     seed_sender "fsp-sender" "$cid"
