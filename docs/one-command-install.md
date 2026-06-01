@@ -113,32 +113,35 @@ the **host** (it `docker compose restart`s the daemon and writes the host policy
 file — neither possible from inside the container) — see the reward-onboarding
 section below.
 
-## Reward onboarding — the default claim + FSP policy (the custody gate)
+## Reward onboarding — set up by default, in one terminal
 
-The installer stages the runtime but stops before keys and on-chain authorization
-— that is your custody event, not the installer's. fwd boots **inert**: empty
-default-deny policy, zero wallets, signs nothing.
-
-You do **not** have to learn the policy schema. fwd ships a **default reward
-policy** covering the two revenue operations — claiming FTSO rewards
-(`RewardManager.claim`) and signing FSP rewards (`signUptimeVote` /
-`signRewards`) — with deterministic wallet + caller names.
-
-### The one command
+Reward signing + fee claiming are the **default setup for every install**: after
+bringing the daemon up, `install.sh` runs the guided onboarding **wizard**
+automatically, in the same terminal. (`--inert`, or a headless / no-tty run, skips
+it and brings fwd up signing nothing — see the fallback runbook below.) You can also
+run the wizard any time:
 
 ```sh
-clifwd onboard rewards fsp --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
+clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
 ```
 
-`clifwd onboard rewards` runs the whole sequence — generate the default policy,
-validate it, load it (restart), create the fwd-generated wallets, mint the caller
-tokens (printed once), seed the sender nonces — and prints the two operator-only
-**GATES** (your FSP signing-key import + the on-chain authorization). It is
-**idempotent**: re-running skips anything already created and skips the restart
-if the policy hasn't changed. Flags: `--import-existing` (migration — see below),
-`--claim-only` / `--sign-only`, `--skip-fsp-import` (defer the key-import gate), and
-a comma list for `--networks`. For mainnet, use `--networks flare` /
-`--networks songbird` (the generator fills the right contract addresses + chain id).
+You do **not** have to learn the policy schema. The wizard **narrates each step**
+and does the whole sequence: generate the default reward policy (the allow-list for
+claiming `RewardManager.claim` + signing FSP `signUptimeVote`/`signRewards`, your
+recipient pinned), validate it, load it (restart out of inert), provision the
+wallets fwd signs from, mint the caller tokens (shown once), seed the sender nonces,
+and print the final on-chain step. It is **idempotent** (re-running skips what
+exists; no restart if the policy is unchanged). Flags: `--import-existing`
+(migration — see below), `--claim-only` / `--sign-only`, `--skip-fsp-import` (defer
+the key gate), and a comma list for `--networks` (`flare` / `songbird` for mainnet).
+
+**Pasting your key (single terminal).** At the import step the wizard prompts you to
+**paste each private key directly (hidden input)** — no pre-placed file. fwd pipes
+the pasted key straight into the daemon container, seals it under the master, and
+shreds the transient input: it never touches this host's disk and never leaves the
+box. (Transient surface only — terminal input → a cleared shell var → a local pipe →
+a 0600 in-container temp that is shredded; proportionate to low-value automation
+keys, per the threat model.) Paste blank to defer a key and import it later.
 
 **Reward class.** The command takes a class: `rewards fsp` (the default — FTSO
 claim + FSP signing, today's provider rewards) or `rewards validator`

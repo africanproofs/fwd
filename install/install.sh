@@ -1,14 +1,17 @@
 #!/bin/sh
 # fwd installer — build-from-source, single-host FTSO provider signing stack.
 #
-#   curl -sfL https://get.proofs.africa/fwd | sh -                 # fwd custody daemon
+#   curl -sfL https://get.proofs.africa/fwd | sh -                 # install + guided onboarding
 #   curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif # + clif claim/FSP layer
+#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --inert     # bring up inert, skip onboarding
 #
-# Brings the stack up INERT: an empty default-deny policy, zero wallets, healthy.
-# The worst case of running this is a daemon that can sign NOTHING. It then STOPS
-# at the custody gate — keys + on-chain authorization are an operator security
-# event, never the installer's job (see docs/one-command-install.md). Builds the
-# image from pinned source locally; no image registry, no prebuilt-binary trust.
+# Builds the image from pinned source locally (no registry, no prebuilt-binary
+# trust), brings the stack up, then — by DEFAULT, in this same terminal — runs the
+# guided reward-onboarding wizard so reward signing + fee claiming work out of the
+# box. The wizard narrates each step and PASTES your key(s) directly (hidden); the
+# custodial acts (your key, the on-chain authorization) stay yours. `--inert` (or a
+# headless/no-tty run) skips the wizard: the stack comes up signing NOTHING (empty
+# default-deny policy) and prints the onboarding command to run later.
 #
 # Re-runnable: preserves an existing master.key / .env / policy.yaml.
 #
@@ -20,6 +23,7 @@
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
 #   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
+#   onboarding: --recipient 0xADDR  --networks LIST(=coston2)  --import-existing  --inert
 #   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --help
 set -eu
 
@@ -36,6 +40,10 @@ WITH_CLIF=0
 START=1
 BUILD=1
 MODE=dev
+INERT=0
+RECIPIENT=""
+ONB_NETWORKS=coston2
+IMPORT_EXISTING=0
 
 log()  { printf '\033[1;33m[fwd-install]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[fwd-install] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -50,8 +58,12 @@ while [ "$#" -gt 0 ]; do
     --dev)         MODE=dev ;;
     --dir)         shift; FWD_DIR="${1:?--dir needs a value}" ;;
     --ref)         shift; FWD_REF="${1:?--ref needs a value}" ;;
+    --inert)           INERT=1 ;;
+    --recipient)       shift; RECIPIENT="${1:?--recipient needs a value}" ;;
+    --networks)        shift; ONB_NETWORKS="${1:?--networks needs a value}" ;;
+    --import-existing) IMPORT_EXISTING=1 ;;
     -h|--help)
-      sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
       exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
@@ -195,41 +207,54 @@ else
   log "--no-start: staged but not started. Start later with:  sudo fwd start"
 fi
 
-# --- 8. custody gate: the next required operator action -------------------
+# --- 8. onboard by default, or stop at the custody gate (--inert / headless) ---
 printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
   "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
-printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently signs NOTHING (empty default-deny policy, zero wallets).\n'
-cat <<EOF
 
-One command does all of the below:
+ONBOARD=1
+[ "$INERT" -eq 1 ] && ONBOARD=0                  # operator opted out
+[ "$START" -eq 1 ] || ONBOARD=0                  # need fwd running to onboard
+{ true >/dev/tty; } 2>/dev/null || ONBOARD=0     # need a terminal for the wizard prompts
+
+if [ "$ONBOARD" -eq 1 ]; then
+  log "reward signing + fee claiming are the default setup — starting the guided wizard"
+  log "(skip with --inert; re-run any time with: clifwd onboard rewards)"
+  set -- rewards --networks "$ONB_NETWORKS"
+  [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
+  [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
+  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" "$SRC/install/onboard" "$@"; then
+    :
+  else
+    log "onboarding did not finish — re-run any time: clifwd onboard rewards --recipient 0xADDR --networks $ONB_NETWORKS"
+  fi
+else
+  printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently signs NOTHING (empty default-deny policy, zero wallets).\n'
+  [ "$INERT" -eq 1 ] && log "--inert: skipped the onboarding wizard (stopped at the custody gate)."
+  cat <<EOF
+
+Set up reward signing + fee claiming with one guided, single-terminal command:
   clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks coston2
-(idempotent; ends by printing the two operator-only GATES).
+(idempotent; narrates each step, pastes your key, ends with the on-chain step).
 Migrating an existing provider? add --import-existing to import your existing
-executor + sender keys instead of generating fresh ones. The manual sequence:
+executor + sender keys instead of generating fresh ones.
 
-Next — bring up reward signing (the custody gate; your security event, not the installer's).
-The default reward policy covers BOTH revenue ops: claiming (RewardManager.claim)
-and FSP signing (signUptimeVote / signRewards). This is the Coston2 REHEARSAL
-sequence — the names match what the generator emits, so it is copy-paste; you
-change only your recipient (step 2) and your imported key (step 5). For mainnet,
-swap coston2 -> flare / songbird everywhere.
-
+The manual equivalent (what the wizard does), for Coston2:
   1. (done) the sealed master is generated.
   2. clifwd policy init --networks coston2 --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS > $SRC/config/policy.yaml
      clifwd policy validate --schema-only      # the '>' runs on the host -> writes the mounted policy file
-  3. sudo fwd restart                          # LOAD the policy (REQUIRED before step 4 —
-                                               #   wallets/callers create validate against the LOADED policy)
+  3. sudo fwd restart                          # LOAD the policy (REQUIRED before step 4)
   4. clifwd wallets create --name claimer-coston2 --policy wc/claimer-coston2
      clifwd wallets create --name fsp-sender      --policy wc/fsp-sender
-  5. clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 --privkey-file /abs/path/signing.key --shred-source   # GATE 1: your registered key
+  5. clifwd wallets import --name fsp-signing-coston2 --policy wc/fsp-coston2 --privkey-file /abs/path/signing.key --shred-source
   6. clifwd callers create --name claim-coston2      --policy perm/claim-coston2
      clifwd callers create --name fsp-sign-coston2   --policy fsp/coston2
      clifwd callers create --name fsp-submit-coston2 --policy perm/fsp-submit-coston2
-  7. clifwd policy validate                    # full gate: must pass
+  7. clifwd policy validate
   8. clifwd nonce init --wallet claimer-coston2 --chain 114 --starting-nonce 0
      clifwd nonce init --wallet fsp-sender      --chain 114 --starting-nonce 0
-  9. GATE 2 — on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors
+  9. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors
      (authorize claimer-coston2) + setAllowedClaimRecipients + FSP signing-policy registration.
  10. rehearse a real claim + FSP sign on Coston2, then add flare / songbird and go live.
 Full detail + mainnet variants: docs/one-command-install.md
 EOF
+fi
