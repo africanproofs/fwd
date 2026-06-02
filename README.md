@@ -189,6 +189,7 @@ Auth: **caller** = the bearer API key minted in step 5; **admin** = `FWD_ADMIN_K
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke a caller's API key |
 | `POST` | `/v1/admin/nonce-init` | admin | Seed the starting nonce for a (wallet, chain) |
 | `POST` | `/v1/admin/nonce-sync` | admin | Bounded-monotonic advance of fwd's nonce to operator-supplied on-chain truth |
+| `GET` | `/v1/admin/nonce/{wallet}/{chain}` | admin | Read the current `next_nonce` + `last_confirmed` for a (wallet, chain) (read-only) |
 | `GET` | `/v1/admin/nonce/holes` | admin | Surface stale/orphaned pending reservations for operator alarm |
 
 `sign-transaction` body: `wallet`, `chain`, `to`, `value_wei`, `data`, `gas`,
@@ -214,10 +215,12 @@ commands (`master generate`, `wallets import`, `audit *`, `fsp scope`,
 | `clifwd wallets create --name … --policy …` | Create a wallet (fwd generates + seals) |
 | `clifwd wallets import --name … --privkey-file … --policy …` | Import an existing key (optionally shreds the source file with `--shred-source`) |
 | `clifwd wallets list` | List wallets |
-| `clifwd callers create --name … --policy …` | Mint a caller API key (printed once) |
+| `clifwd callers create --name … --policy … [--replace]` | Mint a caller API key (printed once); `--replace` re-mints a REVOKED caller of the same name |
 | `clifwd callers list` | List callers |
 | `clifwd callers revoke --name …` | Revoke a caller key |
-| `clifwd nonce init --wallet … --chain … --starting-nonce …` | Seed a (wallet, chain) nonce |
+| `clifwd nonce init --wallet … --chain … --starting-nonce … [--force]` | Seed a (wallet, chain) nonce (`--force` overwrites an existing row — audited) |
+| `clifwd nonce get --wallet … --chain … [--json]` | Read the current `next_nonce` (exit 4 if no row) |
+| `clifwd nonce sync --wallet … --chain … --on-chain-count …` | Bounded-monotonic advance to on-chain truth (exit 5 if out of bounds) |
 | `clifwd audit verify` / `show SEQ` / `tail -n N` | Walk / inspect the hash-chained audit log |
 | `clifwd fsp scope --caller … --wallet … --policy-path … --message-types …` | Print the FSP policy stanza (read-only helper) |
 

@@ -348,6 +348,7 @@ The mounted surface (in `src/fwd/main.py`) is frozen for v1. Rows tagged **(defe
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke caller |
 | `POST` | `/v1/admin/nonce-init` | admin | Seed a (wallet, chain) `next_nonce` (fwd cannot read chain). |
 | `POST` | `/v1/admin/nonce-sync` | admin | Bounded-monotonic advance of fwd's nonce view to operator-supplied on-chain truth. |
+| `GET` | `/v1/admin/nonce/{wallet}/{chain}` | admin | Read the current `next_nonce` + `last_confirmed` for a (wallet, chain). Read-only; no audit row. |
 | `GET` | `/v1/admin/nonce/holes` | admin | List orphaned pending reservations (operator alarm). |
 
 Deferred (NOT mounted; explicit Core-#18 markers): `GET /v1/wallets` (caller-scoped list — today only admin `GET /v1/admin/wallets`); `GET /v1/audit` (HTTP — today the CLI walker `clifwd audit verify|show|tail`); `POST /v1/sign-typed-data` (EIP-712 — Phase 10).

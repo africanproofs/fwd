@@ -122,6 +122,7 @@ fi
 
 NETS="songbird"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
 IDENTITY=""; FSP_SENDER_MODE="per-network"; ACCEPT_PENDING=0; ROTATE_MISSING=0; SHOW_SECRETS=0
+ONBOARD_INCOMPLETE=0; UNRESOLVED_NONCES=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --recipient)       RECIP="${2:-}"; shift 2 ;;
@@ -243,7 +244,7 @@ step "Loading the policy" "fwd boots inert (signs nothing); it reads the policy 
 if [ "$CHANGED" -eq 1 ]; then
   ( cd "$FWD_DIR"
     COMPOSE="-f docker-compose.yml"
-    [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
+    [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
     docker compose $COMPOSE restart fwd >/dev/null ) || die "restart failed"
   i=0; while [ "$i" -lt 20 ]; do
     st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
@@ -353,7 +354,7 @@ seed_sender() {  # name chain — seed nonce if the wallet exists, else a deferr
 
 # ---- clif availability (graceful degradation to manual nonce entry) ----
 CLIF_OK=0
-if [ -n "${CLIF_SRC:-}" ] && [ -f "$FWD_DIR/docker-compose.clif.yml" ] && [ -x "$FWD_DIR/install/clif" ]; then
+if [ -d "${CLIF_SRC:-}" ] && [ -f "$FWD_DIR/docker-compose.clif.yml" ] && [ -x "$FWD_DIR/install/clif" ]; then
   CLIF_OK=1
 fi
 # Without a clif layer there is no env to write tokens to — show them so they're not lost.
@@ -439,6 +440,8 @@ reconcile_nonce() {  # name chain net addr
   if confirm "fwd nonce for $_rn_name ($_rn_cur) is AHEAD of chain ($_rn_target); rewind? (safe only if no fwd-signed tx is in flight)"; then
     nonce_init_force "$_rn_name" "$_rn_chain" "$_rn_target"; note "nonce rewound: $_rn_name $_rn_cur -> $_rn_target (forced)"; return 0
   fi
+  ONBOARD_INCOMPLETE=1
+  UNRESOLVED_NONCES="$UNRESOLVED_NONCES $_rn_name(chain=$_rn_chain:fwd=$_rn_cur>chain_truth=$_rn_target)"
   warn "left $_rn_name at $_rn_cur (no rewind) — resolve before using this wallet"
 }
 
@@ -451,21 +454,28 @@ getval() {  # file key default
   printf '%s' "$3"
 }
 
+token_ok() {  # token -> 0 iff a well-formed fwd live token (safe to eval-assign)
+  printf '%s' "$1" | grep -qE '^fwd_live_[A-Za-z0-9_-]{43}$'
+}
+
 # mint or recover a caller token; sets the named outvar to the FINAL token to write
 caller_ensure() {  # name policy outvar envfile envkey
   set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" 2>/dev/null)"; _ce_rc=$?; set -e
   case "$_ce_rc" in
-    0) eval "$3=\$_ce_k"
+    0) token_ok "$_ce_k" || die "minted token for $1 has unexpected format (not fwd_live_<43>) — aborting before eval"
+       eval "$3=\$_ce_k"
        if [ "$SHOW_SECRETS" -eq 1 ]; then note "caller $1: token = $_ce_k"
        else note "caller $1: token minted -> clif env (prefix $(printf '%s' "$_ce_k" | cut -c1-12)…)"; fi ;;
     3) _ce_have="$(getval "$4" "$5" "")"
        if [ -n "$_ce_have" ]; then
+         token_ok "$_ce_have" || die "token for $1 in $(basename "$4") is malformed/tampered (not fwd_live_<43>) — refusing to use it; fix or remove that line"
          eval "$3=\$_ce_have"; note "caller $1 exists; preserving the token already in $(basename "$4")"
        elif [ "$ROTATE_MISSING" -eq 1 ]; then
          note "caller $1 exists but its one-time token is lost and $(basename "$4") has none — rotating"
          clifwd callers revoke --name "$1" >/dev/null 2>&1 || die "revoke $1 failed"
          set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" --replace 2>/dev/null)"; _ce_rc=$?; set -e
          [ "$_ce_rc" -eq 0 ] || die "re-mint $1 failed (exit $_ce_rc)"
+         token_ok "$_ce_k" || die "re-minted token for $1 has unexpected format — aborting before eval"
          eval "$3=\$_ce_k"; note "caller $1 re-minted -> clif env"
        else
          die "caller $1 exists but its one-time token is lost and $(basename "$4") has no token; re-run with --rotate-missing-callers to revoke+re-mint, or restore the token to $(basename "$4")"
@@ -489,7 +499,7 @@ env_write() {  # net claim_tok sign_tok submit_tok
       printf 'FWD_WALLET_NAME=%s\n' "claimer-$_ew_net"
       printf 'FWD_CALLER_TOKEN=%s\n' "$_ew_ct"
     fi
-    printf 'WRAP_REWARDS=%s\n' "$(getval "$_ew_dst" WRAP_REWARDS true)"
+    printf 'WRAP_REWARDS=%s\n' "$(getval "$_ew_dst" WRAP_REWARDS false)"
     if [ "$HAS_FSP" -eq 1 ]; then
       printf 'FSP_SIGN_CALLER_TOKEN=%s\n' "$_ew_st"
       printf 'FSP_SUBMIT_CALLER_TOKEN=%s\n' "$_ew_sub"
@@ -588,4 +598,9 @@ printf '\nThen rehearse a real claim + FSP sign through clif (Songbird is the ca
 printf "verify the RewardClaimed event on-chain and 'clifwd audit verify', before Flare.\n"
 printf 'Full detail: docs/one-command-install.md\n'
 printf '=============================================================================\n'
-printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'
+if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
+  printf '\n\033[1;31m⚠ onboard finished WITH UNRESOLVED NONCE DRIFT\033[0m — fwd nonce is AHEAD of chain for:%s\n' "$UNRESOLVED_NONCES"
+  printf '   Those wallets were left as-is (no rewind). Resolve before use — investigate in-flight txs; rewind via `clifwd nonce init --force` ONLY if safe. This is NOT a completed onboard.\n'
+else
+  printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'
+fi
