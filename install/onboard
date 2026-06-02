@@ -407,18 +407,20 @@ cutover_msg() {  # name addr net latest pending
 # the no-hand-typing nonce state machine (chain truth -> fwd row reconciliation)
 reconcile_nonce() {  # name chain net addr
   _rn_name="$1"; _rn_chain="$2"; _rn_net="$3"; _rn_addr="$4"
-  if ! _rn_vals="$(read_chain_nonce "$_rn_net" "$_rn_addr")" || [ -z "$_rn_vals" ]; then
-    warn "couldn't read chain nonce for $_rn_name ($_rn_addr) via clif — falling back to manual entry"
-    nonce_seed "$_rn_name" "$_rn_chain" "$(ask_nonce "$_rn_name")"; return 0
+  if _rn_vals="$(read_chain_nonce "$_rn_net" "$_rn_addr")" && [ -n "$_rn_vals" ]; then
+    # shellcheck disable=SC2086
+    set -- $_rn_vals; _rn_latest="$1"; _rn_pending="$2"; _rn_cid="$3"
+    [ "$_rn_cid" = "$_rn_chain" ] || die "clif chain_id ($_rn_cid) != fwd chain ($_rn_chain) for $_rn_net"
+    if [ "$_rn_pending" -eq "$_rn_latest" ]; then _rn_target="$_rn_latest"
+    elif [ "$_rn_pending" -gt "$_rn_latest" ]; then
+      if [ "$ACCEPT_PENDING" -eq 1 ]; then _rn_target="$_rn_pending"
+      else cutover_msg "$_rn_name" "$_rn_addr" "$_rn_net" "$_rn_latest" "$_rn_pending"; die "cutover blocked for $_rn_name (pending > latest)"; fi
+    else _rn_target="$_rn_latest"; fi
+  else
+    warn "couldn't read chain nonce for $_rn_name ($_rn_addr) via clif — falling back to manual entry (the value you enter is reconciled against fwd's row, same as chain truth)"
+    _rn_target="$(ask_nonce "$_rn_name")"
+    case "$_rn_target" in ''|*[!0-9]*) die "manual nonce for $_rn_name must be a non-negative integer (got: '$_rn_target')" ;; esac
   fi
-  # shellcheck disable=SC2086
-  set -- $_rn_vals; _rn_latest="$1"; _rn_pending="$2"; _rn_cid="$3"
-  [ "$_rn_cid" = "$_rn_chain" ] || die "clif chain_id ($_rn_cid) != fwd chain ($_rn_chain) for $_rn_net"
-  if [ "$_rn_pending" -eq "$_rn_latest" ]; then _rn_target="$_rn_latest"
-  elif [ "$_rn_pending" -gt "$_rn_latest" ]; then
-    if [ "$ACCEPT_PENDING" -eq 1 ]; then _rn_target="$_rn_pending"
-    else cutover_msg "$_rn_name" "$_rn_addr" "$_rn_net" "$_rn_latest" "$_rn_pending"; die "cutover blocked for $_rn_name (pending > latest)"; fi
-  else _rn_target="$_rn_latest"; fi
   set +e; _rn_cur="$(fwd_nonce_get "$_rn_name" "$_rn_chain")"; _rn_grc=$?; set -e
   if [ "$_rn_grc" -eq 4 ]; then
     nonce_init_exact "$_rn_name" "$_rn_chain" "$_rn_target"; note "nonce seeded: $_rn_name @ chain $_rn_chain = $_rn_target (chain truth)"; return 0
@@ -594,13 +596,19 @@ else
     [ "$HAS_FSP" -eq 1 ] && printf '    FSP signing:   register fsp-signing-%s (%s) as your signing policy address (voter)\n' "$net" "$(wallet_addr "fsp-signing-$net")"
   done
 fi
-printf '\nThen rehearse a real claim + FSP sign through clif (Songbird is the canary),\n'
-printf "verify the RewardClaimed event on-chain and 'clifwd audit verify', before Flare.\n"
+printf '\nThen rehearse through clif — use the `clif` host wrapper (it loads the per-network env\n'
+printf 'onboarding just wrote); do NOT use raw `docker compose run` (that reads the placeholder .env):\n'
+for net in $NETLIST; do
+  [ "$HAS_CLAIM" -eq 1 ] && printf '  clif --network %s claim --type fee\n' "$net"
+  [ "$HAS_FSP" -eq 1 ]   && printf '  clif --network %s fsp uptime --epoch <N>   (and: clif --network %s fsp rewards --epoch <N>)\n' "$net" "$net"
+done
+printf "Verify the RewardClaimed event on-chain + 'clifwd audit verify' (Songbird is the canary) before Flare.\n"
 printf 'Full detail: docs/one-command-install.md\n'
 printf '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
   printf '\n\033[1;31m⚠ onboard finished WITH UNRESOLVED NONCE DRIFT\033[0m — fwd nonce is AHEAD of chain for:%s\n' "$UNRESOLVED_NONCES"
   printf '   Those wallets were left as-is (no rewind). Resolve before use — investigate in-flight txs; rewind via `clifwd nonce init --force` ONLY if safe. This is NOT a completed onboard.\n'
+  exit 1
 else
   printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'
 fi
