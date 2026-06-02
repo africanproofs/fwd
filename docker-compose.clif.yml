@@ -66,6 +66,114 @@ services:
     #   docker compose -f docker-compose.yml -f docker-compose.clif.yml \
     #     --profile cli run --rm clif chain nonce --network songbird --address 0x.. --json
 
+  clif-auto-coston2:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-auto-coston2
+    command: ["auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.coston2
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-fsp-auto-coston2:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-fsp-auto-coston2
+    command: ["fsp", "auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.coston2
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "fsp", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-auto-songbird:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-auto-songbird
+    command: ["auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.songbird
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-fsp-auto-songbird:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-fsp-auto-songbird
+    command: ["fsp", "auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.songbird
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "fsp", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-auto-flare:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-auto-flare
+    command: ["auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.flare
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
+  clif-fsp-auto-flare:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    container_name: clif-fsp-auto-flare
+    command: ["fsp", "auto"]
+    env_file:
+      - ${CLIF_SRC:-./clif}/.env.flare
+    networks: [fwd-callers, egress]
+    profiles: ["multichain"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "clif", "fsp", "status"]
+      interval: 300s
+      timeout: 15s
+      retries: 3
+      start_period: 1200s
+
 networks:
   # `fwd-callers` is defined by the base docker-compose.yml (internal: true) and
   # shared in the merged project — do NOT redeclare it here. `egress` is a normal

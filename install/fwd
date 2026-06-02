@@ -39,7 +39,7 @@ case "$cmd" in
     ;;
   ""|help|-h|--help)
     echo "usage: fwd {start|stop|restart|status|logs|onboard} [args...]" >&2
-    echo "       reward onboarding: fwd onboard rewards --recipient 0x.. --networks songbird" >&2
+    echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
     echo "       (guided stack onboarding: fwd custody + clif env + nonce seeding)" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0

@@ -63,8 +63,8 @@ wallets:
     policy_path: wc/claimer-songbird
   fsp-signing-songbird:  # the REGISTERED signing-policy key — IMPORT it (clifwd wallets import)
     policy_path: wc/fsp-songbird
-  fsp-sender:            # pays gas for the Leg-2 submit — fwd generates+seals; shared across networks
-    policy_path: wc/fsp-sender
+  fsp-sender-songbird:   # pays gas for the Leg-2 submit — fwd generates+seals; per-network (default)
+    policy_path: wc/fsp-sender-songbird
 
 permissions:
   # --- Claim rewards: RewardManager.claim ---
@@ -103,13 +103,13 @@ permissions:
             arg_predicates: { _rewardEpochId: any }
     # The signing key self-submits (the carve-out below) + the dedicated
     # sole-submitter sender pays gas. Both must be allowlisted here.
-    wallet_allowlist: [fsp-signing-songbird, fsp-sender]
+    wallet_allowlist: [fsp-signing-songbird, fsp-sender-songbird]
     rate: { per_hour: 50, per_day: 500 }
 
 wallet_constraints:
   wc/claimer-songbird: { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 4, per_day: 8 } }
   wc/fsp-songbird:     { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
-  wc/fsp-sender:       { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
+  wc/fsp-sender-songbird: { max_aggregate_value_wei_per_day: "0", rate: { per_hour: 50, per_day: 500 } }
 
 # FSP Leg-1: EIP-191 message signing (POST /v1/sign-fsp-message). No contract —
 # just the permitted message types + the signing wallet + rate.

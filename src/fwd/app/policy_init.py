@@ -67,7 +67,7 @@ def generate_policy(
     recipient: str | None,
     abis_dir: Path,
     networks_file: Path,
-    fsp_sender_mode: str = "shared",
+    fsp_sender_mode: str = "per-network",
     claim_rate: tuple[int, int] = (4, 8),
     fsp_rate: tuple[int, int] = (50, 500),
 ) -> str:

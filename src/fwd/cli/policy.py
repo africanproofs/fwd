@@ -109,7 +109,7 @@ def init(
         help="Claim recipient address, pinned in the claim arg-predicate (required for 'claim').",
     ),
     fsp_sender: str = typer.Option(  # noqa: B008
-        "shared",
+        "per-network",
         "--fsp-sender",
         help="FSP gas-paying sender wallet scope: per-network (fsp-sender-<net>) or shared (fsp-sender).",
     ),

@@ -64,7 +64,8 @@ def test_fsp_only_songbird_roundtrips_with_carveout(tmp_path: Path) -> None:
     # both an fsp_permissions and an EVM permissions allowlist.
     assert doc["fsp_self_submit"] == ["fsp-signing-songbird"]
     submit = doc["permissions"]["perm/fsp-submit-songbird"]
-    assert submit["wallet_allowlist"] == ["fsp-signing-songbird", "fsp-sender"]
+    # default is now per-network: fsp-sender-songbird (not shared fsp-sender)
+    assert submit["wallet_allowlist"] == ["fsp-signing-songbird", "fsp-sender-songbird"]
     assert submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["chains"] == [19]
     for m in submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["methods"].values():
         assert m["allow_unconstrained_args"] is True
@@ -74,8 +75,10 @@ def test_claim_and_fsp_multinetwork_roundtrips(tmp_path: Path) -> None:
     text = _gen("flare,songbird", "claim,fsp")
     assert _roundtrip(tmp_path, text) == []
     doc = yaml.safe_load(text)
-    # fsp-sender is shared across networks (one wallet, one constraint).
-    assert doc["wallets"]["fsp-sender"]["policy_path"] == "wc/fsp-sender"
+    # default is now per-network: fsp-sender-flare and fsp-sender-songbird (no shared fsp-sender)
+    assert "fsp-sender-flare" in doc["wallets"]
+    assert "fsp-sender-songbird" in doc["wallets"]
+    assert "fsp-sender" not in doc["wallets"]
     assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]
 
 
@@ -144,19 +147,26 @@ def test_fsp_sender_mode_per_network_multinetwork(tmp_path: Path) -> None:
     assert "fsp-sender-songbird" in sgb_submit["wallet_allowlist"]
 
 
-def test_fsp_sender_mode_shared_default_unchanged(tmp_path: Path) -> None:
-    """Default (no fsp_sender_mode / shared) still yields fsp-sender and wc/fsp-sender."""
+def test_fsp_sender_mode_default_is_per_network(tmp_path: Path) -> None:
+    """Default (no fsp_sender_mode) now yields fsp-sender-<net> and wc/fsp-sender-<net>."""
     text_default = _gen("songbird", "fsp")
-    text_explicit = _gen_mode("songbird", "fsp", "shared")
-
     doc_default = yaml.safe_load(text_default)
+
+    assert "fsp-sender-songbird" in doc_default["wallets"]
+    assert "fsp-sender" not in doc_default["wallets"]
+    assert doc_default["wallets"]["fsp-sender-songbird"]["policy_path"] == "wc/fsp-sender-songbird"
+    assert _roundtrip(tmp_path, text_default) == []
+
+
+def test_fsp_sender_mode_shared_explicit_still_works(tmp_path: Path) -> None:
+    """Explicit fsp_sender_mode='shared' still yields fsp-sender and wc/fsp-sender."""
+    text_explicit = _gen_mode("songbird", "fsp", "shared")
     doc_explicit = yaml.safe_load(text_explicit)
 
-    # Both are identical in wallet keys.
-    assert "fsp-sender" in doc_default["wallets"]
     assert "fsp-sender" in doc_explicit["wallets"]
-    assert "fsp-sender-songbird" not in doc_default["wallets"]
-    assert doc_default["wallets"]["fsp-sender"]["policy_path"] == "wc/fsp-sender"
+    assert "fsp-sender-songbird" not in doc_explicit["wallets"]
+    assert doc_explicit["wallets"]["fsp-sender"]["policy_path"] == "wc/fsp-sender"
+    assert _roundtrip(tmp_path, text_explicit) == []
 
 
 def test_fsp_sender_mode_unknown_raises() -> None:

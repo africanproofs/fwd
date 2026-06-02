@@ -3,7 +3,7 @@
 #
 #   curl -sfL https://get.proofs.africa/fwd | sh -                                              # install INERT (signs nothing)
 #   curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif                              # + clif claim/FSP layer (still inert)
-#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --onboard-rewards --recipient 0x..                 # install + guided onboarding
+#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --onboard-rewards --identity 0x.. --recipient 0x..  # install + guided onboarding
 #
 # Builds the image from pinned source locally (no registry, no prebuilt-binary
 # trust), brings the stack up inert (empty default-deny policy, signs nothing), then
@@ -22,7 +22,7 @@
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
 #   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
-#   onboarding (opt-in): --onboard-rewards  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
+#   onboarding (opt-in): --onboard-rewards  --identity 0xOWNER  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
 #   (--inert is accepted as a deprecated no-op — inert is now the default)
 #   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --help
 set -eu
@@ -41,6 +41,7 @@ START=1
 BUILD=1
 MODE=dev
 ONBOARD_REWARDS=0
+IDENTITY=""
 RECIPIENT=""
 ONB_NETWORKS=songbird
 IMPORT_EXISTING=0
@@ -60,6 +61,7 @@ while [ "$#" -gt 0 ]; do
     --ref)         shift; FWD_REF="${1:?--ref needs a value}" ;;
     --onboard-rewards) ONBOARD_REWARDS=1 ;;
     --inert)           log "--inert is now the default (install ends inert); onboarding is opt-in via --onboard-rewards — accepted as a no-op" ;;
+    --identity)        shift; IDENTITY="${1:?--identity needs a value}" ;;
     --recipient)       shift; RECIPIENT="${1:?--recipient needs a value}" ;;
     --networks)        shift; ONB_NETWORKS="${1:?--networks needs a value}" ;;
     --import-existing) IMPORT_EXISTING=1 ;;
@@ -227,12 +229,13 @@ fi
 if [ "$ONBOARD" -eq 1 ]; then
   log "running guided reward onboarding (--onboard-rewards)"
   set -- rewards --networks "$ONB_NETWORKS"
+  [ -n "$IDENTITY" ]  && set -- "$@" --identity "$IDENTITY"
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
   [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
   if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$SRC/install/onboard" "$@"; then
     :
   else
-    log "onboarding did not finish — re-run: sudo fwd onboard rewards --recipient 0xRECIP --networks $ONB_NETWORKS"
+    log "onboarding did not finish — re-run: sudo fwd onboard rewards --identity 0xOWNER --recipient 0xRECIP --networks $ONB_NETWORKS"
   fi
 else
   _clif_note=""
@@ -242,7 +245,7 @@ else
 fwd is installed and running ($( [ "$START" -eq 1 ] && echo 'inert: signs NOTHING — empty default-deny policy, zero wallets' || echo 'staged, not started' )).
 Custody is not initialized. To set up reward signing + fee claiming:
 
-  sudo fwd onboard rewards --recipient 0xYOUR_RECIPIENT --networks $ONB_NETWORKS
+  sudo fwd onboard rewards --identity 0xYOUR_IDENTITY --recipient 0xYOUR_RECIPIENT --networks $ONB_NETWORKS
 $_clif_note
 (idempotent; narrates each step; ends with the on-chain authorization you do offline.)
 Migrating an existing provider? add --import-existing.

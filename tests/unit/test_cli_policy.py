@@ -180,7 +180,7 @@ def test_validate_full_unknown_abi_fails(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # ---------------------------------------------------------------------------
-# clifwd policy init --fsp-sender per-network  (capability 4)
+# clifwd policy init --fsp-sender  (capability 4)
 # ---------------------------------------------------------------------------
 
 
@@ -214,5 +214,71 @@ def test_policy_init_fsp_sender_per_network(monkeypatch: pytest.MonkeyPatch) -> 
         doc = yaml.safe_load(result.output)
         assert "fsp-sender-songbird" in doc["wallets"]
         assert "fsp-sender" not in doc["wallets"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_policy_init_default_fsp_sender_is_per_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """policy init without --fsp-sender now defaults to per-network."""
+    import yaml
+
+    networks_file = Path(__file__).resolve().parents[2] / "config" / "networks.yaml"
+    monkeypatch.setenv("FWD_ABIS_DIR", str(ABIS_DIR))
+    monkeypatch.setenv("FWD_NETWORKS_FILE", str(networks_file))
+    from fwd.settings import get_settings
+
+    get_settings.cache_clear()
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "policy",
+                "init",
+                "--networks",
+                "songbird",
+                "--capabilities",
+                "fsp",
+                "--recipient",
+                "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        doc = yaml.safe_load(result.output)
+        assert "fsp-sender-songbird" in doc["wallets"]
+        assert "fsp-sender" not in doc["wallets"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_policy_init_fsp_sender_shared_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """policy init --fsp-sender shared explicitly yields the shared fsp-sender wallet."""
+    import yaml
+
+    networks_file = Path(__file__).resolve().parents[2] / "config" / "networks.yaml"
+    monkeypatch.setenv("FWD_ABIS_DIR", str(ABIS_DIR))
+    monkeypatch.setenv("FWD_NETWORKS_FILE", str(networks_file))
+    from fwd.settings import get_settings
+
+    get_settings.cache_clear()
+    try:
+        result = runner.invoke(
+            app,
+            [
+                "policy",
+                "init",
+                "--networks",
+                "songbird",
+                "--capabilities",
+                "fsp",
+                "--recipient",
+                "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294",
+                "--fsp-sender",
+                "shared",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        doc = yaml.safe_load(result.output)
+        assert "fsp-sender" in doc["wallets"]
+        assert "fsp-sender-songbird" not in doc["wallets"]
     finally:
         get_settings.cache_clear()

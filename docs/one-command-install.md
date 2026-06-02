@@ -141,11 +141,17 @@ terms (the claim executor that calls `RewardManager.claim`; your signing policy
 address that signs `signUptimeVote`/`signRewards`; the `msg.sender` that submits the
 tx). It does the whole sequence: build the default reward policy (your recipient
 pinned), validate it, load it (restart out of inert), provision the wallets fwd
-signs from, mint the caller tokens (shown once), seed the sender nonces, and print
-the final on-chain step. It is **idempotent** (re-running skips what
-exists; no restart if the policy is unchanged). Flags: `--import-existing`
-(migration — see below), `--claim-only` / `--sign-only`, `--skip-fsp-import` (defer
-the key gate), and a comma list for `--networks` (`flare` / `songbird` for mainnet).
+signs from, mint the caller tokens (written into clif's per-network env, not shown
+unless `--show-secrets`), **read each sender's nonce from chain truth via the keyless
+clif one-shot** (no hand-typing — fwd has no egress; clif does), write clif's
+`.env.<net>` files, and print the final on-chain step. It is **idempotent**
+(re-running skips what exists, preserves tokens already in the env, and re-reads the
+chain nonce; no restart if the policy is unchanged). Flags: `--identity 0xOWNER`
+(required when claiming), `--recipient 0xADDR`, `--fsp-sender per-network|shared`
+(default per-network), `--import-existing` (migration — see below), `--claim-only` /
+`--sign-only`, `--skip-fsp-import` (defer the key gate), `--accept-pending-nonces`
+(cutover when pending > latest), `--rotate-missing-callers` (re-mint a lost token),
+`--show-secrets`, and a comma list for `--networks` (`flare` / `songbird` for mainnet).
 
 **Pasting your key (single terminal).** At the import step the wizard prompts you to
 **paste each private key directly (hidden input)** — no pre-placed file. fwd pipes
@@ -166,8 +172,9 @@ keys are born inside fwd and never had a plaintext life). But if you already run
 provider, you already hold a funded, on-chain-authorized executor and submit key —
 `--import-existing` imports those (and the signing key) instead of generating new
 ones, so you skip re-running `setClaimExecutors` and re-funding a new sender. It
-**prompts each sender's current on-chain nonce** (fwd is zero-egress — it can't read
-the chain) and prints a **cutover** checklist instead of new authorization. The
+**reads each sender's current on-chain nonce via clif** (fwd is zero-egress; clif has
+egress — no hand-typing; pending > latest aborts the cutover unless
+`--accept-pending-nonces`) and prints a **cutover** checklist instead of new authorization. The
 trade-off: an imported key carries its pre-fwd plaintext exposure into fwd, and you
 must **stop the old submitter/claimer** for those accounts (fwd becomes their sole
 user — otherwise the two collide on nonces).
@@ -205,9 +212,10 @@ clifwd policy validate --schema-only          # reads the live mount; no daemon 
 #    startup consistency check until you create them.)
 sudo fwd restart
 
-# 4. Create the two fwd-GENERATED wallets — the claim executor + the FSP gas payer:
-clifwd wallets create --name claimer-songbird --policy wc/claimer-songbird
-clifwd wallets create --name fsp-sender       --policy wc/fsp-sender
+# 4. Create the two fwd-GENERATED wallets — the claim executor + the FSP gas payer
+#    (per-network default: fsp-sender-songbird; `--fsp-sender shared` uses one fsp-sender):
+clifwd wallets create --name claimer-songbird    --policy wc/claimer-songbird
+clifwd wallets create --name fsp-sender-songbird --policy wc/fsp-sender-songbird
 
 # 5. GATE 1 (operator-only) — IMPORT your registered signing-policy key. Key
 #    material is handled here and nowhere else; the file must be mode 0600, owned
@@ -223,12 +231,14 @@ clifwd callers create --name fsp-submit-songbird --policy perm/fsp-submit-songbi
 # 7. Full gate — must pass (schema + live DB / ABI / wallet-binding consistency):
 clifwd policy validate
 
-# 8. Seed the next nonce for the two SENDER wallets (fwd is zero-egress — it can't
-#    read the chain). Both are freshly generated, so start at 0:
-clifwd nonce init --wallet claimer-songbird --chain 19 --starting-nonce 0
-clifwd nonce init --wallet fsp-sender       --chain 19 --starting-nonce 0
+# 8. Seed the next nonce for the two SENDER wallets. The wizard reads this from chain
+#    via clif (no hand-typing): `clif chain nonce --network songbird --address 0x..`,
+#    then nonce init / nonce sync. Freshly generated wallets are 0, so the manual
+#    greenfield equivalent is:
+clifwd nonce init --wallet claimer-songbird    --chain 19 --starting-nonce 0
+clifwd nonce init --wallet fsp-sender-songbird --chain 19 --starting-nonce 0
 #    (The signing key signs detached FSP messages — no nonce. Seed it as well only
-#     if you opt it in as a self-submitter instead of using fsp-sender.)
+#     if you opt it in as a self-submitter instead of using fsp-sender-songbird.)
 
 # 9. GATE 2 (operator-only) — on-chain, from your OFFLINE identity key (fwd never
 #    custodies it):
