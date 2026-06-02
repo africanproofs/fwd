@@ -93,7 +93,7 @@ The install script should:
 
 ### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd start | stop | restart | status | logs | upgrade
+sudo fwd start | stop | restart | status | logs | onboard | upgrade
 sudo fwd backup status
 ```
 Compose is an implementation detail of these.
@@ -113,17 +113,20 @@ the **host** (it `docker compose restart`s the daemon and writes the host policy
 file — neither possible from inside the container) — see the reward-onboarding
 section below.
 
-## Reward onboarding — set up by default, in one terminal
+## Reward onboarding — an opt-in, one-terminal step
 
-Reward signing + fee claiming are the **default setup for every install**: after
-bringing the daemon up, `install.sh` runs the guided onboarding **wizard**
-automatically, in the same terminal. (`--inert`, or a headless / no-tty run, skips
-it and brings fwd up signing nothing — see the fallback runbook below.) You can also
-run the wizard any time:
+Install always ends **inert** (empty default-deny policy, signs nothing);
+initializing custody is a **security event, not a default**. Reward signing + fee
+claiming are a separate, **opt-in** step — run the guided wizard any time with the
+host command:
 
 ```sh
-clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
+sudo fwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
 ```
+
+(or chain it onto the install with `--onboard-rewards`, which requires a TTY + a
+started stack). `clifwd onboard rewards …` remains a compatibility alias for the
+same host orchestrator; `fwd onboard` is the canonical entry point.
 
 **FSP signing needs your key registered as a voter on the chosen network** —
 Songbird / Flare for AP. `coston2` is a testnet: use it only if you are a registered

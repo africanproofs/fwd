@@ -53,6 +53,19 @@ services:
       retries: 3
       start_period: 1200s
 
+  clif:
+    build:
+      context: ${CLIF_SRC:-./clif}
+    image: clif:dev
+    profiles: ["cli"]            # one-shot only; never started by `up`/`fwd start`
+    entrypoint: ["clif"]
+    env_file:
+      - ${CLIF_ENV:-./clif/.env}
+    networks: [fwd-callers, egress]
+    # one-shot, e.g.:
+    #   docker compose -f docker-compose.yml -f docker-compose.clif.yml \
+    #     --profile cli run --rm clif chain nonce --network songbird --address 0x.. --json
+
 networks:
   # `fwd-callers` is defined by the base docker-compose.yml (internal: true) and
   # shared in the merged project — do NOT redeclare it here. `egress` is a normal

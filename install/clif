@@ -1,0 +1,28 @@
+#!/bin/sh
+# Host `clif` wrapper — runs the keyless clif client as a one-shot in fwd's
+# merged compose project: clif attaches to `fwd-callers` (to reach fwd:8080)
+# AND `egress` (its own RPC/broadcast). clif holds ZERO private keys.
+#
+#   clif --network songbird fsp status                         # leading --network selects .env.<net>
+#   clif chain nonce --network flare --address 0x.. --json     # command-level --network passes through
+#
+# A LEADING `--network <N>` selects clif's per-network env (.env.<N>) and is
+# stripped; a command-level --network (after the subcommand) passes through to
+# clif's own CLI. Installed to /usr/local/bin/clif by install.sh, which bakes
+# the absolute FWD_DIR (compose bundle) + CLIF_SRC (install-root clif) defaults.
+set -eu
+
+FWD_DIR="${FWD_DIR:-/opt/fwd}"
+CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
+cd "$FWD_DIR"
+
+COMPOSE="-f docker-compose.yml -f docker-compose.clif.yml"
+
+ENVF="$CLIF_SRC/.env"
+if [ "${1:-}" = "--network" ]; then
+  _net="${2:?--network needs a value}"; shift 2
+  ENVF="$CLIF_SRC/.env.$_net"
+fi
+
+exec env CLIF_SRC="$CLIF_SRC" CLIF_ENV="$ENVF" \
+  docker compose $COMPOSE --profile cli run --rm clif "$@"

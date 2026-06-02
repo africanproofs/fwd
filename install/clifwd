@@ -12,13 +12,17 @@
 #
 # NOTE: file paths (e.g. --privkey-file) are evaluated INSIDE the container.
 #
-# EXCEPTION — `clifwd onboard …` runs on the HOST, not in the container: it
-# orchestrates `docker compose restart` + writes the host policy file, neither of
-# which the in-container CLI can do. It is routed to the host orchestrator below.
+# Stack onboarding (fwd custody + clif chain reads + clif env config) is a
+# HOST-level operation. The canonical entry point is `fwd onboard`; `clifwd onboard`
+# is a compatibility alias that routes to the same host orchestrator below. Neither
+# the in-container CLI nor a compose service can orchestrate `docker compose restart`
+# or write the host policy file — both run on the host.
 set -eu
 
 export FWD_DIR="${FWD_DIR:-/opt/fwd}"
 export FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
+export CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
+export CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
 
 if [ "${1:-}" = "onboard" ]; then
   shift

@@ -1,17 +1,16 @@
 #!/bin/sh
 # fwd installer — build-from-source, single-host FTSO provider signing stack.
 #
-#   curl -sfL https://get.proofs.africa/fwd | sh -                 # install + guided onboarding
-#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif # + clif claim/FSP layer
-#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --inert     # bring up inert, skip onboarding
+#   curl -sfL https://get.proofs.africa/fwd | sh -                                              # install INERT (signs nothing)
+#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif                              # + clif claim/FSP layer (still inert)
+#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --onboard-rewards --recipient 0x..                 # install + guided onboarding
 #
 # Builds the image from pinned source locally (no registry, no prebuilt-binary
-# trust), brings the stack up, then — by DEFAULT, in this same terminal — runs the
-# guided reward-onboarding wizard so reward signing + fee claiming work out of the
-# box. The wizard narrates each step and PASTES your key(s) directly (hidden); the
-# custodial acts (your key, the on-chain authorization) stay yours. `--inert` (or a
-# headless/no-tty run) skips the wizard: the stack comes up signing NOTHING (empty
-# default-deny policy) and prints the onboarding command to run later.
+# trust), brings the stack up inert (empty default-deny policy, signs nothing), then
+# prints the onboarding command. Onboarding is opt-in via --onboard-rewards (requires
+# a TTY + a started stack): the wizard narrates each step and PASTES your key(s)
+# directly (hidden); the custodial acts (your key, the on-chain authorization) stay
+# yours. Install always ends inert so it is safe to run headless or in CI.
 #
 # Re-runnable: preserves an existing master.key / .env / policy.yaml.
 #
@@ -23,7 +22,8 @@
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
 #   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
-#   onboarding: --recipient 0xADDR  --networks LIST(=songbird)  --import-existing  --inert
+#   onboarding (opt-in): --onboard-rewards  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
+#   (--inert is accepted as a deprecated no-op — inert is now the default)
 #   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --help
 set -eu
 
@@ -40,7 +40,7 @@ WITH_CLIF=0
 START=1
 BUILD=1
 MODE=dev
-INERT=0
+ONBOARD_REWARDS=0
 RECIPIENT=""
 ONB_NETWORKS=songbird
 IMPORT_EXISTING=0
@@ -58,7 +58,8 @@ while [ "$#" -gt 0 ]; do
     --dev)         MODE=dev ;;
     --dir)         shift; FWD_DIR="${1:?--dir needs a value}" ;;
     --ref)         shift; FWD_REF="${1:?--ref needs a value}" ;;
-    --inert)           INERT=1 ;;
+    --onboard-rewards) ONBOARD_REWARDS=1 ;;
+    --inert)           log "--inert is now the default (install ends inert); onboarding is opt-in via --onboard-rewards — accepted as a no-op" ;;
     --recipient)       shift; RECIPIENT="${1:?--recipient needs a value}" ;;
     --networks)        shift; ONB_NETWORKS="${1:?--networks needs a value}" ;;
     --import-existing) IMPORT_EXISTING=1 ;;
@@ -180,12 +181,19 @@ fi
 if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   install -m 0755 "$SRC/install/fwd" "$FWD_BIN_DIR/fwd"
   install -m 0755 "$SRC/install/clifwd" "$FWD_BIN_DIR/clifwd"
-  # Bake the install dir into the host wrappers so they find the compose bundle
-  # ($FWD_DIR): `fwd` for compose ops, and `clifwd` for `onboard` routing
-  # (clifwd onboard -> $FWD_DIR/install/onboard).
-  sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/fwd" 2>/dev/null || true
-  sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/clifwd" 2>/dev/null || true
-  log "installed host wrappers: $FWD_BIN_DIR/fwd, $FWD_BIN_DIR/clifwd"
+  install -m 0755 "$SRC/install/clif" "$FWD_BIN_DIR/clif"
+  # Bake the compose-bundle dir ($SRC) into the wrappers' FWD_DIR default
+  # (`fwd` for compose ops; `clifwd`/`fwd` for `onboard` routing -> $SRC/install/onboard).
+  for _w in fwd clifwd clif; do
+    sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
+  done
+  # clif's source + per-network .env live at the install ROOT ($FWD_DIR/clif),
+  # a SIBLING of the compose dir ($SRC) — bake the absolute path so the wrappers
+  # resolve clif's build context + env_file correctly (they run compose from $SRC).
+  for _w in fwd clifwd clif; do
+    sed -i "s#\${CLIF_SRC:-/opt/fwd/clif}#\${CLIF_SRC:-$FWD_DIR/clif}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
+  done
+  log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd,clif}"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
 fi
@@ -211,52 +219,34 @@ fi
 printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
   "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
 
-ONBOARD=1
-[ "$INERT" -eq 1 ] && ONBOARD=0                  # operator opted out
-[ "$START" -eq 1 ] || ONBOARD=0                  # need fwd running to onboard
-{ true >/dev/tty; } 2>/dev/null || ONBOARD=0     # need a terminal for the wizard prompts
+ONBOARD=0
+if [ "$ONBOARD_REWARDS" -eq 1 ] && [ "$START" -eq 1 ] && { true >/dev/tty; } 2>/dev/null; then
+  ONBOARD=1
+fi
 
 if [ "$ONBOARD" -eq 1 ]; then
-  log "reward signing + fee claiming are the default setup — starting the guided wizard"
-  log "(skip with --inert; re-run any time with: clifwd onboard rewards)"
+  log "running guided reward onboarding (--onboard-rewards)"
   set -- rewards --networks "$ONB_NETWORKS"
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
   [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
-  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" "$SRC/install/onboard" "$@"; then
+  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$SRC/install/onboard" "$@"; then
     :
   else
-    log "onboarding did not finish — re-run any time: clifwd onboard rewards --recipient 0xADDR --networks $ONB_NETWORKS"
+    log "onboarding did not finish — re-run: sudo fwd onboard rewards --recipient 0xRECIP --networks $ONB_NETWORKS"
   fi
 else
-  printf '\033[1;31mProduction custody is NOT initialized\033[0m — fwd currently signs NOTHING (empty default-deny policy, zero wallets).\n'
-  [ "$INERT" -eq 1 ] && log "--inert: skipped the onboarding wizard (stopped at the custody gate)."
+  _clif_note=""
+  [ "$WITH_CLIF" -eq 1 ] && _clif_note="  (with --with-clif: onboarding also writes clif's per-network .env files and seeds each sender's nonce from chain truth via clif; then: sudo fwd start)"
   cat <<EOF
 
-Set up reward signing + fee claiming with one guided, single-terminal command:
-  clifwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
-(idempotent; narrates each step, pastes your key, ends with the on-chain step).
-Migrating an existing provider? add --import-existing to import your existing
-executor + sender keys instead of generating fresh ones.
-FSP signing needs your key registered as a voter on the chosen network — Songbird /
-Flare for AP; coston2 only if you are a registered Coston2 voter.
+fwd is installed and running ($( [ "$START" -eq 1 ] && echo 'inert: signs NOTHING — empty default-deny policy, zero wallets' || echo 'staged, not started' )).
+Custody is not initialized. To set up reward signing + fee claiming:
 
-The manual equivalent (what the wizard does), for Songbird:
-  1. (done) the sealed master is generated.
-  2. clifwd policy init --networks songbird --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS > $SRC/config/policy.yaml
-     clifwd policy validate --schema-only      # the '>' runs on the host -> writes the mounted policy file
-  3. sudo fwd restart                          # LOAD the policy (REQUIRED before step 4)
-  4. clifwd wallets create --name claimer-songbird --policy wc/claimer-songbird
-     clifwd wallets create --name fsp-sender       --policy wc/fsp-sender
-  5. clifwd wallets import --name fsp-signing-songbird --policy wc/fsp-songbird --privkey-file /abs/path/signing.key --shred-source
-  6. clifwd callers create --name claim-songbird      --policy perm/claim-songbird
-     clifwd callers create --name fsp-sign-songbird   --policy fsp/songbird
-     clifwd callers create --name fsp-submit-songbird --policy perm/fsp-submit-songbird
-  7. clifwd policy validate
-  8. clifwd nonce init --wallet claimer-songbird --chain 19 --starting-nonce 0
-     clifwd nonce init --wallet fsp-sender        --chain 19 --starting-nonce 0
-  9. on-chain, from your OFFLINE identity key: ClaimSetupManager.setClaimExecutors
-     (authorize claimer-songbird) + setAllowedClaimRecipients + FSP signing-policy registration.
- 10. rehearse on Songbird (the canary), then go to Flare.
-Full detail + mainnet variants: docs/one-command-install.md
+  sudo fwd onboard rewards --recipient 0xYOUR_RECIPIENT --networks $ONB_NETWORKS
+$_clif_note
+(idempotent; narrates each step; ends with the on-chain authorization you do offline.)
+Migrating an existing provider? add --import-existing.
+FSP signing needs your key registered as a voter on the chosen network (Songbird/Flare for AP;
+coston2 only if you are a registered Coston2 voter). Full detail: docs/one-command-install.md
 EOF
 fi

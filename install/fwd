@@ -14,10 +14,14 @@
 set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
+CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
 cd "$FWD_DIR"
 
 COMPOSE="-f docker-compose.yml"
 [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
+# clif build context + env live at the install root; export so the overlay
+# resolves them (the wrappers run compose from the bundle dir, not the root).
+export CLIF_SRC CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
 
 cmd="${1:-}"
 [ "$#" -gt 0 ] && shift
@@ -28,13 +32,15 @@ case "$cmd" in
   restart) exec docker compose $COMPOSE restart "$@" ;;
   status)  exec docker compose $COMPOSE ps "$@" ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
+  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$FWD_DIR/install/onboard" "$@" ;;
   upgrade|backup)
     echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
     exit 2
     ;;
   ""|help|-h|--help)
-    echo "usage: fwd {start|stop|restart|status|logs} [compose args...]" >&2
-    echo "       (reward onboarding: clifwd onboard rewards — see docs/one-command-install.md)" >&2
+    echo "usage: fwd {start|stop|restart|status|logs|onboard} [args...]" >&2
+    echo "       reward onboarding: fwd onboard rewards --recipient 0x.. --networks songbird" >&2
+    echo "       (guided stack onboarding: fwd custody + clif env + nonce seeding)" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0
     ;;
