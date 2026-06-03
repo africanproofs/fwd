@@ -153,6 +153,14 @@ else
   log "preserving existing $POLICY"
 fi
 
+# The fwd image runs as non-root uid 1000 (Dockerfile USER). When the installer runs
+# as root (sudo), the bind-mounted config dir is root-owned, so the uid-1000 container
+# can neither WRITE the sealed master (step 5: `docker run … master generate`) nor READ
+# it (or policy.yaml) at runtime (both mounted ro). Hand the config dir to uid 1000 so
+# both work; the master.key it writes stays 0600, owned by that uid (Core invariants
+# #1/#17). No-op when run as a non-root user who already owns the tree.
+if [ "$(id -u)" = 0 ]; then chown -R 1000:1000 "$SRC/config" 2>/dev/null || true; fi
+
 # --- 4. build the image from source --------------------------------------
 COMPOSE="-f $SRC/docker-compose.yml"
 [ "$WITH_CLIF" -eq 1 ] && COMPOSE="$COMPOSE -f $SRC/docker-compose.clif.yml"
