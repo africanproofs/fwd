@@ -156,7 +156,12 @@ COMPOSE="-f $SRC/docker-compose.yml"
 export FWD_IMAGE_TAG FWD_CONTAINER CLIF_SRC="${FWD_DIR}/clif" CLIF_ENV="${FWD_DIR}/clif/.env"
 if [ "$BUILD" -eq 1 ]; then
   log "building image(s) from source (this is the slow first step)"
-  ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE build ) || die "docker compose build failed"
+  # Every clif service is profile-gated (cli / per-network), so a bare `compose build`
+  # (no active profile) builds ONLY fwd. Add `--profile cli` under --with-clif so the
+  # shared clif image (clif:dev) is built too — the per-network daemons reuse it.
+  _build_prof=""
+  [ "$WITH_CLIF" -eq 1 ] && _build_prof="--profile cli"
+  ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE $_build_prof build ) || die "docker compose build failed"
 else
   log "--no-build: skipping image build"
 fi
