@@ -35,6 +35,12 @@ FWD_REF="${FWD_REF:-main}"
 FWD_SHA="${FWD_SHA:-}"
 FWD_IMAGE_TAG="${FWD_IMAGE_TAG:-local}"
 FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
+# Pin the compose project to the container name so the installer AND the host wrappers always
+# operate the SAME compose project — immune to a stale COMPOSE_PROJECT_NAME left in the operator's
+# shell. (A leftover split a sudo install (env-reset → project derived from the dir) from a no-sudo
+# wrapper (which inherited the stale value): the wrapper then targeted a non-existent container →
+# silent restart no-op / hard force-recreate name-conflict. Tying project = container kills the class.)
+export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
 CLIF_REPO="${CLIF_REPO:-https://github.com/africanproofs/clif.git}"
 CLIF_REF="${CLIF_REF:-main}"
 WITH_CLIF=0

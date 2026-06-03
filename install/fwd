@@ -26,6 +26,9 @@ COMPOSE="-f docker-compose.yml"
 # clif build context + env live at the install root; export so the overlay
 # resolves them (the wrappers run compose from the bundle dir, not the root).
 export CLIF_SRC CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
+# Pin the compose project to the container name so this wrapper operates the SAME project the
+# installer created — immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
+export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
 
 cmd="${1:-}"
 [ "$#" -gt 0 ] && shift

@@ -14,6 +14,9 @@ set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
 CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
+# Pin project = container so the one-shot clif joins the installer's project (same fwd-callers
+# network), immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
+export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
 cd "$FWD_DIR"
 
 COMPOSE="-f docker-compose.yml -f docker-compose.clif.yml"

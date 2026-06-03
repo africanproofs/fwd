@@ -21,6 +21,9 @@ set -eu
 
 export FWD_DIR="${FWD_DIR:-/opt/fwd}"
 export FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
+# Pin project = container so onboard (routed below) operates the installer's project,
+# immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
+export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
 export CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
 export CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
 
