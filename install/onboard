@@ -248,28 +248,31 @@ clifwd policy validate --schema-only >/dev/null || {
 note "policy validates"
 
 # ---- Step 3: load the policy ----
-# ALWAYS restart to load the on-disk policy — never skip on "byte-identical". A prior run may
-# have WRITTEN the policy but died before LOADING it (a transient restart/permission error),
-# leaving the file current while the daemon still serves the old/inert policy; skipping would
-# then provision against an unloaded policy (the "no such service / not loaded" trap). Restarting
-# to (re)load the same policy is idempotent and costs a few seconds, so onboard self-heals from
-# any partial prior run — no manual `rm policy.yaml` ever needed.
-step "Loading the policy" "fwd reads the policy at startup; we restart it to apply the allow-list (always — so a re-run after any partial failure self-heals)."
+# ALWAYS (re)load the on-disk policy with `up -d --force-recreate` — never skip, and never a
+# plain `restart`. Two traps this avoids: (1) a prior run may have WRITTEN the policy but died
+# before loading it, leaving the daemon on the old/inert policy — so we never skip on
+# "byte-identical"; (2) a plain `docker compose restart` is NOT a reliable reload — observed
+# returning 0 without actually restarting the container, so the daemon kept serving its startup
+# (inert) policy and `wallets create` then failed `unknown_policy_path`. force-recreate brings up
+# a NEW container that re-reads the bind-mounted policy.yaml, so the load is guaranteed. It is
+# idempotent (a few seconds; the sealed master + state volume persist), so onboard self-heals
+# from any partial prior run — no manual `rm policy.yaml` or restart ever needed.
+step "Loading the policy" "fwd reads the policy at startup; we recreate it to load the allow-list (force-recreate — a plain restart can keep serving a stale policy; always run, so a re-run self-heals)."
 ( cd "$FWD_DIR"
   COMPOSE="-f docker-compose.yml"
   [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
-  docker compose $COMPOSE restart fwd >/dev/null ) || die "restart failed (is the stack up? try: sudo fwd start)"
+  docker compose $COMPOSE up -d --force-recreate fwd >/dev/null ) || die "policy reload (force-recreate) failed (is the stack up? try: sudo fwd start)"
 i=0; while [ "$i" -lt 20 ]; do
   st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
   [ "$st" = healthy ] && break
   i=$((i + 1)); sleep 3
 done
 clifwd health >/dev/null 2>&1 || {
-  warn "fwd did not return healthy after restart."
+  warn "fwd did not return healthy after the policy reload."
   [ -n "$BAK" ] && warn "restore: cat '$BAK' > '$POLICY' && sudo fwd restart"
-  die "health check failed post-restart"
+  die "health check failed post-reload"
 }
-note "loaded (fwd restarted, healthy)"; POLICY_ST=ok
+note "loaded (fwd recreated, healthy)"; POLICY_ST=ok
 
 # ============================ helpers (provisioning) ============================
 wallet_addr() {  # name -> stored address (what fwd derived) or a placeholder
