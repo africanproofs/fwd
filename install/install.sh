@@ -153,13 +153,20 @@ else
   log "preserving existing $POLICY"
 fi
 
-# The fwd image runs as non-root uid 1000 (Dockerfile USER). When the installer runs
-# as root (sudo), the bind-mounted config dir is root-owned, so the uid-1000 container
-# can neither WRITE the sealed master (step 5: `docker run … master generate`) nor READ
-# it (or policy.yaml) at runtime (both mounted ro). Hand the config dir to uid 1000 so
-# both work; the master.key it writes stays 0600, owned by that uid (Core invariants
-# #1/#17). No-op when run as a non-root user who already owns the tree.
-if [ "$(id -u)" = 0 ]; then chown -R 1000:1000 "$SRC/config" 2>/dev/null || true; fi
+# The fwd image runs as non-root uid 1000 (Dockerfile USER), and the host wrappers run
+# `docker compose` as the operator (uid 1000 on a single-user host). A root (sudo) install
+# leaves the whole tree root-owned, which breaks BOTH: the uid-1000 container can't write
+# (step 5: `docker run … master generate`) or read (runtime, ro) config/master.key +
+# policy.yaml, AND a no-sudo wrapper can't read $SRC/.env (FWD_ADMIN_KEY) or write
+# clif/.env.<net> during onboarding (→ `docker compose` fails with "no such service: fwd").
+# Hand the runtime files to uid 1000 so the stack is fully operable without re-sudoing each
+# wrapper; master.key stays 0600 (Core invariants #1/#17). No-op for a non-root install
+# (already owned). A multi-user host whose operator is not uid 1000 should operate a root
+# install via `sudo fwd …`, or install into a user-owned dir — see docs/one-command-install.md.
+if [ "$(id -u)" = 0 ]; then
+  chown -R 1000:1000 "$SRC/config" "$SRC/.env" 2>/dev/null || true
+  [ -d "$FWD_DIR/clif" ] && chown -R 1000:1000 "$FWD_DIR/clif" 2>/dev/null || true
+fi
 
 # --- 4. build the image from source --------------------------------------
 COMPOSE="-f $SRC/docker-compose.yml"
