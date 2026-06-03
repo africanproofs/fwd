@@ -248,26 +248,28 @@ clifwd policy validate --schema-only >/dev/null || {
 note "policy validates"
 
 # ---- Step 3: load the policy ----
-step "Loading the policy" "fwd boots inert (signs nothing); it reads the policy at startup, so we restart it to apply the allow-list."
-if [ "$CHANGED" -eq 1 ]; then
-  ( cd "$FWD_DIR"
-    COMPOSE="-f docker-compose.yml"
-    [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
-    docker compose $COMPOSE restart fwd >/dev/null ) || die "restart failed"
-  i=0; while [ "$i" -lt 20 ]; do
-    st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
-    [ "$st" = healthy ] && break
-    i=$((i + 1)); sleep 3
-  done
-  clifwd health >/dev/null 2>&1 || {
-    warn "fwd did not return healthy after restart."
-    [ -n "$BAK" ] && warn "restore: cat '$BAK' > '$POLICY' && sudo fwd restart"
-    die "health check failed post-restart"
-  }
-  note "loaded (fwd restarted, healthy)"; POLICY_ST=ok
-else
-  note "already loaded — skipping restart"; POLICY_ST=same
-fi
+# ALWAYS restart to load the on-disk policy — never skip on "byte-identical". A prior run may
+# have WRITTEN the policy but died before LOADING it (a transient restart/permission error),
+# leaving the file current while the daemon still serves the old/inert policy; skipping would
+# then provision against an unloaded policy (the "no such service / not loaded" trap). Restarting
+# to (re)load the same policy is idempotent and costs a few seconds, so onboard self-heals from
+# any partial prior run — no manual `rm policy.yaml` ever needed.
+step "Loading the policy" "fwd reads the policy at startup; we restart it to apply the allow-list (always — so a re-run after any partial failure self-heals)."
+( cd "$FWD_DIR"
+  COMPOSE="-f docker-compose.yml"
+  [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
+  docker compose $COMPOSE restart fwd >/dev/null ) || die "restart failed (is the stack up? try: sudo fwd start)"
+i=0; while [ "$i" -lt 20 ]; do
+  st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
+  [ "$st" = healthy ] && break
+  i=$((i + 1)); sleep 3
+done
+clifwd health >/dev/null 2>&1 || {
+  warn "fwd did not return healthy after restart."
+  [ -n "$BAK" ] && warn "restore: cat '$BAK' > '$POLICY' && sudo fwd restart"
+  die "health check failed post-restart"
+}
+note "loaded (fwd restarted, healthy)"; POLICY_ST=ok
 
 # ============================ helpers (provisioning) ============================
 wallet_addr() {  # name -> stored address (what fwd derived) or a placeholder
