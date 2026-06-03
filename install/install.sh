@@ -24,7 +24,8 @@
 #   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
 #   onboarding (opt-in): --onboard-rewards  --identity 0xOWNER  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
 #   (--inert is accepted as a deprecated no-op — inert is now the default)
-#   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --help
+#   output: compact by default; --guided (or FWD_OUTPUT=guided) for the explanatory walk-through
+#   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --guided --help
 set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
@@ -45,6 +46,7 @@ IDENTITY=""
 RECIPIENT=""
 ONB_NETWORKS=songbird
 IMPORT_EXISTING=0
+case "${FWD_OUTPUT:-compact}" in guided) OUTPUT=guided ;; *) OUTPUT=compact ;; esac
 
 log()  { printf '\033[1;33m[fwd-install]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[fwd-install] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -65,6 +67,7 @@ while [ "$#" -gt 0 ]; do
     --recipient)       shift; RECIPIENT="${1:?--recipient needs a value}" ;;
     --networks)        shift; ONB_NETWORKS="${1:?--networks needs a value}" ;;
     --import-existing) IMPORT_EXISTING=1 ;;
+    --guided|--explain) OUTPUT=guided ;;
     -h|--help)
       sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
       exit 0 ;;
@@ -229,9 +232,6 @@ else
 fi
 
 # --- 8. onboard by default, or stop at the custody gate (--inert / headless) ---
-printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
-  "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
-
 ONBOARD=0
 if [ "$ONBOARD_REWARDS" -eq 1 ] && [ "$START" -eq 1 ] && { true >/dev/tty; } 2>/dev/null; then
   ONBOARD=1
@@ -243,12 +243,15 @@ if [ "$ONBOARD" -eq 1 ]; then
   [ -n "$IDENTITY" ]  && set -- "$@" --identity "$IDENTITY"
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
   [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
+  [ "$OUTPUT" = guided ] && set -- "$@" --guided
   if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$SRC/install/onboard" "$@"; then
     :
   else
     log "onboarding did not finish — re-run: sudo fwd onboard rewards --identity 0xOWNER --recipient 0xRECIP --networks $ONB_NETWORKS"
   fi
-else
+elif [ "$OUTPUT" = guided ]; then
+  printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
+    "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
   _clif_note=""
   [ "$WITH_CLIF" -eq 1 ] && _clif_note="  (with --with-clif: onboarding also writes clif's per-network .env files and seeds each sender's nonce from chain truth via clif; then: sudo fwd start)"
   cat <<EOF
@@ -263,4 +266,13 @@ Migrating an existing provider? add --import-existing.
 FSP signing needs your key registered as a voter on the chosen network (Songbird/Flare for AP;
 coston2 only if you are a registered Coston2 voter). Full detail: docs/one-command-install.md
 EOF
+else
+  printf '\nfwd installed\n'
+  printf 'fwd: %s\n' "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
+  if [ "$WITH_CLIF" -eq 1 ] && [ "$BUILD" -eq 1 ]; then printf 'clif: built\n'
+  elif [ "$WITH_CLIF" -eq 1 ]; then printf 'clif: fetched (not built; --no-build)\n'
+  else printf 'clif: not installed (--with-clif to add)\n'; fi
+  printf 'clif daemons: stopped\n'
+  printf '\nnext:\n  sudo fwd onboard rewards --identity 0x… --recipient 0x… --networks %s\n' "$ONB_NETWORKS"
+  printf '  (idempotent; --import-existing to migrate; --guided for the full walk-through)\n'
 fi

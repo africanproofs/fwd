@@ -102,7 +102,9 @@ fsp` starts its **FSP auto-signer** ONLY (opt-in — only meaningful with `FSP_A
 clif refuses + exits otherwise). A claim+FSP provider runs **both** commands; keeping them
 independent stops a sign-only (no-claim) host from launching a beneficiary-less claim daemon
 (which clif `auto` exits on → restart-loop). Each network reads its own `.env.<net>`; there
-is no single shared clif daemon.
+is no single shared clif daemon. `fwd start` and `fwd status` print a compact started /
+current-state cockpit (what came up, what didn't and how to start it, clif env presence per
+network, the next action).
 
 ### `clifwd` (application CLI + reward onboarding)
 ```sh
@@ -157,7 +159,19 @@ chain nonce; no restart if the policy is unchanged). Flags: `--identity 0xOWNER`
 (default per-network), `--import-existing` (migration — see below), `--claim-only` /
 `--sign-only`, `--skip-fsp-import` (defer the key gate), `--accept-pending-nonces`
 (cutover when pending > latest), `--rotate-missing-callers` (re-mint a lost token),
-`--show-secrets`, and a comma list for `--networks` (`flare` / `songbird` for mainnet).
+`--show-secrets`, `--guided` / `--explain` (the verbose walk-through — output is a compact
+cockpit by default, or set `FWD_OUTPUT=guided`), and a comma list for `--networks`
+(`flare` / `songbird` for mainnet).
+
+**After onboarding (go-live).** onboard does not make you production-ready. Complete, in
+order: (1) the printed on-chain authorization from your **offline identity key**
+(`ClaimSetupManager.setClaimExecutors` + `setAllowedClaimRecipients`; register the FSP signer
+as a voter) — or, with `--import-existing`, the **CUTOVER** (stop the old submitter first, so
+it and fwd do not collide on nonces); (2) **rehearse** through the `clif` wrapper on the
+**Songbird canary** before Flare; (3) **verify** the `RewardClaimed` event on-chain and
+`clifwd audit verify`; (4) only then start always-on automation with `sudo fwd start <net>`
+(add `… fsp` to also start the FSP auto-signer). The wizard prints this exact sequence at the
+end, in both compact and guided modes.
 
 **Pasting your key (single terminal).** At the import step the wizard prompts you to
 **paste each private key directly (hidden input)** — no pre-placed file. fwd pipes

@@ -33,23 +33,56 @@ cmd="${1:-}"
 case "$cmd" in
   start)
     # `fwd start` = fwd (+ litestream) only. `fwd start <net>` starts that network's CLAIM
-    # daemon ONLY; `fwd start <net> fsp` starts its FSP auto-signer ONLY (opt-in; meaningful
-    # only with FSP_AUTO_ENABLED=true). A claim+FSP provider runs BOTH commands; keeping them
-    # independent stops a sign-only (no-claim) setup from launching a beneficiary-less claim
-    # daemon (which clif `auto` exits on → restart-loop).
+    # daemon ONLY (--profile <net>); `fwd start <net> fsp` starts its FSP auto-signer ONLY
+    # (--profile <net>-fsp; opt-in, meaningful only with FSP_AUTO_ENABLED=true). A claim+FSP
+    # provider runs BOTH commands; keeping them independent stops a sign-only (no-claim) setup
+    # from launching a beneficiary-less claim daemon (which clif `auto` exits on → restart-loop).
+    # Profiles are a59-exact; this case adds only a compact started/not-started cockpit (so it
+    # no longer `exec`s — it runs `up -d`, then reports, then exits with compose's status).
+    case "$COMPOSE" in *docker-compose.clif.yml*) _has_clif=1 ;; *) _has_clif=0 ;; esac
     case "${1:-}" in
       flare|songbird|coston2)
         _net="$1"; shift
-        if [ "${1:-}" = fsp ]; then shift; exec docker compose $COMPOSE --profile "$_net-fsp" up -d "$@"; fi
-        exec docker compose $COMPOSE --profile "$_net" up -d "$@"
+        if [ "${1:-}" = fsp ]; then
+          shift; _prof="$_net-fsp"; _svc="clif-fsp-auto-$_net"; _other="clif-auto-$_net"; _ohint="sudo fwd start $_net"
+        else
+          _prof="$_net"; _svc="clif-auto-$_net"; _other="clif-fsp-auto-$_net"; _ohint="sudo fwd start $_net fsp"
+        fi
+        set +e; docker compose $COMPOSE --profile "$_prof" up -d "$@"; _rc=$?; set -e
+        if [ "$_rc" -eq 0 ]; then
+          printf 'started:\n  fwd\n  litestream\n'
+          if [ "$_has_clif" -eq 1 ]; then
+            printf '  %s\nnot started:\n  %s  (use: %s)\n' "$_svc" "$_other" "$_ohint"
+          else
+            printf '(clif not installed — fwd + litestream only)\n'
+          fi
+        fi
+        exit "$_rc"
         ;;
       fsp) echo "fwd start: 'fsp' needs a network — e.g. 'fwd start songbird fsp'" >&2; exit 2 ;;
-      *) exec docker compose $COMPOSE up -d "$@" ;;
+      *)
+        set +e; docker compose $COMPOSE up -d "$@"; _rc=$?; set -e
+        [ "$_rc" -eq 0 ] && printf 'started:\n  fwd\n  litestream\n'
+        exit "$_rc"
+        ;;
     esac
     ;;
   stop)    exec docker compose $COMPOSE stop "$@" ;;
   restart) exec docker compose $COMPOSE restart "$@" ;;
-  status)  exec docker compose $COMPOSE ps "$@" ;;
+  status)
+    # bounded cockpit: real compose state + clif env presence per network + next action.
+    printf 'fwd daemon:\n'
+    docker compose $COMPOSE ps "$@" || true
+    if [ -d "$CLIF_SRC" ]; then
+      printf '\nclif env files (%s):\n' "$CLIF_SRC"
+      _any=0
+      for _n in flare songbird coston2; do
+        if [ -f "$CLIF_SRC/.env.$_n" ]; then printf '  %-9s present\n' "$_n"; _any=1; fi
+      done
+      if [ "$_any" -eq 0 ]; then printf '  (none yet — run: sudo fwd onboard rewards …)\n'; fi
+    fi
+    printf '\nnext: sudo fwd start <net>  (claim daemon)  |  sudo fwd start <net> fsp  (FSP daemon)\n'
+    ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
   onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$FWD_DIR/install/onboard" "$@" ;;
   upgrade|backup)
@@ -61,6 +94,7 @@ case "$cmd" in
     echo "       fwd start  (fwd only) | fwd start songbird  (claim daemon) | fwd start songbird fsp  (FSP daemon only)" >&2
     echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
     echo "       (guided stack onboarding: fwd custody + clif env + nonce seeding)" >&2
+    echo "       output is compact by default; add --guided (or FWD_OUTPUT=guided) to onboard for the walk-through" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0
     ;;

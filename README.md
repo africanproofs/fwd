@@ -15,7 +15,9 @@ curl -sfL https://get.proofs.africa/fwd | sh -
 ```
 
 See [`docs/one-command-install.md`](docs/one-command-install.md) for the full
-install flow and the custody gate.
+install flow and the custody gate. CLI output (install, onboarding, `fwd start` /
+`fwd status`) is a compact operator cockpit by default; add `--guided` / `--explain`
+(or `FWD_OUTPUT=guided`) for the explanatory walk-through.
 
 > **Status: production-deployed**, proven on Coston2 + Flare/Songbird mainnet. fwd
 > **signs** EVM transactions and Flare FSP protocol messages; it does **not** broadcast
