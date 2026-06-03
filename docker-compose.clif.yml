@@ -4,13 +4,15 @@
 # and the `fwd` service name are shared):
 #
 #   docker compose -f docker-compose.yml -f docker-compose.clif.yml up -d            # fwd only
-#   docker compose -f … --profile songbird up -d                                     # + songbird's clif daemons
+#   docker compose -f … --profile songbird up -d                                     # + songbird CLAIM daemon
+#   docker compose -f … --profile songbird --profile songbird-fsp up -d              # + FSP auto-signer (opt-in)
 #
 # The host `fwd` wrapper (install/fwd) includes this file automatically when it is
-# present. `up` / `fwd start` bring up fwd only; the clif claim/FSP daemons are
-# PER-NETWORK (`profiles: ["<net>"]`) — start one network's daemons with
-# `fwd start <net>` (or `--profile <net>`). The one-shot `clif` (profile `cli`)
-# backs the `clif` host wrapper. There is no longer a single shared clif daemon;
+# present. `up` / `fwd start` bring up fwd only; the clif daemons are PER-NETWORK:
+# the CLAIM daemon is `profiles: ["<net>"]` (`fwd start <net>` / `--profile <net>`);
+# the FSP auto-signer is `profiles: ["<net>-fsp"]` (opt-in: `fwd start <net> fsp`, only
+# meaningful with FSP_AUTO_ENABLED=true — clif refuses + exits otherwise). The one-shot
+# `clif` (profile `cli`) backs the `clif` host wrapper. No single shared clif daemon;
 # each network reads its own `.env.<net>`.
 #
 # Build-from-source: clif is a SEPARATE repo. The installer (build-from-source)
@@ -64,7 +66,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.coston2
     networks: [fwd-callers, egress]
-    profiles: ["coston2"]
+    profiles: ["coston2-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]
@@ -100,7 +102,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.songbird
     networks: [fwd-callers, egress]
-    profiles: ["songbird"]
+    profiles: ["songbird-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]
@@ -136,7 +138,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.flare
     networks: [fwd-callers, egress]
-    profiles: ["flare"]
+    profiles: ["flare-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]

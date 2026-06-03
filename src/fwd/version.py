@@ -5,4 +5,4 @@ tests/unit/test_version_consistency.py — Core invariant #13 (linear-forward
 versioning) drift detection.
 """
 
-__version__ = "1.1.0a57"
+__version__ = "1.1.0a58"
