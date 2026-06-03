@@ -66,7 +66,14 @@ services:
     image: litestream/litestream:0.3.13
     container_name: ${FWD_CONTAINER:-fwd}-litestream
     depends_on:
-      - fwd
+      fwd:
+        # Wait for fwd to be HEALTHY (alembic migrations finished + app up), not just
+        # started. Short-form `depends_on: [fwd]` only waits for the container to start,
+        # so litestream would open the source DB read-write (for its `_litestream_*`
+        # tables) WHILE fwd's first-run alembic is still creating the schema — the two
+        # collide on a fresh volume and fwd's migration fails `attempt to write a
+        # readonly database` (intermittent: whichever opens the fresh DB first wins).
+        condition: service_healthy
     command: ["replicate", "-config", "/etc/litestream.yml"]
     volumes:
       # Litestream needs write access to the source DB to create the
@@ -85,8 +92,9 @@ services:
     # egress). `network_mode: none` ENFORCES that, keeping the whole stack
     # egress-free.
     # (`network_mode` and `networks:` are mutually exclusive; litestream declares
-    # no `networks:`, so this is consistent. `depends_on: fwd` is startup
-    # ordering only — unaffected; replication is via the shared volume, not network.)
+    # no `networks:`, so this is consistent. The `depends_on … service_healthy` above
+    # is startup ordering only — unaffected; replication is via the shared volume,
+    # not network.)
     network_mode: none
     restart: unless-stopped
 
