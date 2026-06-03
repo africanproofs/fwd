@@ -8,9 +8,9 @@
 #
 #   sudo fwd start [<net>] | stop | restart | status | logs
 #
-# `fwd start` brings up fwd (+ litestream) only; `fwd start <net>`
-# (flare|songbird|coston2) adds that network's clif CLAIM daemon; `fwd start <net> fsp`
-# also starts the FSP auto-signer (opt-in; requires FSP_AUTO_ENABLED=true).
+# `fwd start` brings up fwd (+ litestream) only; `fwd start <net>` (flare|songbird|coston2)
+# starts that network's clif CLAIM daemon; `fwd start <net> fsp` starts its FSP auto-signer
+# ONLY (opt-in; requires FSP_AUTO_ENABLED=true). Claim+FSP provider = run both commands.
 #
 # `upgrade` and `backup` are finalized with install.sh in Phase 1 (they need the
 # release-manifest fetch + the documented restore runbook); stubbed here so the
@@ -32,15 +32,18 @@ cmd="${1:-}"
 
 case "$cmd" in
   start)
-    # `fwd start` = fwd (+ litestream) only. `fwd start <net>` adds that network's CLAIM
-    # daemon. `fwd start <net> fsp` ALSO starts the FSP auto-signer (only meaningful with
-    # FSP_AUTO_ENABLED=true in .env.<net> — clif refuses + exits otherwise).
+    # `fwd start` = fwd (+ litestream) only. `fwd start <net>` starts that network's CLAIM
+    # daemon ONLY; `fwd start <net> fsp` starts its FSP auto-signer ONLY (opt-in; meaningful
+    # only with FSP_AUTO_ENABLED=true). A claim+FSP provider runs BOTH commands; keeping them
+    # independent stops a sign-only (no-claim) setup from launching a beneficiary-less claim
+    # daemon (which clif `auto` exits on → restart-loop).
     case "${1:-}" in
       flare|songbird|coston2)
         _net="$1"; shift
-        if [ "${1:-}" = fsp ]; then shift; exec docker compose $COMPOSE --profile "$_net" --profile "$_net-fsp" up -d "$@"; fi
+        if [ "${1:-}" = fsp ]; then shift; exec docker compose $COMPOSE --profile "$_net-fsp" up -d "$@"; fi
         exec docker compose $COMPOSE --profile "$_net" up -d "$@"
         ;;
+      fsp) echo "fwd start: 'fsp' needs a network — e.g. 'fwd start songbird fsp'" >&2; exit 2 ;;
       *) exec docker compose $COMPOSE up -d "$@" ;;
     esac
     ;;
@@ -55,7 +58,7 @@ case "$cmd" in
     ;;
   ""|help|-h|--help)
     echo "usage: fwd {start [<net> [fsp]]|stop|restart|status|logs|onboard} [args...]" >&2
-    echo "       fwd start  (fwd only) | fwd start songbird  (+ claim) | fwd start songbird fsp  (+ FSP auto-signer)" >&2
+    echo "       fwd start  (fwd only) | fwd start songbird  (claim daemon) | fwd start songbird fsp  (FSP daemon only)" >&2
     echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
     echo "       (guided stack onboarding: fwd custody + clif env + nonce seeding)" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2

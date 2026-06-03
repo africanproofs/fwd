@@ -200,6 +200,12 @@ if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   for _w in fwd clifwd clif; do
     sed -i "s#\${CLIF_SRC:-/opt/fwd/clif}#\${CLIF_SRC:-$FWD_DIR/clif}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
+  # Bake the install-time container name so a custom-FWD_CONTAINER install's wrappers
+  # target the right container (clifwd `docker exec`, `fwd onboard`). Default `fwd`
+  # bakes `${FWD_CONTAINER:-fwd}` -> identical (no-op); a custom value persists.
+  for _w in fwd clifwd clif; do
+    sed -i "s#\${FWD_CONTAINER:-fwd}#\${FWD_CONTAINER:-$FWD_CONTAINER}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
+  done
   log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd,clif}"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"

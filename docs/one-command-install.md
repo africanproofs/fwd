@@ -97,10 +97,12 @@ sudo fwd start [<net> [fsp]] | stop | restart | status | logs | onboard | upgrad
 sudo fwd backup status
 ```
 Compose is an implementation detail of these. `fwd start` brings up fwd (+ litestream)
-only; `fwd start songbird` adds that network's **claim** daemon; `fwd start songbird fsp`
-also starts the **FSP auto-signer** (opt-in — only meaningful with `FSP_AUTO_ENABLED=true`;
-clif refuses + exits otherwise). Each network reads its own `.env.<net>`; there is no
-single shared clif daemon.
+only; `fwd start songbird` starts that network's **claim** daemon ONLY; `fwd start songbird
+fsp` starts its **FSP auto-signer** ONLY (opt-in — only meaningful with `FSP_AUTO_ENABLED=true`;
+clif refuses + exits otherwise). A claim+FSP provider runs **both** commands; keeping them
+independent stops a sign-only (no-claim) host from launching a beneficiary-less claim daemon
+(which clif `auto` exits on → restart-loop). Each network reads its own `.env.<net>`; there
+is no single shared clif daemon.
 
 ### `clifwd` (application CLI + reward onboarding)
 ```sh
