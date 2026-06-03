@@ -93,10 +93,13 @@ The install script should:
 
 ### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd start | stop | restart | status | logs | onboard | upgrade
+sudo fwd start [<net>] | stop | restart | status | logs | onboard | upgrade
 sudo fwd backup status
 ```
-Compose is an implementation detail of these.
+Compose is an implementation detail of these. `fwd start` brings up fwd (+ litestream)
+only; the clif claim/FSP daemons are **per-network** — `fwd start songbird` (or
+`--profile songbird`) starts that network's daemons (each reads its own `.env.<net>`).
+There is no single shared clif daemon.
 
 ### `clifwd` (application CLI + reward onboarding)
 ```sh

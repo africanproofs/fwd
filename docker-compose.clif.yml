@@ -3,10 +3,15 @@
 # Use WITH the base compose (one merged project, so the `fwd-callers` network
 # and the `fwd` service name are shared):
 #
-#   docker compose -f docker-compose.yml -f docker-compose.clif.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.clif.yml up -d            # fwd only
+#   docker compose -f … --profile songbird up -d                                     # + songbird's clif daemons
 #
-# The host `fwd` wrapper (install/fwd) includes this file automatically when it
-# is present. Inert without it — the base `docker compose up` is fwd-only.
+# The host `fwd` wrapper (install/fwd) includes this file automatically when it is
+# present. `up` / `fwd start` bring up fwd only; the clif claim/FSP daemons are
+# PER-NETWORK (`profiles: ["<net>"]`) — start one network's daemons with
+# `fwd start <net>` (or `--profile <net>`). The one-shot `clif` (profile `cli`)
+# backs the `clif` host wrapper. There is no longer a single shared clif daemon;
+# each network reads its own `.env.<net>`.
 #
 # Build-from-source: clif is a SEPARATE repo. The installer (build-from-source)
 # places clif's pinned source at $CLIF_SRC (default ./clif, relative to this
@@ -19,40 +24,6 @@
 # hard-off unless FSP_AUTO_ENABLED=true in that .env (clif enforces).
 
 services:
-  clif-auto:
-    build:
-      context: ${CLIF_SRC:-./clif}
-    image: clif:dev
-    container_name: clif-auto
-    command: ["auto"]            # keyless reward-claim daemon
-    env_file:
-      - ${CLIF_ENV:-./clif/.env}
-    networks: [fwd-callers, egress]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "clif", "status"]
-      interval: 300s
-      timeout: 15s
-      retries: 3
-      start_period: 1200s
-
-  clif-fsp-auto:
-    build:
-      context: ${CLIF_SRC:-./clif}
-    image: clif:dev
-    container_name: clif-fsp-auto
-    command: ["fsp", "auto"]     # keyless FSP signing daemon (hard-off unless FSP_AUTO_ENABLED=true)
-    env_file:
-      - ${CLIF_ENV:-./clif/.env}
-    networks: [fwd-callers, egress]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "clif", "fsp", "status"]
-      interval: 300s
-      timeout: 15s
-      retries: 3
-      start_period: 1200s
-
   clif:
     build:
       context: ${CLIF_SRC:-./clif}
@@ -75,7 +46,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.coston2
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["coston2"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "status"]
@@ -93,7 +64,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.coston2
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["coston2"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]
@@ -111,7 +82,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.songbird
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["songbird"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "status"]
@@ -129,7 +100,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.songbird
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["songbird"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]
@@ -147,7 +118,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.flare
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["flare"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "status"]
@@ -165,7 +136,7 @@ services:
     env_file:
       - ${CLIF_SRC:-./clif}/.env.flare
     networks: [fwd-callers, egress]
-    profiles: ["multichain"]
+    profiles: ["flare"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "clif", "fsp", "status"]
