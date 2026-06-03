@@ -625,6 +625,8 @@ else
       printf '    fsp signer:     %s (%s)\n' "fsp-signing-$net" "$(wallet_addr "fsp-signing-$net")"
       printf '                    register as your signing policy address (voter)\n'
     fi
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    fund gas:       send native FLR/SGB to claimer-%s (%s) — fresh wallet; it pays gas for RewardManager.claim\n' "$net" "$(wallet_addr "claimer-$net")"
+    [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas:       send native FLR/SGB to %s (%s) — fresh wallet; it pays gas to submit signUptimeVote/signRewards\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
   done
 fi
 printf '\nrehearse (use the `clif` host wrapper, NOT raw `docker compose run` — it reads the placeholder .env):\n'
