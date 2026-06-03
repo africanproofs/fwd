@@ -37,8 +37,9 @@ case "$cmd" in
     # (--profile <net>-fsp; opt-in, meaningful only with FSP_AUTO_ENABLED=true). A claim+FSP
     # provider runs BOTH commands; keeping them independent stops a sign-only (no-claim) setup
     # from launching a beneficiary-less claim daemon (which clif `auto` exits on → restart-loop).
-    # Profiles are a59-exact; this case adds only a compact started/not-started cockpit (so it
-    # no longer `exec`s — it runs `up -d`, then reports, then exits with compose's status).
+    # Profiles are a59-exact; this case adds only a compact requested/not-requested cockpit (so
+    # it no longer `exec`s — it runs `up -d`, reports what it ASKED to bring up, then exits with
+    # compose's status). `up -d` returning 0 does NOT prove a daemon stayed up — `fwd status` does.
     case "$COMPOSE" in *docker-compose.clif.yml*) _has_clif=1 ;; *) _has_clif=0 ;; esac
     case "${1:-}" in
       flare|songbird|coston2)
@@ -50,9 +51,10 @@ case "$cmd" in
         fi
         set +e; docker compose $COMPOSE --profile "$_prof" up -d "$@"; _rc=$?; set -e
         if [ "$_rc" -eq 0 ]; then
-          printf 'started:\n  fwd\n  litestream\n'
+          printf 'requested (docker compose up -d):\n  fwd\n  litestream\n'
           if [ "$_has_clif" -eq 1 ]; then
-            printf '  %s\nnot started:\n  %s  (use: %s)\n' "$_svc" "$_other" "$_ohint"
+            printf '  %s\nnot requested:\n  %s  (use: %s)\n' "$_svc" "$_other" "$_ohint"
+            printf 'confirm it stayed up (up -d does not guarantee it): sudo fwd status  |  sudo fwd logs %s\n' "$_svc"
           else
             printf '(clif not installed — fwd + litestream only)\n'
           fi
@@ -62,7 +64,7 @@ case "$cmd" in
       fsp) echo "fwd start: 'fsp' needs a network — e.g. 'fwd start songbird fsp'" >&2; exit 2 ;;
       *)
         set +e; docker compose $COMPOSE up -d "$@"; _rc=$?; set -e
-        [ "$_rc" -eq 0 ] && printf 'started:\n  fwd\n  litestream\n'
+        [ "$_rc" -eq 0 ] && printf 'requested (docker compose up -d):\n  fwd\n  litestream\n'
         exit "$_rc"
         ;;
     esac
@@ -71,8 +73,9 @@ case "$cmd" in
   restart) exec docker compose $COMPOSE restart "$@" ;;
   status)
     # bounded cockpit: real compose state + clif env presence per network + next action.
+    # Exits with `docker compose ps`'s status so a monitor/script sees a Docker/daemon failure.
     printf 'fwd daemon:\n'
-    docker compose $COMPOSE ps "$@" || true
+    set +e; docker compose $COMPOSE ps "$@"; _rc=$?; set -e
     if [ -d "$CLIF_SRC" ]; then
       printf '\nclif env files (%s):\n' "$CLIF_SRC"
       _any=0
@@ -82,6 +85,8 @@ case "$cmd" in
       if [ "$_any" -eq 0 ]; then printf '  (none yet — run: sudo fwd onboard rewards …)\n'; fi
     fi
     printf '\nnext: sudo fwd start <net>  (claim daemon)  |  sudo fwd start <net> fsp  (FSP daemon)\n'
+    [ "$_rc" -ne 0 ] && printf 'fwd status: docker compose ps exited %s\n' "$_rc" >&2
+    exit "$_rc"
     ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
   onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$FWD_DIR/install/onboard" "$@" ;;

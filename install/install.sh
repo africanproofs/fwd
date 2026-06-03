@@ -238,7 +238,7 @@ if [ "$ONBOARD_REWARDS" -eq 1 ] && [ "$START" -eq 1 ] && { true >/dev/tty; } 2>/
 fi
 
 if [ "$ONBOARD" -eq 1 ]; then
-  log "running guided reward onboarding (--onboard-rewards)"
+  log "running reward onboarding (--onboard-rewards)"
   set -- rewards --networks "$ONB_NETWORKS"
   [ -n "$IDENTITY" ]  && set -- "$@" --identity "$IDENTITY"
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
@@ -272,7 +272,7 @@ else
   if [ "$WITH_CLIF" -eq 1 ] && [ "$BUILD" -eq 1 ]; then printf 'clif: built\n'
   elif [ "$WITH_CLIF" -eq 1 ]; then printf 'clif: fetched (not built; --no-build)\n'
   else printf 'clif: not installed (--with-clif to add)\n'; fi
-  printf 'clif daemons: stopped\n'
+  printf 'clif daemons: not started by installer\n'
   printf '\nnext:\n  sudo fwd onboard rewards --identity 0x… --recipient 0x… --networks %s\n' "$ONB_NETWORKS"
   printf '  (idempotent; --import-existing to migrate; --guided for the full walk-through)\n'
 fi

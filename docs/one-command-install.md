@@ -141,7 +141,9 @@ Songbird / Flare for AP. `coston2` is a testnet: use it only if you are a regist
 Coston2 voter (otherwise an FSP signature is rejected on-chain). The claim path has
 no such constraint.
 
-You do **not** have to learn the policy schema. The wizard **narrates each step**,
+You do **not** have to learn the policy schema. In **guided mode** (`--guided`) the wizard
+**narrates each step**; by default it runs **compact** (section headers, the addresses it
+derived, a summary table, the on-chain next-step). Either way it
 **groups the work into a clearly-demarcated section per function** (fee claiming;
 FSP reward signing), **echoes each wallet's address** (so you can confirm a pasted
 key derived the address you expect), and describes each key in the contract's own
