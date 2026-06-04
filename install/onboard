@@ -159,7 +159,7 @@ NFUNC=0
 
 # Recipient: prompt if claiming and not supplied.
 if [ "$HAS_CLAIM" -eq 1 ] && [ -z "$RECIP" ]; then
-  if ask_tty "Your claim recipient (RewardManager.claim _recipient / setAllowedClaimRecipients) 0x..: " && [ -n "$REPLY" ]; then
+  if ask_tty "Claim rewards will be paid to this address. Recipient 0x..: " && [ -n "$REPLY" ]; then
     RECIP="$REPLY"
   else
     die "--recipient is required when claiming (or use --sign-only)"
@@ -170,7 +170,7 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
 fi
 
 if [ "$HAS_CLAIM" -eq 1 ] && [ -z "$IDENTITY" ]; then
-  if ask_tty "Your reward owner / identity address (RewardManager _rewardOwner) 0x..: " && [ -n "$REPLY" ]; then
+  if ask_tty "Your reward owner / data-provider identity address 0x..: " && [ -n "$REPLY" ]; then
     IDENTITY="$REPLY"
   else
     die "--identity is required when claiming (or use --sign-only)"
@@ -191,25 +191,23 @@ chain_of() {
 }
 
 printf '\033[1;36m=== fwd reward onboarding (%s) ===\033[0m\n' "$CLASS"
-guided 'Onboarding %s function(s) on %s — each in its own section below:\n' "$NFUNC" "$NETS"
-[ "$HAS_CLAIM" -eq 1 ] && guided '  • Fee claiming        — RewardManager.claim, called by your claim executor for _rewardOwner -> _recipient\n'
-[ "$HAS_FSP" -eq 1 ]   && guided '  • FSP reward signing  — FlareSystemsManager.signUptimeVote / signRewards, signed by your signing policy address\n'
+guided 'Preparing %s function(s) on %s:\n' "$NFUNC" "$NETS"
+[ "$HAS_CLAIM" -eq 1 ] && guided '  • Fee claiming: fwd claims rewards for your identity and sends them to your recipient.\n'
+[ "$HAS_FSP" -eq 1 ]   && guided '  • FSP signing: fwd signs uptime/reward messages with your registered signing key.\n'
 
 guided '\n\033[1;36m=== Reward onboarding ===\033[0m\n'
-guided 'This host command uses three capabilities:\n'
-guided '  custody writes: clifwd -> fwd admin\n'
-guided '  chain reads:    clif -> RPC\n'
-guided '  runtime config: clif env files\n\n'
-guided 'No private key is written to clif. fwd will not read or broadcast to chain.\n'
+guided 'This command will write the fwd policy, store keys in fwd, create clif caller tokens, seed nonces from chain, and write clif env files.\n'
+guided 'clif receives wallet names and caller tokens only. It never receives private keys.\n'
+guided 'fwd stays offline and signs only. clif handles chain reads and broadcasts.\n'
 
 # ---- Step 1: preflight ----
-step "Checking fwd" "It must be running and sealed before we configure it."
+step "Checking fwd" "fwd must be running before onboarding can load policy or store keys."
 clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
 note "healthy"
 
 # ---- Step 2: build the reward policy (covers all enabled functions) ----
 step "Building your reward policy" \
-  "The allow-list of exactly what fwd may sign — RewardManager.claim (claiming) and FlareSystemsManager signUptimeVote/signRewards (FSP). Your recipient is pinned, so a claim can only ever pay you."
+  "This policy says exactly what fwd may sign. Claims are locked to your chosen recipient."
 TMP="$(mktemp "${TMPDIR:-/tmp}/fwd-onboard-policy.XXXXXX")"
 trap 'rm -f "$TMP"' EXIT INT TERM
 set +e
@@ -257,7 +255,7 @@ note "policy validates"
 # a NEW container that re-reads the bind-mounted policy.yaml, so the load is guaranteed. It is
 # idempotent (a few seconds; the sealed master + state volume persist), so onboard self-heals
 # from any partial prior run — no manual `rm policy.yaml` or restart ever needed.
-step "Loading the policy" "fwd reads the policy at startup; we recreate it to load the allow-list (force-recreate — a plain restart can keep serving a stale policy; always run, so a re-run self-heals)."
+step "Loading the policy" "fwd reads policy at startup, so onboarding recreates the container to load the new policy. Wallets and state stay in place."
 ( cd "$FWD_DIR"
   COMPOSE="-f docker-compose.yml"
   [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
@@ -285,8 +283,8 @@ wallet_create() {  # name policy role — generate fresh in-vault; echo the deri
   role="${3:-wallet}"
   set +e; out="$(clifwd wallets create --name "$1" --policy "$2" 2>&1)"; rc=$?; set -e
   case "$rc" in
-    0) note "generated in-vault: $1 @ $(wallet_addr "$1") — $role" ;;
-    3) note "exists (skip): $1 @ $(wallet_addr "$1") — $role" ;;
+    0) note "generated and sealed in fwd: $1 @ $(wallet_addr "$1") — $role" ;;
+    3) note "already present: $1 @ $(wallet_addr "$1") — $role" ;;
     *) die "wallets create $1 failed: $out" ;;
   esac
 }
@@ -295,7 +293,7 @@ wallet_create() {  # name policy role — generate fresh in-vault; echo the deri
 # never on host disk, never on the network.
 import_pasted() {  # name policy role
   role="${3:-key}"
-  if wallet_exists "$1"; then note "already imported: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
+  if wallet_exists "$1"; then note "already present: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
   if [ "$SKIP_FSP_IMPORT" -eq 1 ]; then
     warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
@@ -325,8 +323,8 @@ import_pasted() {  # name policy role
     set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
     docker exec "$FWD_CONTAINER" sh -c 'rm -f /tmp/.fwd-onboard.key' 2>/dev/null || true
     case "$rc" in
-      0) note "imported + sealed: $1 @ $(wallet_addr "$1") — $role (input shredded — confirm this is the address you expect)"; return 0 ;;
-      3) note "already imported (skip): $1 @ $(wallet_addr "$1") — $role"; return 0 ;;
+      0) note "imported and sealed in fwd: $1 @ $(wallet_addr "$1") — $role (temporary input removed; confirm this address)"; return 0 ;;
+      3) note "already present: $1 @ $(wallet_addr "$1") — $role"; return 0 ;;
       *) warn "import failed: $out. Try again, or Enter to skip." ;;
     esac
   done
@@ -534,13 +532,13 @@ env_write() {  # net claim_tok sign_tok submit_tok
 
 # ====================== Function: FEE CLAIMING ======================
 if [ "$HAS_CLAIM" -eq 1 ]; then
-  fsection "FEE CLAIMING" "RewardManager.claim(_rewardOwner, _recipient, ...): your claim executor claims on behalf of _rewardOwner and pays the allowed _recipient. Needs: the executor wallet, a clif token, a seeded nonce."
+  fsection "FEE CLAIMING" "fwd will use one wallet to call RewardManager.claim for your identity. Any claim made by this wallet must pay your chosen recipient."
   for net in $NETLIST; do
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "claimer-$net" "wc/claimer-$net" "the claim executor (authorized via ClaimSetupManager.setClaimExecutors to call RewardManager.claim)"
+      import_pasted "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     else
-      wallet_create "claimer-$net" "wc/claimer-$net" "the claim executor (RewardManager.claim caller; authorized via ClaimSetupManager.setClaimExecutors)"
+      wallet_create "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     fi
     caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_SRC/.env.$net" FWD_CALLER_TOKEN
     eval "TOK_CLAIM_$net=\$_t_claim"
@@ -551,16 +549,16 @@ fi
 
 # ====================== Function: FSP REWARD SIGNING ======================
 if [ "$HAS_FSP" -eq 1 ]; then
-  fsection "FSP REWARD SIGNING" "FlareSystemsManager.signUptimeVote(_rewardEpochId, _uptimeVoteHash, _signature) / signRewards(...): your signing policy address produces the _signature FSM recovers; a sender submits the tx (msg.sender, gas). Needs: the signing policy key (imported), a sender, two clif tokens, a seeded nonce."
+  fsection "FSP REWARD SIGNING" "fwd will use your registered FSP signing key to sign uptime and reward messages. A sender wallet pays gas and submits them."
   for net in $NETLIST; do
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     _sender="$(sender_name "$net")"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "$_sender" "$(sender_wc "$net")" "the msg.sender that submits signUptimeVote/signRewards (pays gas; FSM checks the _signature, not the sender)"
+      import_pasted "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     else
-      wallet_create "$_sender" "$(sender_wc "$net")" "the msg.sender that submits signUptimeVote/signRewards (gas payer; FSM checks the _signature, not the sender)"
+      wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
-    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your signing policy address (the _signature signer FlareSystemsManager.signUptimeVote/signRewards recovers)"
+    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your registered FSP signing key; Flare checks this signature"
     caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_SRC/.env.$net" FSP_SIGN_CALLER_TOKEN
     caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_SRC/.env.$net" FSP_SUBMIT_CALLER_TOKEN
     eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
@@ -572,7 +570,7 @@ fi
 # ====================== clif runtime config (.env.<net>) ======================
 if [ "$CLIF_OK" -eq 1 ]; then
   printf '\n\033[1;35m═══════════════ clif runtime config ═══════════════\033[0m\n'
-  printf '   Writing clif'\''s per-network env file(s) — keyless (no private key); 0600.\n'
+  printf '   Writing per-network clif env files. They contain wallet names and caller tokens only; no private keys. Mode 0600.\n'
   for net in $NETLIST; do
     eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
     env_write "$net" "$_w_ct" "$_w_st" "$_w_sub"
@@ -601,46 +599,46 @@ done
 
 # ====================== Final — on-chain (operator-only, offline identity key) ======================
 printf '\n\033[1;36m── Final — on-chain authorization (you, offline)\033[0m\n'
-guided '   fwd is configured. This last step is on-chain, from your OFFLINE identity key (fwd never holds it).\n'
+guided '   Use your offline identity key for the on-chain step. fwd never has that key.\n'
 guided '\n=============================================================================\n'
 if [ "$IMPORT_EXISTING" -eq 1 ]; then
-  printf '\033[1;31mCUTOVER\033[0m — your imported keys are already authorized/registered on-chain; instead:\n'
+  printf '\033[1;31mCUTOVER\033[0m — your imported keys are already live on-chain. Before using fwd:\n'
   for net in $NETLIST; do
     printf '  [%s]\n' "$net"
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    Fee claiming:  STOP the old claimer for claimer-%s (%s) — fwd is now its sole user\n' "$net" "$(wallet_addr "claimer-$net")"
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    stop old claiming software for claimer-%s (%s)\n' "$net" "$(wallet_addr "claimer-$net")"
     if [ "$HAS_FSP" -eq 1 ]; then
-      printf '    FSP signing:   STOP the old submitter for %s (%s)\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
-      printf '                   and fsp-signing-%s (%s) — sole-submitter cutover\n' "$net" "$(wallet_addr "fsp-signing-$net")"
+      printf '    stop old FSP software that uses %s (%s)\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
+      printf '    stop old FSP software that uses fsp-signing-%s (%s)\n' "$net" "$(wallet_addr "fsp-signing-$net")"
     fi
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    Fee claiming:  verify %s is still an allowed claim recipient\n' "$RECIP"
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    verify %s is still an allowed claim recipient\n' "$RECIP"
   done
-  printf 'If the old flare-system-client / ftso-fee-claimer keeps submitting from these\n'
-  printf 'accounts, it and fwd will collide on nonces — stop it first.\n'
+  printf 'If old claiming/submitting software keeps sending from the claimer or sender accounts,\n'
+  printf 'it can collide with fwd on nonces. Stop it first.\n'
 else
-  printf '\033[1;31mon-chain authorization required\033[0m — from your OFFLINE identity key (fwd never holds it):\n'
+  printf '\033[1;31mon-chain authorization required\033[0m — use your offline identity key; fwd never has it:\n'
   for net in $NETLIST; do
     printf '  [%s]\n' "$net"
     if [ "$HAS_CLAIM" -eq 1 ]; then
-      printf '    claim executor: %s (%s)\n' "claimer-$net" "$(wallet_addr "claimer-$net")"
-      printf '                    authorize via ClaimSetupManager.setClaimExecutors\n'
-      printf '    recipient:      %s\n' "$RECIP"
-      printf '                    allow via setAllowedClaimRecipients\n'
+      printf '    authorize claim executor: %s (%s)\n' "claimer-$net" "$(wallet_addr "claimer-$net")"
+      printf '      method: ClaimSetupManager.setClaimExecutors\n'
+      printf '    allow recipient: %s\n' "$RECIP"
+      printf '      method: setAllowedClaimRecipients\n'
     fi
     if [ "$HAS_FSP" -eq 1 ]; then
-      printf '    fsp signer:     %s (%s)\n' "fsp-signing-$net" "$(wallet_addr "fsp-signing-$net")"
-      printf '                    register as your signing policy address (voter)\n'
+      printf '    register FSP signer: %s (%s)\n' "fsp-signing-$net" "$(wallet_addr "fsp-signing-$net")"
+      printf '      use it as your signing policy / voter address\n'
     fi
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    fund gas:       send native FLR/SGB to claimer-%s (%s) — fresh wallet; it pays gas for RewardManager.claim\n' "$net" "$(wallet_addr "claimer-$net")"
-    [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas:       send native FLR/SGB to %s (%s) — fresh wallet; it pays gas to submit signUptimeVote/signRewards\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    fund gas wallet: claimer-%s (%s)\n' "$net" "$(wallet_addr "claimer-$net")"
+    [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas wallet: %s (%s)\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
   done
 fi
-printf '\nrehearse (use the `clif` host wrapper, NOT raw `docker compose run` — it reads the placeholder .env):\n'
+printf '\nRehearse with the host `clif` wrapper. Do not use raw `docker compose run`; it reads the placeholder env file:\n'
 for net in $NETLIST; do
   [ "$HAS_CLAIM" -eq 1 ] && printf '  clif --network %s claim --type fee\n' "$net"
   [ "$HAS_FSP" -eq 1 ]   && printf '  clif --network %s fsp uptime --epoch <N>   (and: clif --network %s fsp rewards --epoch <N>)\n' "$net" "$net"
 done
 printf '  clifwd audit verify\n'
-printf "Verify the RewardClaimed event on-chain + 'clifwd audit verify' (Songbird is the canary) before Flare.\n"
+printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event on-chain and run 'clifwd audit verify'.\n"
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
