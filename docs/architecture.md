@@ -122,10 +122,13 @@ The `POST /v1/sign-transaction` happy path:
     - Decoded args within bounds (max_value_wei, recipient pattern)?
     - Rate within window (per_hour, per_day)?
     - Sum of pending + confirmed value below daily cap?
-    - Caller-supplied gas / max_fee_per_gas within FWD_MAX_GAS /
-      FWD_MAX_FEE_PER_GAS sanity caps (fwd does not query a fee
-      oracle, so it caps the client-supplied values instead)?
-    Default-deny on any failure.
+    Default-deny (403 `policy_denied`) on any rule failure.
+
+    (Caller-supplied `gas` / `max_fee_per_gas` are bounded by FWD_MAX_GAS /
+    FWD_MAX_FEE_PER_GAS — fwd does not query a fee oracle, so it caps the
+    client-supplied values instead — but this is a DISTINCT param-sanity
+    check that runs *before* the policy gate and returns 400
+    `tx_params_rejected`, not a 403 policy denial.)
 
 6.  fwd reserves nonce (PURELY LOCAL — no chain read)
     BEGIN IMMEDIATE;
@@ -222,11 +225,12 @@ Every failure `fwd` itself can hit occurs **before** the signed tx leaves the bu
 
 | Step | Failure | Response | Nonce |
 |---|---|---|---|
-| 5 | Policy denies (caller/contract/method/value/rate/gas-cap) | 403 `policy_denied` / `rate_exceeded` | Never reserved (gate runs before reservation) |
-| 6 | SQLite busy / lock timeout on nonce reservation | 409 `nonce_unavailable`; caller may retry | Not committed |
-| 8 | Wallet not found | 404 `wallet_not_found` | Released |
-| 9 | **Sealed-master decrypt fails** (master file unreadable, ciphertext/key mismatch) | **503 `vault_unavailable`** — the sealed master is unavailable. Reserved nonce is RELEASED in the same SQLite transaction. No on-chain side effect. | Released |
-| 10 | `eth-account` rejects `tx_dict` (malformed `to`, etc.) — incl. the `TypeError` class | 422 `intent_unparseable` / 500 | Released (any sign-build error releases the nonce) |
+| 5 (param caps) | Caller `gas` / `max_fee_per_gas` exceed `FWD_MAX_GAS` / `FWD_MAX_FEE_PER_GAS`, or `max_priority_fee_per_gas` > `max_fee_per_gas` | 400 `tx_params_rejected` | Never reserved (checked before the policy gate) |
+| 5 (policy) | Policy denies (caller/contract/method/value/rate/daily-cap) | 403 `policy_denied` | Never reserved (gate runs before reservation) |
+| 6 | Nonce row not seeded for the (wallet, chain) — no `nonce-init` | 409 `nonce_not_initialized` | Not reserved (rate released) |
+| 8 | Wallet not found | 404 `wallet_not_found` | Never reserved |
+| 9 | **Sealed-master decrypt fails** (master file unreadable, ciphertext/key mismatch) | **503 `vault_unavailable`** — the sealed master is unavailable. Reserved nonce + rate are RELEASED in the same SQLite transaction. No on-chain side effect. | Released |
+| 10 | `eth-account` rejects a built tx field (`ValueError` / `TypeError` class) | 500; audited `pre_sign_failure` | Released (any sign-build error releases the nonce + rate) |
 | 14 (client-reported) | broadcast `rejected_releaseable` | recorded; tail nonce released, else surfaced via `nonce/holes` | Released (tail) / hole |
 | 14 (client-reported) | broadcast `rejected_nonce_too_low` | recorded; chain is ahead → operator `nonce-sync` | Kept |
 
@@ -326,6 +330,12 @@ CREATE INDEX idx_tx_method ON transactions (method_name, contract_address);
 CREATE INDEX idx_audit_caller_ts ON audit_log (caller, ts);
 ```
 
+The policy-engine rate tables and the replacement-tracking table are created by later migrations and are omitted from the block above; their authoritative DDL lives in `alembic/versions/`:
+
+- `rate_buckets`, `wallet_buckets` (Alembic 0005) — per-caller and per-wallet sliding-window rate counters for the policy engine.
+- `fsp_rate_buckets` (Alembic 0006) — the FSP-signing rate counters for `/v1/sign-fsp-message`.
+- `transaction_attempts` (Alembic 0007) — every signed attempt per `tx_id`; the substrate for the ≤5-retry `sign-replacement` cap.
+
 PRAGMAs at startup: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, plus `dbapi_connection.isolation_level=None` set in the `connect` handler (disables sqlite3's implicit `BEGIN (DEFERRED)` so SQLAlchemy's `begin` event handler is the sole transaction start). The 30 s `busy_timeout` absorbs concurrent-writer queueing during signing bursts.
 
 ## API surface
@@ -346,7 +356,7 @@ The mounted surface (in `src/fwd/main.py`) is frozen for v1. Rows tagged **(defe
 | `POST` | `/v1/admin/callers` | admin | Issue caller API key |
 | `GET` | `/v1/admin/callers` | admin | List callers (active + revoked) |
 | `DELETE` | `/v1/admin/callers/{name}` | admin | Revoke caller |
-| `POST` | `/v1/admin/nonce-init` | admin | Seed a (wallet, chain) `next_nonce` (fwd cannot read chain). |
+| `POST` | `/v1/admin/nonce-init` | admin | Seed a (wallet, chain) `next_nonce` (fwd cannot read chain). 409 `nonce_already_initialized` if a row exists; `force: true` overwrites it to correct a mis-seed (audited `force_overwrite` with before→after). |
 | `POST` | `/v1/admin/nonce-sync` | admin | Bounded-monotonic advance of fwd's nonce view to operator-supplied on-chain truth. |
 | `GET` | `/v1/admin/nonce/{wallet}/{chain}` | admin | Read the current `next_nonce` + `last_confirmed` for a (wallet, chain). Read-only; no audit row. |
 | `GET` | `/v1/admin/nonce/holes` | admin | List orphaned pending reservations (operator alarm). |
@@ -675,6 +685,7 @@ config/abis/
   reward_manager.json        # FTSO RewardManager (Flare + Coston2)
   participant_register.json  # apregister (Coston2 + future Flare)
   erc20.json                 # canonical ERC-20 (transfer, approve)
+  flare_systems_manager.json # FSP Leg-2 submit (signUptimeVote, signRewards)
 ```
 
 Supported types:
@@ -692,7 +703,7 @@ tuple / struct / function are **decoded by eth_abi but omitted from
 decoder does NOT return `None` for these. The four custody-relevant
 `claim` scalars are projected and predicatable; the proof array is not
 (nobody predicates merkle internals). The **signable** methods of all
-three ABIs are decodable this way via B1. Deep dotted-path predicate
+four ABIs are decodable this way via B1. Deep dotted-path predicate
 projection is a Phase 10 item if a real consumer needs it (no
 speculative scope).
 
@@ -881,7 +892,9 @@ The scrubber is **field-aware**: a 32-byte hex string in a known-public field (`
 class Signer(Protocol):
     async def address(self, wallet_name: str) -> str: ...
     async def sign_transaction(self, wallet_name: str, tx_dict: dict) -> SignedTransaction: ...
+    async def sign_fsp_eip191(self, wallet_name: str, message_hash_32: bytes) -> SignedDigest: ...
     # SignedTransaction = NamedTuple of (raw_transaction: bytes, hash: bytes, r: int, s: int, v: int)
+    # SignedDigest      = NamedTuple of (message_hash: bytes, r: int, s: int, v: int, signature: bytes)
 ```
 
 v1 ships one implementation: `EnvelopeSigner` — fetches the wallet's sealed-master-wrapped privkey ciphertext from SQLite, calls `SealedMaster.decrypt` (in-process AES-256-GCM) to recover plaintext, signs the transaction in-process with `eth-account`, zeroizes the plaintext buffer, and returns the signed payload. A future `YubiHsmSigner` (Phase 10, optional) plugs in via the same protocol — `fwd`'s policy engine, audit log, and API surface are unchanged. Future signer implementations that wrap a remote signing backend (HSM, KMS) will reintroduce DER parsing and v-recovery internally; the protocol only commits to "give me a signed transaction." This is the only forward-compatibility abstraction in the codebase; everything else is concrete to v1.

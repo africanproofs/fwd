@@ -5,9 +5,10 @@ Per `decisions.md` D15 and `architecture.md` § Intent decoder.
 ## What lives here
 
 Pinned, in-repo, source-controlled JSON ABIs of the contracts fwd is
-permitted to construct signatures for. The intent decoder
-(`src/fwd/domain/intent.py`) loads these at startup
-and uses them to convert opaque calldata bytes into a typed
+permitted to construct signatures for. The ABI registry
+(`AbiRegistry.load`, `src/fwd/infra/abi_registry.py`) loads these at
+startup; the intent decoder (`src/fwd/domain/intent.py`) then uses the
+loaded ABIs to convert opaque calldata bytes into a typed
 `DecodedIntent` against which the policy engine evaluates argument
 predicates.
 
@@ -52,7 +53,10 @@ When a new AP backend needs to sign against a new contract:
 3. Add a registry.yaml entry mapping the name to the file.
 4. Reference the name from the operator's `policy.yaml` in the
    `permissions.<path>.contracts.<addr>.abi` field for the new contract.
-5. `docker compose restart fwd` — the new ABI loads at startup.
+5. `docker compose up -d --force-recreate fwd` — the new ABI loads at
+   startup (`AbiRegistry.load` in `main.py::lifespan`). force-recreate is
+   the reliable reload: a plain `docker compose restart` can keep serving
+   the stale registry.
 
 No code changes. The decoder is type-driven by the loaded ABI.
 

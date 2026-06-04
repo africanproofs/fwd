@@ -8,11 +8,12 @@ In order of value and consequence-of-compromise:
 
 | Asset | Held in | Value at risk | Compromise consequence |
 |---|---|---|---|
-| FTSO claim recipient key (Flare) | Sealed (AES-256-GCM) in SQLite | ~1000 FLR / epoch automation revenue (≈ tens of USD) | Theft of one or more epochs' rewards |
-| Songbird claim recipient key | Sealed (AES-256-GCM) in SQLite | Reward-epoch revenue (recurring, smaller) | Same, smaller |
+| FTSO claim executor key (`claimer-<net>`) | Sealed (AES-256-GCM) in SQLite | ~1000 FLR / epoch automation revenue (≈ tens of USD); claims pay the pinned recipient, never the attacker | Theft of claim gas + ability to call `RewardManager.claim` within policy (pays the fixed recipient) |
+| FSP signing-policy key (`fsp-signing-<net>`) | Sealed (AES-256-GCM) in SQLite | The registered voter key — valid FSP votes the `FlareSystemsManager` recovers | An attacker can produce valid FSP signatures until the key is rotated + re-registered on-chain |
+| FSP gas sender key (`fsp-sender-<net>`) | Sealed (AES-256-GCM) in SQLite | Native FLR/SGB gas balance funding FSP submits | Theft of the sender's gas balance |
 | Coston2 test wallet keys | Sealed (AES-256-GCM) in SQLite | Testnet gas (~negligible) | Test environment disruption |
 | Future automation keys (`apcli`, `fics` writes, agent wallets) | Sealed (AES-256-GCM) in SQLite | Per-caller, bounded by policy | Bounded by per-caller policy |
-| Sealed master key (AES-256-GCM, seals all wallet keys at rest) | Mode-0600 host file owned by the `fwd` user | All keys, all assets | Total loss of `fwd`-managed custody (recovery: regenerate wallets + on-chain `ClaimSetupManager.setClaimExecutors` re-authorization — flagged unverified, see Core #17) |
+| Sealed master key (AES-256-GCM, seals all wallet keys at rest) | Mode-0600 host file owned by the `fwd` user | All keys, all assets | Total loss of `fwd`-managed custody (claim-executor recovery: regenerate wallet + on-chain `ClaimSetupManager.setClaimExecutors` re-authorization — flagged unverified; FSP-signing-key recovery depends on on-chain signing-policy re-registration; see Core #17) |
 | Audit log integrity | SQLite + Litestream | Forensic / non-repudiation | Loss of "what happened, when" record |
 
 What is NOT held in `fwd`:
@@ -30,7 +31,7 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 | Tier | Capability | Realistic? |
 |---|---|---|
 | 1 | Reads public internet, scans public endpoints | Always |
-| 2 | Has compromised one of `fwd`'s caller applications (e.g. `ftso-fee-claimer` container) | Plausible |
+| 2 | Has compromised one of `fwd`'s caller applications (e.g. the `clif` container) | Plausible |
 | 3 | Has shell on the Docker host (non-root) | Plausible |
 | 4 | Has root on the Docker host | Possible — operational hygiene matters |
 | 5 | Has physical access to the host | Low (datacenter physical security) |
@@ -42,11 +43,11 @@ These remain offline by deliberate scope (see `CLAUDE.md` § "What FWD Deliberat
 
 ### A1. Caller is compromised
 
-**How.** Vulnerability in `ftso-fee-claimer` (or any other caller) lets an attacker execute arbitrary code in the caller's container.
+**How.** Vulnerability in `clif` (or any other caller) lets an attacker execute arbitrary code in the caller's container.
 
-**What the attacker gets.** The caller's `FWD_API_KEY` from its environment. They can submit requests to `fwd`.
+**What the attacker gets.** The caller's `FWD_API_KEY` from its environment. They can submit signing requests to `fwd` (`clif` holds no signing key — it is keyless and broadcasts the signed payload `fwd` returns).
 
-**What `fwd` allows them to do.** Only what policy allows that specific caller — for `ftso-fee-claimer`, that's "call `claim` on the FTSO RewardManager, beneficiary = the configured claim recipient, max N times per hour." Nothing else. No other contracts. No other methods. No other arguments.
+**What `fwd` allows them to do.** Only what policy allows that specific caller — for `clif`, that's "call `claim` on the FTSO RewardManager, beneficiary = the configured claim recipient, max N times per hour" plus its policy-scoped FSP message signing. Nothing else. No other contracts. No other methods. No other arguments.
 
 **Mitigations in place.**
 - Default-deny policy (Core invariant #2).

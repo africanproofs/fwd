@@ -14,6 +14,14 @@ runtime — the installer uses Compose underneath; the point is that a normal
 operator should not have to copy compose files, remember `docker exec`, or learn
 container volume names for day-to-day use.
 
+The build-from-source installer (`install/install.sh`), the host wrappers
+(`fwd` / `clifwd` / `clif`), and the guided onboarding (`install/onboard`) are
+present. Two Phase-1 sub-steps are **deferred**: hosting the vanity
+`get.proofs.africa/fwd` redirect, and a fetched-manifest + per-artifact
+checksum step (today the installer pins source by git ref plus an optional
+HEAD-sha integrity pin — see *Release & pinning*). Until the vanity URL is
+hosted, the installer is run directly from the public source.
+
 ## Positioning
 
 A **single-host installation is a fully-functional FTSO provider signing
@@ -64,25 +72,32 @@ source build); that is the accepted trade for the zero-trust posture.
 
 The install script should:
 
-1. Detect OS, architecture, and required host tools (`docker`,
-   `docker compose v2`, `git`); stop with a clear instruction if a tool is
-   missing and host policy forbids auto-install.
-2. Resolve the target version from a pinned manifest (never blindly track
-   `main`); honor `FWD_VERSION` / `--channel`.
-3. Create stable host paths (operator-overridable via `FWD_DIR`):
+1. Detect required host tools (`docker`, `docker compose v2`, `git`) and reach
+   the Docker daemon; stop with a clear instruction if any is missing.
+2. Resolve the source ref to build (`FWD_REF` / `--ref`, default `main`; a
+   release pins a tag) and, if `FWD_SHA` is set, require the cloned `HEAD` to
+   equal it (integrity pin). *Deferred Phase-1 sub-step: resolving the ref from
+   a fetched, checksummed manifest instead of a bare git ref.*
+3. Create the install root (`FWD_DIR`, default `/opt/fwd`, overridable via
+   `--dir`) and lay out everything under it:
    ```text
-   /opt/fwd          release files + compose bundle + fetched source
-   /etc/fwd          operator configuration (.env, mounted policy.yaml)
-   /var/lib/fwd      persistent state mount root (if host paths are used)
-   /var/backups/fwd  local backup export point
+   $FWD_DIR             install root
+   $FWD_DIR/src         fetched source + compose bundle (the compose dir)
+   $FWD_DIR/src/.env    operator runtime config (FWD_ADMIN_KEY, FWD_IMAGE_TAG)
+   $FWD_DIR/src/config  policy.yaml + sealed master.key (gitignored, host-owned)
+   $FWD_DIR/clif        clif source + per-network .env files (under --with-clif)
    ```
-4. Fetch + checksum-verify the pinned source (fwd; clif too under `--with-clif`).
+   Persistent state and the local backup replica are Docker named volumes
+   (`fwd-state`, `backup`) in the compose project — not host paths.
+4. Fetch the pinned source (fwd; clif too under `--with-clif`). *Deferred
+   Phase-1 sub-step: per-artifact checksum verification of the fetched source.*
 5. `docker compose build` from that source.
 6. Generate the sealed master **locally** (`clifwd master generate`, mode 0600,
    owned by the `fwd` uid) — it is **never fetched or transmitted**.
-7. Generate a strong `FWD_ADMIN_KEY` into `/etc/fwd/fwd.env` (preserving
+7. Generate a strong `FWD_ADMIN_KEY` into `$FWD_DIR/src/.env` (preserving
    existing operator values on re-run).
-8. Install the host `fwd` lifecycle wrapper and the `clifwd` CLI wrapper.
+8. Install the host wrappers (`fwd` lifecycle, `clifwd` CLI, `clif` keyless
+   client), baking the compose-dir and container-name defaults into each.
 9. Start the stack **inert** (empty default-deny policy, zero wallets); under
    `--with-clif`, build clif but leave its daemons stopped until onboarding
    completes.
@@ -93,8 +108,8 @@ The install script should:
 
 ### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd start [<net> [fsp]] | stop | restart | status | logs | onboard | upgrade
-sudo fwd backup status
+sudo fwd start [<net> [fsp]] | stop | restart | status | logs | onboard
+sudo fwd upgrade | backup status     # Phase-1 stubs — exit 2 with a pointer to this doc
 ```
 Compose is an implementation detail of these. `fwd start` brings up fwd (+ litestream)
 only; `fwd start songbird` starts that network's **claim** daemon ONLY; `fwd start songbird
@@ -278,10 +293,16 @@ checklist with your concrete addresses — the runbook is the manual equivalent.
 
 ## Release & pinning
 
-The install URL resolves to a small, auditable POSIX script pinned to a release
-tag (the vanity URL only redirects to the in-repo `install/install.sh` at that
-tag). It fetches a versioned manifest — **source refs + checksums, not image
-digests** (build-from-source):
+The installer clones **pinned source** — `FWD_REF` / `--ref` (a release pins a
+tag; default `main`) plus an optional `FWD_SHA` that the cloned `HEAD` must
+equal (the integrity pin). clif is pinned the same way via `CLIF_REF` under
+`--with-clif`. Source repos default to the public
+`github.com/africanproofs/{fwd,clif}.git`.
+
+The **deferred Phase-1 sub-step** layers a fetched, checksummed manifest on top
+of git-ref pinning — **source refs + checksums, not image digests**
+(build-from-source) — at which point the installer also verifies every fetched
+artifact's checksum:
 
 ```yaml
 version: 1.1.0
@@ -291,7 +312,8 @@ compose_sha256: <hex>
 networks_sha256: <hex>
 ```
 
-The installer verifies every fetched artifact's checksum.
+The same step pairs with the vanity `get.proofs.africa/fwd` URL, which redirects
+to the in-repo `install/install.sh` at the pinned tag.
 
 ## Modes
 
@@ -303,17 +325,20 @@ The installer verifies every fetched artifact's checksum.
 
 ## Upgrade
 
-`sudo fwd upgrade`: read current version → fetch target manifest → fetch + build
-new source → stop only after the build succeeds → preserve `/etc/fwd` + state →
-run migrations via the container entrypoint → start → `clifwd health` → print
-rollback steps on failure. **Never** overwrites operator policy or secrets.
+`sudo fwd upgrade` is a **Phase-1 stub** (the host wrapper exits 2 with a
+pointer to this doc); it is finalized together with the manifest-fetch step. The
+target behaviour: read current version → fetch + build new source → stop only
+after the build succeeds → preserve `$FWD_DIR/src/.env` + `config/` + the state
+volume → run migrations via the container entrypoint → start → `clifwd health` →
+print rollback steps on failure. **Never** overwrites operator policy or secrets.
 
 ## Security model of `curl | sh` for a custody tool
 
-- TLS, and the script pinned to an **immutable release tag**, published and
-  **auditable in the public repo** (`github.com/africanproofs/fwd`; the vanity
-  URL only redirects).
-- **Checksums** on every fetched artifact; build from pinned source.
+- The script is published and **auditable in the public repo**
+  (`github.com/africanproofs/fwd`); a release pins it to an **immutable tag**.
+- **Build from pinned source** — `FWD_REF` plus an optional `FWD_SHA` HEAD-equality
+  integrity pin. (Per-artifact **checksum verification** lands with the deferred
+  manifest step.)
 - The installer **never fetches or handles key material** — the master is
   generated locally; provider keys are imported only at the post-gate step.
 - **Default-deny inert bring-up** — nothing is signable until the operator

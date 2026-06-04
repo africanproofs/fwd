@@ -19,10 +19,12 @@ install flow and the custody gate. CLI output (install, onboarding, `fwd start` 
 `fwd status`) is a compact operator cockpit by default; add `--guided` / `--explain`
 (or `FWD_OUTPUT=guided`) for the explanatory walk-through.
 
-> **Status: production-deployed**, proven on Coston2 + Flare/Songbird mainnet. fwd
-> **signs** EVM transactions and Flare FSP protocol messages; it does **not** broadcast
-> and makes **no outbound network connection**. Clients broadcast the signed payload
-> themselves and report the outcome back. Custody is a sealed local master
+> **Status: production-deployed.** The reward-claim path and the full client↔fwd↔chain
+> integration are mainnet-proven (Coston2 + Flare/Songbird). fwd **signs** EVM transactions
+> and Flare FSP protocol messages (valid EIP-191 signatures); on-chain FSP **acceptance** by
+> the FlareSystemsManager is deferred pending a clean ended-but-not-yet-signed-epoch sign. fwd
+> does **not** broadcast and makes **no outbound network connection** — clients broadcast the
+> signed payload themselves and report the outcome back. Custody is a sealed local master
 > (AES-256-GCM, mode-0600 host file).
 
 ## What fwd is
@@ -98,7 +100,7 @@ writes to the bind-mounted host path:
 
 ```bash
 docker run --rm -v "$PWD/config:/config" \
-  fwd:${FWD_IMAGE_TAG:-dev} \
+  registry.gitlab.com/proofs.africa/fwd/fwd:${FWD_IMAGE_TAG:-dev} \
   clifwd master generate --out /config/master.key
 ```
 

@@ -63,7 +63,7 @@ Notably **NOT present:**
 - `kubernetes` — no K8s API access needed (no TokenReview).
 - `boto3` — no AWS dependency.
 
-Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Updates proposed via Renovate or Dependabot, reviewed before merge.
+Dependency tree pinned in `poetry.lock`; floating versions are forbidden. Dependency changes are deliberate and one-at-a-time — `poetry lock --no-update` adds or drops a single package without re-resolving the whole tree — and reviewed before merge.
 
 ## Build, dev, and test tooling
 
@@ -95,7 +95,7 @@ These are projects that *change* because of `fwd`, not projects `fwd` depends on
 
 | Project | Migration | Phase |
 |---|---|---|
-| `ftso-fee-claimer` | Replace `.env PRIVATE_KEY` with `FWD_URL` + `FWD_API_KEY`; rotate claim recipient on-chain | 8 |
+| `clif` | Keyless consumer (supersedes `ftso-fee-claimer`) — holds no signing key; claims FTSO rewards and FSP-signs via fwd, then broadcasts + reports back. Its `.env PRIVATE_KEY=` is deleted. | Migrated |
 | `apregister/` | Replace Coston2 test wallet `.env`; generate new test wallet | 9 |
 | `apcli` | Audit which keys it holds; migrate as appropriate | 9 |
 | `fics` write paths | When `fics` gains writes (currently observe-only) | When applicable |
@@ -105,7 +105,7 @@ These are projects that *change* because of `fwd`, not projects `fwd` depends on
 
 Listed because earlier design drafts implied otherwise; making the absences explicit prevents reintroduction by drift.
 
-- **No AWS** — KMS path was rejected; no IAM, no us-east-1, no second cloud account.
+- **No AWS** — no KMS, no IAM, no us-east-1, no second cloud account.
 - **No GCP / Azure** — same reason.
 - **No HSM hardware** in v1 — YubiHSM 2 is a Phase 10 upgrade, not a v1 requirement.
 - **No K3s / Kubernetes** — Docker Compose is the deployment unit.
