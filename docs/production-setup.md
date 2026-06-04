@@ -12,19 +12,19 @@ for the onboarding wizard's mechanics, see its "Reward onboarding" section.
 ## 1. Install the stack (with clif), inert
 
 ```sh
-curl -sfL https://get.proofs.africa/fwd | sudo sh -s -- --with-clif --guided
+curl -sfL https://get.proofs.africa/fwd | sudo sh -s -- --with-clif
 ```
 
 Until `get.proofs.africa` hosting lands (Phase-1 pending), clone the public source and run the
 installer directly — identical effect:
 
 ```sh
-git clone https://github.com/africanproofs/fwd.git && sudo sh fwd/install/install.sh --with-clif --guided
+git clone https://github.com/africanproofs/fwd.git && sudo sh fwd/install/install.sh --with-clif
 ```
 
 This builds `fwd` + `clif`, installs the host wrappers (`fwd`, `clifwd`, `clif`), starts **only
 `fwd` + `litestream`**, and leaves custody **inert** (empty default-deny policy, zero wallets,
-signs nothing). `--guided` is optional (compact output is the default).
+signs nothing). Output is a compact operator cockpit by default; add `--guided` (or `FWD_OUTPUT=guided`) for the verbose, first-timer walk-through.
 
 ## 2. Run reward onboarding — canary first
 
@@ -35,9 +35,10 @@ a network is a no-op and only adds the new one):
 sudo fwd onboard rewards \
   --identity 0xYOUR_OFFLINE_IDENTITY_ADDRESS \
   --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS \
-  --networks songbird \
-  --guided
+  --networks songbird
 ```
+
+Add `--guided` for the step-by-step walk-through; the default compact output still prints every safety gate and on-chain action.
 
 Later, after the canary is clean (step 7), expand: re-run with `--networks songbird,flare`.
 (You *may* pass `songbird,flare` up front; canary-first is the safer discipline.)
