@@ -612,6 +612,8 @@ if [ "$IMPORT_EXISTING" -eq 1 ]; then
     fi
     [ "$HAS_CLAIM" -eq 1 ] && printf '    verify %s is still an allowed claim recipient\n' "$RECIP"
   done
+  printf 'If any imported key is NOT already authorized/registered on-chain, run the greenfield steps:\n'
+  printf '  ClaimSetupManager.setClaimExecutors · setAllowedClaimRecipients · register the FSP signer as your voter address.\n'
   printf 'If old claiming/submitting software keeps sending from the claimer or sender accounts,\n'
   printf 'it can collide with fwd on nonces. Stop it first.\n'
 else
@@ -628,8 +630,8 @@ else
       printf '    register FSP signer: %s (%s)\n' "fsp-signing-$net" "$(wallet_addr "fsp-signing-$net")"
       printf '      use it as your signing policy / voter address\n'
     fi
-    [ "$HAS_CLAIM" -eq 1 ] && printf '    fund gas wallet: claimer-%s (%s)\n' "$net" "$(wallet_addr "claimer-$net")"
-    [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas wallet: %s (%s)\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
+    [ "$HAS_CLAIM" -eq 1 ] && printf '    fund gas wallet: claimer-%s (%s) — pays tx gas\n' "$net" "$(wallet_addr "claimer-$net")"
+    [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas wallet: %s (%s) — pays tx gas\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
   done
 fi
 printf '\nRehearse with the host `clif` wrapper. Do not use raw `docker compose run`; it reads the placeholder env file:\n'
