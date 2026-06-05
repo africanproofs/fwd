@@ -273,27 +273,35 @@ clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAI
 note "healthy"
 
 # ---- Step 2: on-chain preflight ----
-# Reads the current on-chain state for --identity and shows what is already
-# authorized and what will need action after onboarding. Informational only —
-# the wizard never blocks on preflight output.
-if [ "$HAS_CLAIM" -eq 1 ] && [ "$CLIF_OK" -eq 1 ]; then
+# Reads registered identity (EntityManager) + claim setup state for --identity.
+# JSON pass captures signing_policy_address + executor per network for import hints.
+# Human-readable pass displays the full picture. Informational — wizard never blocks.
+if { [ "$HAS_CLAIM" -eq 1 ] || [ "$HAS_FSP" -eq 1 ]; } && [ "$CLIF_OK" -eq 1 ]; then
   step "On-chain preflight" \
-    "Reading chain state for $IDENTITY to show executor/recipient authorization status."
+    "Reading registered identity + claim state for $IDENTITY."
   _PF_FAILS=0
   for _pf_net in $NETLIST; do
+    # JSON pass: capture signing_policy_address and executor for later import hints.
+    if [ -n "$IDENTITY" ]; then
+      _pf_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
+        "$FWD_DIR/install/clif" preflight --identity "$IDENTITY" --network "$_pf_net" --json \
+        2>/dev/null || true)"
+      _pf_spa="$(printf '%s' "$_pf_j" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); print(d.get("signing_policy_address",""))' \
+        2>/dev/null || true)"
+      _pf_exe="$(printf '%s' "$_pf_j" | python3 -c \
+        'import sys,json; d=json.load(sys.stdin); a=d.get("executors",[]); print(a[0] if a else "")' \
+        2>/dev/null || true)"
+      eval "_PREFLIGHT_SPA_${_pf_net}=\"\$_pf_spa\""
+      eval "_PREFLIGHT_EXE_${_pf_net}=\"\$_pf_exe\""
+    fi
+    # Human-readable pass: display full identity picture.
     _pf_args="--identity $IDENTITY"
     [ -n "$RECIP" ] && _pf_args="$_pf_args --recipient $RECIP"
-    _pf_env="$CLIF_SRC/.env.$_pf_net"
-    if [ -f "$_pf_env" ]; then
-      _pf_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' "$_pf_env" 2>/dev/null | cut -d= -f2-)"
-      [ -n "$_pf_sp" ] && _pf_args="$_pf_args --signing-policy $_pf_sp"
-    fi
     FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
       "$FWD_DIR/install/clif" preflight --network "$_pf_net" $_pf_args || _PF_FAILS=$((_PF_FAILS + 1))
   done
   [ "$_PF_FAILS" -gt 0 ] && warn "preflight had RPC errors on $_PF_FAILS network(s) — continuing"
-elif [ "$HAS_CLAIM" -eq 0 ]; then
-  note "sign-only mode — skipping on-chain claim preflight"
 else
   note "no clif layer — skipping on-chain preflight"
 fi
@@ -633,6 +641,9 @@ if [ "$HAS_FSP" -eq 1 ]; then
     # Signing key: always imported (registered protocol key — never generated fresh)
     _expected_sp="${SIGNING_POLICY_HINT:-}"
     if [ -z "$_expected_sp" ]; then
+      eval "_expected_sp=\"\${_PREFLIGHT_SPA_${net}:-}\""
+    fi
+    if [ -z "$_expected_sp" ]; then
       _pf_env="$CLIF_SRC/.env.$net"
       [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
         "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
@@ -663,7 +674,8 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
       _expected_claimer=""
-      if [ "$CLIF_OK" -eq 1 ] && [ -n "$IDENTITY" ]; then
+      eval "_expected_claimer=\"\${_PREFLIGHT_EXE_${net}:-}\""
+      if [ -z "$_expected_claimer" ] && [ "$CLIF_OK" -eq 1 ] && [ -n "$IDENTITY" ]; then
         _pf_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
           "$FWD_DIR/install/clif" preflight --identity "$IDENTITY" --network "$net" --json 2>/dev/null || true)"
         _expected_claimer="$(printf '%s' "$_pf_j" | python3 -c \
