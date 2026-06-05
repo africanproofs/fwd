@@ -210,6 +210,63 @@ guided 'This command will write the fwd policy, store keys in fwd, create clif c
 guided 'clif receives wallet names and caller tokens only. It never receives private keys.\n'
 guided 'fwd stays offline and signs only. clif handles chain reads and broadcasts.\n'
 
+# ---- Key preparation narration (--import-existing only) ----
+if [ "$IMPORT_EXISTING" -eq 1 ]; then
+  _nn=0
+  [ "$HAS_FSP" -eq 1 ]   && _nn=$((_nn + 2))
+  [ "$HAS_CLAIM" -eq 1 ] && _nn=$((_nn + 1))
+  _net_count=0; for _ncc in $NETLIST; do _net_count=$((_net_count + 1)); done
+  _total_keys=$((_nn * _net_count))
+  printf '\n\033[1;36m─────────────────────────────────────────────────────\033[0m\n'
+  printf '\033[1;36m  Keys to prepare — %s private key(s) needed\033[0m\n' "$_total_keys"
+  printf '\033[1;36m─────────────────────────────────────────────────────\033[0m\n\n'
+  [ -n "$IDENTITY" ] && printf '  Identity : \033[1;96m%s\033[0m\n' "$IDENTITY"
+  [ -n "$RECIP" ]    && printf '  Recipient: \033[1;96m%s\033[0m\n' "$RECIP"
+  printf '  Network  : %s\n\n' "$NETS"
+  printf '  Keys will be sealed into fwd in this order (per network):\n\n'
+  _ki=0
+  if [ "$HAS_FSP" -eq 1 ]; then
+    _ki=$((_ki + 1))
+    printf '  \033[1;33m[%s] FSP signing key\033[0m  ← your registered signing policy key\n' "$_ki"
+    printf '      Role   : signs uptime/reward messages sent to FlareSystemsManager;\n'
+    printf '               ecrecover(message, sig) must equal this on-chain registered address\n'
+    if [ -n "$SIGNING_POLICY_HINT" ]; then
+      printf '      Address: \033[1;96m%s\033[0m\n' "$SIGNING_POLICY_HINT"
+    else
+      printf '      Address: your registered signing policy address\n'
+      printf '               \033[0;33m→ add --signing-policy 0xADDR to pre-confirm before the prompt\033[0m\n'
+    fi
+    printf '      Format : 64 hex chars  (secp256k1 private key)\n\n'
+    _ki=$((_ki + 1))
+    printf '  \033[1;33m[%s] FSP sender key\033[0m\n' "$_ki"
+    printf '      Role   : pays gas and submits votes to FlareSystemsManager;\n'
+    printf '               msg.sender — not checked by the protocol; any address you\n'
+    printf '               control works; use a dedicated low-value gas wallet\n'
+    if [ -n "$FSP_SENDER_ADDRESS_HINT" ]; then
+      printf '      Address: \033[1;96m%s\033[0m\n' "$FSP_SENDER_ADDRESS_HINT"
+    else
+      printf '      Address: your choice of gas-paying wallet\n'
+      printf '               \033[0;33m→ add --fsp-sender-address 0xADDR to pre-confirm before the prompt\033[0m\n'
+    fi
+    printf '      Format : 64 hex chars\n\n'
+  fi
+  if [ "$HAS_CLAIM" -eq 1 ]; then
+    _ki=$((_ki + 1))
+    printf '  \033[1;33m[%s] Claim executor key\033[0m\n' "$_ki"
+    printf '      Role   : calls RewardManager.claim() on your identity'\''s behalf;\n'
+    printf '               all rewards are sent to your recipient\n'
+    printf '      Address: \033[0;32mshown automatically\033[0m (read from ClaimSetupManager on-chain)\n'
+    [ -n "$RECIP" ] && printf '      Recipient: \033[1;96m%s\033[0m\n' "$RECIP"
+    printf '      Format : 64 hex chars\n\n'
+  fi
+  [ "$_net_count" -gt 1 ] && printf '  Each of the %s networks requires its own set of %s key(s) above.\n\n' "$_net_count" "$_nn"
+  printf '  Keys are pasted over a hidden stdin pipe into the fwd container,\n'
+  printf '  envelope-encrypted immediately, and the plaintext is shredded.\n'
+  printf '  Press Enter at any paste prompt to skip that key and import it later.\n\n'
+  ask_tty "  Press Enter when your keys are ready to paste ..."
+  printf '\n'
+fi
+
 # ---- Step 1: fwd health ----
 step "Checking fwd" "fwd must be running before onboarding can load policy or store keys."
 clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
@@ -567,6 +624,38 @@ env_write() {  # net claim_tok sign_tok submit_tok
   note "clif env written: $_ew_dst (0600, keyless)"
 }
 
+# ====================== Function: FSP REWARD SIGNING ======================
+if [ "$HAS_FSP" -eq 1 ]; then
+  fsection "FSP REWARD SIGNING" "fwd will use your registered FSP signing key to sign uptime and reward messages. A sender wallet pays gas and submits them."
+  for net in $NETLIST; do
+    cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
+    _sender="$(sender_name "$net")"
+    # Signing key: always imported (registered protocol key — never generated fresh)
+    _expected_sp="${SIGNING_POLICY_HINT:-}"
+    if [ -z "$_expected_sp" ]; then
+      _pf_env="$CLIF_SRC/.env.$net"
+      [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
+        "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
+    fi
+    import_pasted "fsp-signing-$net" "wc/fsp-$net" \
+      "your registered FSP signing key; Flare checks this signature" \
+      "$_expected_sp"
+    # Sender: import (migration) or generate fresh
+    if [ "$IMPORT_EXISTING" -eq 1 ]; then
+      import_pasted "$_sender" "$(sender_wc "$net")" \
+        "the wallet that pays gas and submits FSP messages" \
+        "${FSP_SENDER_ADDRESS_HINT:-}"
+    else
+      wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
+    fi
+    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_SRC/.env.$net" FSP_SIGN_CALLER_TOKEN
+    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_SRC/.env.$net" FSP_SUBMIT_CALLER_TOKEN
+    eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
+    if wallet_exists "$_sender"; then reconcile_nonce "$_sender" "$cid" "$net" "$(wallet_addr "$_sender")"
+    else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
+  done
+fi
+
 # ====================== Function: FEE CLAIMING ======================
 if [ "$HAS_CLAIM" -eq 1 ]; then
   fsection "FEE CLAIMING" "fwd will use one wallet to call RewardManager.claim for your identity. Any claim made by this wallet must pay your chosen recipient."
@@ -591,36 +680,6 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
     eval "TOK_CLAIM_$net=\$_t_claim"
     if wallet_exists "claimer-$net"; then reconcile_nonce "claimer-$net" "$cid" "$net" "$(wallet_addr "claimer-$net")"
     else warn "claimer-$net not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet claimer-$net --chain $cid --starting-nonce <n>"; fi
-  done
-fi
-
-# ====================== Function: FSP REWARD SIGNING ======================
-if [ "$HAS_FSP" -eq 1 ]; then
-  fsection "FSP REWARD SIGNING" "fwd will use your registered FSP signing key to sign uptime and reward messages. A sender wallet pays gas and submits them."
-  for net in $NETLIST; do
-    cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
-    _sender="$(sender_name "$net")"
-    if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "$_sender" "$(sender_wc "$net")" \
-        "the wallet that pays gas and submits FSP messages" \
-        "${FSP_SENDER_ADDRESS_HINT:-}"
-    else
-      wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
-    fi
-    _expected_sp="${SIGNING_POLICY_HINT:-}"
-    if [ -z "$_expected_sp" ]; then
-      _pf_env="$CLIF_SRC/.env.$net"
-      [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
-        "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
-    fi
-    import_pasted "fsp-signing-$net" "wc/fsp-$net" \
-      "your registered FSP signing key; Flare checks this signature" \
-      "$_expected_sp"
-    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_SRC/.env.$net" FSP_SIGN_CALLER_TOKEN
-    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_SRC/.env.$net" FSP_SUBMIT_CALLER_TOKEN
-    eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
-    if wallet_exists "$_sender"; then reconcile_nonce "$_sender" "$cid" "$net" "$(wallet_addr "$_sender")"
-    else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
   done
 fi
 
