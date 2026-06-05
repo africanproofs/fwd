@@ -129,6 +129,7 @@ fi
 
 NETS="songbird"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
 IDENTITY=""; FSP_SENDER_MODE="per-network"; ACCEPT_PENDING=0; ROTATE_MISSING=0; SHOW_SECRETS=0
+SIGNING_POLICY_HINT=""
 ONBOARD_INCOMPLETE=0; UNRESOLVED_NONCES=""; POLICY_ST=ok
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -139,6 +140,7 @@ while [ "$#" -gt 0 ]; do
     --skip-fsp-import) SKIP_FSP_IMPORT=1; shift ;;
     --import-existing) IMPORT_EXISTING=1; shift ;;
     --identity)              IDENTITY="${2:-}"; shift 2 ;;
+    --signing-policy)        SIGNING_POLICY_HINT="${2:-}"; shift 2 ;;
     --fsp-sender)            FSP_SENDER_MODE="${2:-}"; shift 2 ;;
     --accept-pending-nonces) ACCEPT_PENDING=1; shift ;;
     --rotate-missing-callers) ROTATE_MISSING=1; shift ;;
@@ -324,8 +326,9 @@ wallet_create() {  # name policy role — generate fresh in-vault; echo the deri
 
 # Paste reaches the in-container importer via a 0600 fwd-owned temp + --shred-source;
 # never on host disk, never on the network.
-import_pasted() {  # name policy role
+import_pasted() {  # name policy role [expected_addr]
   role="${3:-key}"
+  _ia_expected="${4:-}"
   if wallet_exists "$1"; then note "already present: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
   if [ "$SKIP_FSP_IMPORT" -eq 1 ]; then
     warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
@@ -333,6 +336,7 @@ import_pasted() {  # name policy role
   if [ "$TTY_OK" -ne 1 ]; then
     warn "no terminal to paste $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
   fi
+  [ -n "$_ia_expected" ] && printf '  \033[0;33m→ expected address: \033[1;96m%s\033[0;33m  (fetch THIS wallet'\''s private key)\033[0m\n' "$_ia_expected"
   _attempt=0
   while [ "$_attempt" -lt 5 ]; do
     _attempt=$((_attempt + 1))
@@ -353,7 +357,11 @@ import_pasted() {  # name policy role
       _k=''; warn "could not stage the key into the container — try again."; continue
     fi
     _k=''
-    set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
+    if [ -n "$_ia_expected" ]; then
+      set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source --expected-address "$_ia_expected" 2>&1)"; rc=$?; set -e
+    else
+      set +e; out="$(clifwd wallets import --name "$1" --policy "$2" --privkey-file /tmp/.fwd-onboard.key --shred-source 2>&1)"; rc=$?; set -e
+    fi
     docker exec "$FWD_CONTAINER" sh -c 'rm -f /tmp/.fwd-onboard.key' 2>/dev/null || true
     case "$rc" in
       0) note "imported and sealed in fwd: $1 @ $(wallet_addr "$1") — $role (temporary input removed; confirm this address)"; return 0 ;;
@@ -564,7 +572,17 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
   for net in $NETLIST; do
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
+      _expected_claimer=""
+      if [ "$CLIF_OK" -eq 1 ] && [ -n "$IDENTITY" ]; then
+        _pf_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
+          "$FWD_DIR/install/clif" preflight --identity "$IDENTITY" --network "$net" --json 2>/dev/null || true)"
+        _expected_claimer="$(printf '%s' "$_pf_j" | python3 -c \
+          'import sys,json; d=json.load(sys.stdin); a=d.get("executors",[]); print(a[0] if a else "")' \
+          2>/dev/null || true)"
+      fi
+      import_pasted "claimer-$net" "wc/claimer-$net" \
+        "the wallet that claims rewards for your identity and pays your recipient" \
+        "$_expected_claimer"
     else
       wallet_create "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     fi
@@ -586,7 +604,15 @@ if [ "$HAS_FSP" -eq 1 ]; then
     else
       wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
-    import_pasted "fsp-signing-$net" "wc/fsp-$net" "your registered FSP signing key; Flare checks this signature"
+    _expected_sp="${SIGNING_POLICY_HINT:-}"
+    if [ -z "$_expected_sp" ]; then
+      _pf_env="$CLIF_SRC/.env.$net"
+      [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
+        "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
+    fi
+    import_pasted "fsp-signing-$net" "wc/fsp-$net" \
+      "your registered FSP signing key; Flare checks this signature" \
+      "$_expected_sp"
     caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_SRC/.env.$net" FSP_SIGN_CALLER_TOKEN
     caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_SRC/.env.$net" FSP_SUBMIT_CALLER_TOKEN
     eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
