@@ -507,8 +507,8 @@ env_write() {  # net claim_tok sign_tok submit_tok
     printf 'NETWORK=%s\n' "$_ew_net"
     printf 'FWD_ENDPOINT=%s\n' "$(getval "$_ew_dst" FWD_ENDPOINT http://fwd:8080)"
     if [ "$HAS_CLAIM" -eq 1 ]; then
-      printf 'IDENTITY_ADDRESS=%s\n' "$IDENTITY"
-      printf 'CLAIM_RECIPIENT_ADDRESS=%s\n' "$RECIP"
+      printf 'IDENTITY_ADDRESS=%s\n' "$(getval "$_ew_dst" IDENTITY_ADDRESS "$IDENTITY")"
+      printf 'CLAIM_RECIPIENT_ADDRESS=%s\n' "$(getval "$_ew_dst" CLAIM_RECIPIENT_ADDRESS "$RECIP")"
       printf 'FWD_WALLET_NAME=%s\n' "claimer-$_ew_net"
       printf 'FWD_CALLER_TOKEN=%s\n' "$_ew_ct"
     fi
