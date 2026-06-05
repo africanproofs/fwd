@@ -129,7 +129,7 @@ fi
 
 NETS="songbird"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
 IDENTITY=""; FSP_SENDER_MODE="per-network"; ACCEPT_PENDING=0; ROTATE_MISSING=0; SHOW_SECRETS=0
-SIGNING_POLICY_HINT=""
+SIGNING_POLICY_HINT=""; FSP_SENDER_ADDRESS_HINT=""
 ONBOARD_INCOMPLETE=0; UNRESOLVED_NONCES=""; POLICY_ST=ok
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -141,6 +141,7 @@ while [ "$#" -gt 0 ]; do
     --import-existing) IMPORT_EXISTING=1; shift ;;
     --identity)              IDENTITY="${2:-}"; shift 2 ;;
     --signing-policy)        SIGNING_POLICY_HINT="${2:-}"; shift 2 ;;
+    --fsp-sender-address)    FSP_SENDER_ADDRESS_HINT="${2:-}"; shift 2 ;;
     --fsp-sender)            FSP_SENDER_MODE="${2:-}"; shift 2 ;;
     --accept-pending-nonces) ACCEPT_PENDING=1; shift ;;
     --rotate-missing-callers) ROTATE_MISSING=1; shift ;;
@@ -600,7 +601,9 @@ if [ "$HAS_FSP" -eq 1 ]; then
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     _sender="$(sender_name "$net")"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
-      import_pasted "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
+      import_pasted "$_sender" "$(sender_wc "$net")" \
+        "the wallet that pays gas and submits FSP messages" \
+        "${FSP_SENDER_ADDRESS_HINT:-}"
     else
       wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
