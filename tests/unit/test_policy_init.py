@@ -169,6 +169,73 @@ def test_fsp_sender_mode_shared_explicit_still_works(tmp_path: Path) -> None:
     assert _roundtrip(tmp_path, text_explicit) == []
 
 
+# ---------------------------------------------------------------------------
+# additive merge — adding a network must NEVER remove an existing one
+# ---------------------------------------------------------------------------
+
+INERT = "# fwd INERT default-deny policy (installed). Empty on purpose.\nversion: 1\n"
+
+
+def _gen_merge(
+    networks: str, capabilities: str, merge_into: str, recipient: str | None = RECIPIENT
+) -> str:
+    return generate_policy(
+        networks=networks.split(","),
+        capabilities=capabilities.split(","),
+        recipient=recipient,
+        abis_dir=ABIS_DIR,
+        networks_file=NETWORKS_FILE,
+        merge_into=merge_into,
+    )
+
+
+def test_merge_into_inert_equals_fresh() -> None:
+    """First onboard: merging a network into the inert default == a fresh generate."""
+    fresh = yaml.safe_load(_gen("songbird", "claim,fsp"))
+    merged = yaml.safe_load(_gen_merge("songbird", "claim,fsp", INERT))
+    assert merged == fresh
+
+
+def test_merge_adds_network_preserves_existing(tmp_path: Path) -> None:
+    """Onboard songbird, then ADD flare via merge: both present, songbird byte-identical."""
+    songbird = _gen("songbird", "claim,fsp")
+    sb_doc = yaml.safe_load(songbird)
+    merged = _gen_merge("flare", "claim,fsp", songbird)
+    doc = yaml.safe_load(merged)
+
+    # both networks present across every section
+    assert {
+        "claimer-songbird", "claimer-flare", "fsp-signing-songbird",
+        "fsp-signing-flare", "fsp-sender-songbird", "fsp-sender-flare",
+    } <= set(doc["wallets"])
+    assert {
+        "claim-songbird", "claim-flare", "fsp-sign-songbird", "fsp-sign-flare",
+        "fsp-submit-songbird", "fsp-submit-flare",
+    } <= set(doc["callers"])
+    assert {"fsp/songbird", "fsp/flare"} <= set(doc["fsp_permissions"])
+    assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]
+
+    # every songbird rule is byte-for-byte preserved (the flare run touched none)
+    for section in ("callers", "wallets", "permissions", "wallet_constraints", "fsp_permissions"):
+        for key, val in sb_doc[section].items():
+            assert doc[section][key] == val, f"songbird {section}/{key} changed"
+
+    # and the merged policy still passes the daemon's own startup checks
+    assert _roundtrip(tmp_path, merged) == []
+
+
+def test_merge_same_network_is_idempotent() -> None:
+    """Re-running the same network merges its own identical keys back — no growth/dups."""
+    songbird = _gen("songbird", "claim,fsp")
+    twice = _gen_merge("songbird", "claim,fsp", songbird)
+    assert yaml.safe_load(twice) == yaml.safe_load(songbird)
+
+
+def test_merge_rejects_non_mapping() -> None:
+    with pytest.raises(PolicyInitError, match="not a policy mapping"):
+        _gen_merge("flare", "claim", merge_into="- just\n- a\n- list\n")
+
+
 def test_fsp_sender_mode_unknown_raises() -> None:
     """An unknown fsp_sender_mode raises PolicyInitError."""
     with pytest.raises(PolicyInitError, match="unknown fsp_sender_mode"):

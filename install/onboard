@@ -212,9 +212,9 @@ TMP="$(mktemp "${TMPDIR:-/tmp}/fwd-onboard-policy.XXXXXX")"
 trap 'rm -f "$TMP"' EXIT INT TERM
 set +e
 if [ "$HAS_CLAIM" -eq 1 ]; then
-  clifwd policy init --networks "$NETS" --capabilities "$CAPS" --recipient "$RECIP" --fsp-sender "$FSP_SENDER_MODE" > "$TMP"
+  clifwd policy init --networks "$NETS" --capabilities "$CAPS" --recipient "$RECIP" --fsp-sender "$FSP_SENDER_MODE" --merge > "$TMP"
 else
-  clifwd policy init --networks "$NETS" --capabilities "$CAPS" --fsp-sender "$FSP_SENDER_MODE" > "$TMP"
+  clifwd policy init --networks "$NETS" --capabilities "$CAPS" --fsp-sender "$FSP_SENDER_MODE" --merge > "$TMP"
 fi
 rc=$?
 set -e

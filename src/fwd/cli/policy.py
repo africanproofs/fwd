@@ -118,6 +118,16 @@ def init(
         "--out",
         help="Write to this path instead of stdout.",
     ),
+    merge: bool = typer.Option(  # noqa: B008
+        False,
+        "--merge",
+        help=(
+            "Additive: union the generated network rules INTO the current policy "
+            "(FWD_POLICY_PATH) instead of generating fresh — preserves networks "
+            "already configured. Onboarding passes this so adding a network never "
+            "removes an existing one."
+        ),
+    ),
 ) -> None:
     """Generate a correct a29-schema policy.yaml from networks + recipient.
 
@@ -132,6 +142,11 @@ def init(
     Exit: 0 = generated; 2 = bad input.
     """
     s = get_settings()
+    merge_into: str | None = None
+    if merge:
+        cur = Path(s.fwd_policy_path)
+        if cur.exists():
+            merge_into = cur.read_text()
     try:
         text = generate_policy(
             networks=networks.split(","),
@@ -140,6 +155,7 @@ def init(
             abis_dir=Path(s.fwd_abis_dir),
             networks_file=Path(s.fwd_networks_file),
             fsp_sender_mode=fsp_sender,
+            merge_into=merge_into,
         )
     except PolicyInitError as exc:
         typer.echo(f"policy init failed: {exc}", err=True)
