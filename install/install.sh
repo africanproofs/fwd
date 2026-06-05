@@ -25,7 +25,11 @@
 #   onboarding (opt-in): --onboard-rewards  --identity 0xOWNER  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
 #   (--inert is accepted as a deprecated no-op — inert is now the default)
 #   output: compact by default; --guided (or FWD_OUTPUT=guided) for the explanatory walk-through
-#   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --guided --help
+#   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --guided --reset-state --help
+#   --reset-state: wipe the fwd state volume (+ backup) before starting — for a CLEAN
+#     reinstall. A fresh `rm -rf /opt/fwd` regenerates the master, so the OLD volume's
+#     wallets become undecryptable; the installer refuses to start on that mismatch and
+#     points you here (or to restoring the matching master.key from backup).
 set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
@@ -52,6 +56,8 @@ IDENTITY=""
 RECIPIENT=""
 ONB_NETWORKS=songbird
 IMPORT_EXISTING=0
+RESET_STATE=0
+MASTER_GENERATED=0
 case "${FWD_OUTPUT:-compact}" in guided) OUTPUT=guided ;; *) OUTPUT=compact ;; esac
 
 log()  { printf '\033[1;33m[fwd-install]\033[0m %s\n' "$*"; }
@@ -73,6 +79,7 @@ while [ "$#" -gt 0 ]; do
     --recipient)       shift; RECIPIENT="${1:?--recipient needs a value}" ;;
     --networks)        shift; ONB_NETWORKS="${1:?--networks needs a value}" ;;
     --import-existing) IMPORT_EXISTING=1 ;;
+    --reset-state)     RESET_STATE=1 ;;
     --guided|--explain) OUTPUT=guided ;;
     -h|--help)
       sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
@@ -200,6 +207,7 @@ if [ ! -f "$MASTER" ]; then
       clifwd master generate --out /out/master.key >/dev/null \
       || die "master generate failed"
     [ -f "$MASTER" ] || die "master.key not produced"
+    MASTER_GENERATED=1
     log "sealed master written to $MASTER"
   else
     log "--no-build: skipping master generation (no image to run clifwd)"
@@ -238,6 +246,32 @@ fi
 # --- 7. start (unless --no-start) ----------------------------------------
 if [ "$START" -eq 1 ]; then
   [ "$BUILD" -eq 1 ] || die "--no-build with start: nothing to start (build first)"
+
+  # Custody-safety: a regenerated master + a stale state volume = orphaned,
+  # undecryptable wallets (the old master is gone) AND a policy mismatch → fwd would
+  # crash-loop on a cryptic consistency error. `sudo rm -rf /opt/fwd` removes the
+  # install dir but NOT the docker volume, so a fresh reinstall reuses the old state.
+  # Surface the choice clearly instead of letting the daemon crash-loop.
+  _STATE_VOL="${COMPOSE_PROJECT_NAME:-fwd}_fwd-state"
+  _BACKUP_VOL="${COMPOSE_PROJECT_NAME:-fwd}_backup"
+  if [ "$RESET_STATE" -eq 1 ]; then
+    docker volume rm "$_STATE_VOL" "$_BACKUP_VOL" >/dev/null 2>&1 || true
+    log "--reset-state: cleared $_STATE_VOL + $_BACKUP_VOL (starting from empty state)"
+  elif [ "$MASTER_GENERATED" -eq 1 ] && docker volume inspect "$_STATE_VOL" >/dev/null 2>&1; then
+    # sqlite3 is Python stdlib — use a stock base image (no dependency on the
+    # locally-built fwd image, which is built-on-host and never pulled by name).
+    _W="$(docker run --rm -v "$_STATE_VOL":/data python:3.12-slim \
+          python -c 'import sqlite3,sys
+try: sys.stdout.write(str(sqlite3.connect("/data/state.db").execute("select count(*) from wallets").fetchone()[0]))
+except Exception: sys.stdout.write("0")' 2>/dev/null || echo 0)"
+    if [ "${_W:-0}" -gt 0 ]; then
+      die "existing state volume '$_STATE_VOL' holds $_W wallet(s) sealed under a PREVIOUS master that this install just regenerated — they cannot be decrypted, and fwd will refuse to start. Choose one and re-run:
+  - CLEAN install (discard that old state):  add  --reset-state
+  - RECOVER it:  restore its master.key + policy.yaml from backup into $SRC/config/ first (see RESTORE-RUNBOOK.md)
+Refusing to bring up a daemon that cannot use its own state."
+    fi
+  fi
+
   log "starting fwd (inert) ..."
   ( cd "$SRC" && docker compose $COMPOSE up -d fwd litestream ) \
     || die "docker compose up failed"
