@@ -190,6 +190,13 @@ chain_of() {
     "$1"
 }
 
+# clif availability — resolved early so the on-chain preflight (Step 2) can use it.
+# Graceful degradation: without clif, preflight and nonce reads are skipped.
+CLIF_OK=0
+if [ -d "${CLIF_SRC:-}" ] && [ -f "$FWD_DIR/docker-compose.clif.yml" ] && [ -x "$FWD_DIR/install/clif" ]; then
+  CLIF_OK=1
+fi
+
 printf '\033[1;36m=== fwd reward onboarding (%s) ===\033[0m\n' "$CLASS"
 guided 'Preparing %s function(s) on %s:\n' "$NFUNC" "$NETS"
 [ "$HAS_CLAIM" -eq 1 ] && guided '  • Fee claiming: fwd claims rewards for your identity and sends them to your recipient.\n'
@@ -200,12 +207,38 @@ guided 'This command will write the fwd policy, store keys in fwd, create clif c
 guided 'clif receives wallet names and caller tokens only. It never receives private keys.\n'
 guided 'fwd stays offline and signs only. clif handles chain reads and broadcasts.\n'
 
-# ---- Step 1: preflight ----
+# ---- Step 1: fwd health ----
 step "Checking fwd" "fwd must be running before onboarding can load policy or store keys."
 clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
 note "healthy"
 
-# ---- Step 2: build the reward policy (covers all enabled functions) ----
+# ---- Step 2: on-chain preflight ----
+# Reads the current on-chain state for --identity and shows what is already
+# authorized and what will need action after onboarding. Informational only —
+# the wizard never blocks on preflight output.
+if [ "$HAS_CLAIM" -eq 1 ] && [ "$CLIF_OK" -eq 1 ]; then
+  step "On-chain preflight" \
+    "Reading chain state for $IDENTITY to show executor/recipient authorization status."
+  _PF_FAILS=0
+  for _pf_net in $NETLIST; do
+    _pf_args="--identity $IDENTITY"
+    [ -n "$RECIP" ] && _pf_args="$_pf_args --recipient $RECIP"
+    _pf_env="$CLIF_SRC/.env.$_pf_net"
+    if [ -f "$_pf_env" ]; then
+      _pf_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' "$_pf_env" 2>/dev/null | cut -d= -f2-)"
+      [ -n "$_pf_sp" ] && _pf_args="$_pf_args --signing-policy $_pf_sp"
+    fi
+    FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
+      "$FWD_DIR/install/clif" preflight --network "$_pf_net" $_pf_args || _PF_FAILS=$((_PF_FAILS + 1))
+  done
+  [ "$_PF_FAILS" -gt 0 ] && warn "preflight had RPC errors on $_PF_FAILS network(s) — continuing"
+elif [ "$HAS_CLAIM" -eq 0 ]; then
+  note "sign-only mode — skipping on-chain claim preflight"
+else
+  note "no clif layer — skipping on-chain preflight"
+fi
+
+# ---- Step 3: build the reward policy ----
 step "Building your reward policy" \
   "This policy says exactly what fwd may sign. Claims are locked to your chosen recipient."
 TMP="$(mktemp "${TMPDIR:-/tmp}/fwd-onboard-policy.XXXXXX")"
@@ -245,7 +278,7 @@ clifwd policy validate --schema-only >/dev/null || {
 }
 note "policy validates"
 
-# ---- Step 3: load the policy ----
+# ---- Step 4: load the policy ----
 # ALWAYS (re)load the on-disk policy with `up -d --force-recreate` — never skip, and never a
 # plain `restart`. Two traps this avoids: (1) a prior run may have WRITTEN the policy but died
 # before loading it, leaving the daemon on the old/inert policy — so we never skip on
@@ -363,11 +396,6 @@ seed_sender() {  # name chain — seed nonce if the wallet exists, else a deferr
   else warn "$1 not present (import deferred) — after importing: clifwd nonce init --wallet $1 --chain $2 --starting-nonce <n>"; fi
 }
 
-# ---- clif availability (graceful degradation to manual nonce entry) ----
-CLIF_OK=0
-if [ -d "${CLIF_SRC:-}" ] && [ -f "$FWD_DIR/docker-compose.clif.yml" ] && [ -x "$FWD_DIR/install/clif" ]; then
-  CLIF_OK=1
-fi
 # Without a clif layer there is no env to write tokens to — show them so they're not lost.
 [ "$CLIF_OK" -eq 0 ] && [ "$SHOW_SECRETS" -eq 0 ] && { SHOW_SECRETS=1; warn "no clif layer present — caller tokens will be printed (no env to write them to)"; }
 
