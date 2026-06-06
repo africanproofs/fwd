@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, select, update
+from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, func, or_, select, update
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -364,6 +364,23 @@ class TransactionRepo:
             )
             for row in result
         ]
+
+    async def count_in_flight(self, wallet: str, chain: int) -> int:
+        """Return the count of in-flight (pending or submitted) transactions
+        for the given wallet + chain. Used by nonce-init to refuse a force
+        overwrite when nonces are live.
+        """
+        result = await self._session.execute(
+            select(func.count()).where(
+                transactions.c.wallet == wallet,
+                transactions.c.chain == chain,
+                or_(
+                    transactions.c.status == "pending",
+                    transactions.c.status == "submitted",
+                ),
+            )
+        )
+        return result.scalar() or 0
 
     async def update_status(
         self,

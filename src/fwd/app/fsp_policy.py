@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from fwd.app.policy_engine import DenyDecision
 from fwd.app.policy_gate import PolicyDenied
+from fwd.domain.fsp_message import UPTIME
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -63,6 +64,17 @@ async def evaluate_fsp(
             return DenyDecision(
                 step=3,
                 reason="policy_path is also an EVM permissions block (cross-domain forbidden)",
+            )
+        # UPTIME votes carry no epoch-bound chain context so they are
+        # replayable across chains if chain_ids is unconstrained. Require an
+        # explicit chain_ids allowlist to prevent cross-chain replay.
+        if request.message_type == UPTIME and not perm.chain_ids:
+            return DenyDecision(
+                step=4,
+                reason=(
+                    "UPTIME requires explicit chain_ids — "
+                    "configure chain_ids to prevent cross-chain replay"
+                ),
             )
         if perm.chain_ids and request.chain_id not in perm.chain_ids:
             return DenyDecision(step=4, reason=f"chain_id {request.chain_id} not in permitted chain_ids")

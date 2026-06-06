@@ -102,7 +102,7 @@ def _fake_wallet() -> Wallet:
     return Wallet(
         name="test-wallet",
         address="0x" + "aa" * 20,
-        privkey_ciphertext="vault:v1:x",
+        privkey_ciphertext="seal:v1:x",
         vault_master_key="fwd-master",
         policy_path="wc/test",
         created_at=datetime.now(UTC),

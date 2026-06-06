@@ -59,10 +59,15 @@ def get_signer() -> SignerCM:
 
 
 class CallerRepoCM:
-    """Async context manager. Yields a CallerRepo backed by a session."""
+    """Async context manager. Yields a CallerRepo backed by a session.
+
+    Uses read_only=True: the caller-auth path is a pure argon2 SELECT
+    (no writes) — skipping BEGIN IMMEDIATE avoids contending on the
+    SQLite writer lock during high-concurrency auth checks.
+    """
 
     async def __aenter__(self) -> CallerRepo:
-        self._session_cm = session_scope()
+        self._session_cm = session_scope(read_only=True)
         self._session = await self._session_cm.__aenter__()
         return CallerRepo(self._session)
 
@@ -225,15 +230,17 @@ class AdminScope:
     """Bundle of components built atop a single session for admin operations.
 
     Mirrors RequestScope but omits RpcManager (admin actions don't touch chain).
-    Provides signer + caller_repo + audit_repo + nonce_repo on ONE shared session
-    so that admin-action mutations and the D16 audit row commit atomically under
-    one BEGIN IMMEDIATE (per AdminScopeCM below).
+    Provides signer + caller_repo + audit_repo + nonce_repo + tx_repo on ONE
+    shared session so that admin-action mutations and the D16 audit row commit
+    atomically under one BEGIN IMMEDIATE (per AdminScopeCM below).
+    tx_repo is used by nonce-init to guard against force-overwriting in-flight nonces.
     """
 
     signer: EnvelopeSigner
     caller_repo: CallerRepo
     audit_repo: AuditRepo
     nonce_repo: NonceRepo
+    tx_repo: TransactionRepo
 
 
 class AdminScopeCM:
@@ -261,6 +268,7 @@ class AdminScopeCM:
             caller_repo=CallerRepo(self._session),
             audit_repo=AuditRepo(self._session),
             nonce_repo=NonceRepo(self._session),
+            tx_repo=TransactionRepo(self._session),
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]

@@ -21,7 +21,7 @@ import structlog
 
 from fwd.app.fsp_policy import fsp_gate, release_fsp_rate_after_failure
 from fwd.app.policy_gate import PolicyDenied as PolicyDenied  # re-export for api
-from fwd.domain.fsp_message import build_fsp_message
+from fwd.domain.fsp_message import UPTIME, build_fsp_message
 from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import WalletNotFoundError
@@ -131,10 +131,16 @@ async def sign_fsp_message(
         raise
 
     # 3. Reconstruct the FSP messageHash (typed -> bytes; fwd builds it).
+    # For UPTIME, the messageHash has no chain component (chain_id=None in
+    # build_fsp_message). request.chain_id is used at the policy gate (step 4)
+    # to prevent cross-chain replay, but must not be forwarded to the message
+    # builder — the UPTIME preimage is epoch-only and is identical across chains
+    # by protocol design (the policy allowlist is the replay guard).
+    build_chain_id = None if request.message_type == UPTIME else request.chain_id
     built = build_fsp_message(
         request.message_type,
         request.reward_epoch_id,
-        chain_id=request.chain_id,
+        chain_id=build_chain_id,
         no_of_weight_based_claims=request.no_of_weight_based_claims,
         rewards_hash=request.rewards_hash,
     )

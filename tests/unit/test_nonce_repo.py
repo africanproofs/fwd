@@ -45,7 +45,7 @@ async def _seed_wallet(session: AsyncSession, name: str = "test-wallet") -> None
         wallets.insert().values(
             name=name,
             address="0x" + "11" * 20,
-            privkey_ciphertext="vault:v1:test",
+            privkey_ciphertext="seal:v1:test",
             vault_master_key="fwd-master",
             policy_path="policies/test.yaml",
             created_at=datetime.now(UTC),
@@ -242,7 +242,7 @@ async def test_concurrent_reservations_are_monotonic_no_gaps(  # type: ignore[no
             wallets.insert().values(
                 name="w",
                 address="0x" + "11" * 20,
-                privkey_ciphertext="vault:v1:x",
+                privkey_ciphertext="seal:v1:x",
                 vault_master_key="fwd-master",
                 policy_path="p",
                 created_at=datetime.now(UTC),

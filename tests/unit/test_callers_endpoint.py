@@ -40,7 +40,14 @@ def _fake_admin_scope() -> AdminScope:
     audit_repo = MagicMock()
     audit_repo.append = AsyncMock(return_value=None)
     nonce_repo = MagicMock()
-    return AdminScope(signer=signer, caller_repo=caller_repo, audit_repo=audit_repo, nonce_repo=nonce_repo)
+    tx_repo = MagicMock()
+    return AdminScope(
+        signer=signer,
+        caller_repo=caller_repo,
+        audit_repo=audit_repo,
+        nonce_repo=nonce_repo,
+        tx_repo=tx_repo,
+    )
 
 
 class _FakeAdminScopeCM:

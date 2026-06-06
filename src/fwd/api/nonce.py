@@ -41,6 +41,14 @@ class NonceInitBody(BaseModel):
     chain: int = Field(..., ge=1)
     starting_nonce: int = Field(..., ge=0)
     force: bool = Field(False)
+    force_with_in_flight: bool = Field(
+        False,
+        description=(
+            "When force=true and in-flight (pending/submitted) nonces exist, "
+            "set this to true to override the in-flight guard. Default False "
+            "causes a 409 to protect against nonce collisions."
+        ),
+    )
 
 
 class NonceInitResponse(BaseModel):
@@ -56,6 +64,7 @@ def _req_json(body: NonceInitBody) -> str:
             "chain": body.chain,
             "starting_nonce": body.starting_nonce,
             "force": body.force,
+            "force_with_in_flight": body.force_with_in_flight,
         }
     )
 
@@ -92,6 +101,31 @@ async def post_nonce_init(
                     ),
                 },
             )
+        # Guard: when force=true, refuse if in-flight nonces exist unless the
+        # caller explicitly acknowledges the risk with force_with_in_flight=true.
+        if body.force and existing is not None and not body.force_with_in_flight:
+            in_flight = await scope.tx_repo.count_in_flight(body.wallet, body.chain)
+            if in_flight > 0:
+                await scope.audit_repo.append(
+                    action="nonce-init",
+                    decision="denied",
+                    caller=None,
+                    request_json=_req_json(body),
+                    decision_reason=f"in_flight_nonces:{in_flight}",
+                )
+                await scope.audit_repo.commit()  # Core #5/#19
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "in_flight_nonces",
+                        "message": (
+                            f"{in_flight} in-flight nonce(s) exist for "
+                            f"(wallet={body.wallet}, chain={body.chain}); "
+                            "use force_with_in_flight=true to override"
+                        ),
+                    },
+                )
+
         try:
             row = await scope.nonce_repo.init_for_wallet(
                 body.wallet, body.chain, body.starting_nonce, force=body.force

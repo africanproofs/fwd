@@ -37,7 +37,7 @@ def _fake_wallet(name: str = "alice", address: str | None = None) -> Wallet:
     return Wallet(
         name=name,
         address=address or "0x" + "aa" * 20,
-        privkey_ciphertext="vault:v1:abc",
+        privkey_ciphertext="seal:v1:abc",
         vault_master_key="fwd-master",
         policy_path="policies/test.yaml",
         created_at=datetime.now(UTC),
@@ -51,7 +51,14 @@ def _fake_admin_scope() -> AdminScope:
     audit_repo = MagicMock()
     audit_repo.append = AsyncMock(return_value=None)
     nonce_repo = MagicMock()
-    return AdminScope(signer=signer, caller_repo=caller_repo, audit_repo=audit_repo, nonce_repo=nonce_repo)
+    tx_repo = MagicMock()
+    return AdminScope(
+        signer=signer,
+        caller_repo=caller_repo,
+        audit_repo=audit_repo,
+        nonce_repo=nonce_repo,
+        tx_repo=tx_repo,
+    )
 
 
 class _FakeAdminScopeCM:

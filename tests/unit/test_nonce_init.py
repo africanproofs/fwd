@@ -26,6 +26,8 @@ from fwd.app.dependencies import AdminScope, get_admin_scope
 from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
 from fwd.infra.nonce_repo import NonceRepo
 from fwd.infra.nonce_repo import metadata as nonces_metadata
+from fwd.infra.transaction_repo import TransactionRepo
+from fwd.infra.transaction_repo import metadata as tx_metadata
 from fwd.infra.wallet_repo import metadata as wallets_metadata
 from fwd.infra.wallet_repo import wallets
 
@@ -40,6 +42,7 @@ if TYPE_CHECKING:
 def _fake_admin_scope(
     nonce_repo: MagicMock | None = None,
     audit_repo: MagicMock | None = None,
+    tx_repo: MagicMock | None = None,
 ) -> AdminScope:
     """Build a mock AdminScope (no Vault, no DB)."""
     signer = MagicMock()
@@ -49,11 +52,13 @@ def _fake_admin_scope(
         _audit_repo.append = AsyncMock(return_value=None)
         _audit_repo.commit = AsyncMock(return_value=None)
     _nonce_repo = nonce_repo or MagicMock()
+    _tx_repo = tx_repo or MagicMock()
     return AdminScope(
         signer=signer,
         caller_repo=caller_repo,
         audit_repo=_audit_repo,
         nonce_repo=_nonce_repo,
+        tx_repo=_tx_repo,
     )
 
 
@@ -95,13 +100,15 @@ _ADMIN_HDR = {"Authorization": "Bearer admin-secret"}
 
 
 async def _make_real_db_session(tmp_path: object) -> AsyncSession:  # type: ignore[return]
-    """Create a tmp-sqlite engine with wallets + nonces + audit_log tables."""
+    """Create a tmp-sqlite engine with wallets + nonces + audit_log + transactions tables."""
     db = tmp_path  # type: ignore[attr-defined]
     engine = create_async_engine(f"sqlite+aiosqlite:///{db}/test_nonce_init.db")
     async with engine.begin() as conn:
         await conn.run_sync(wallets_metadata.create_all)
         await conn.run_sync(nonces_metadata.create_all)
         await conn.run_sync(audit_metadata.create_all)
+        # transactions table required for count_in_flight (nonce-init force guard).
+        await conn.run_sync(tx_metadata.create_all)
     return AsyncSession(engine)
 
 
@@ -110,7 +117,7 @@ async def _seed_wallet(session: AsyncSession, name: str = "alice") -> None:
         wallets.insert().values(
             name=name,
             address="0x" + "aa" * 20,
-            privkey_ciphertext="vault:v1:test",
+            privkey_ciphertext="seal:v1:test",
             vault_master_key="fwd-master",
             policy_path="policies/test.yaml",
             created_at=datetime.now(UTC),
@@ -138,6 +145,7 @@ class _RealAdminScopeCM:
     async def __aenter__(self) -> AdminScope:
         nonce_repo = NonceRepo(self._session)
         audit_repo = AuditRepo(self._session)
+        tx_repo = TransactionRepo(self._session)
         signer = MagicMock()
         caller_repo = MagicMock()
         self._scope = AdminScope(
@@ -145,6 +153,7 @@ class _RealAdminScopeCM:
             caller_repo=caller_repo,
             audit_repo=audit_repo,
             nonce_repo=nonce_repo,
+            tx_repo=tx_repo,
         )
         return self._scope
 

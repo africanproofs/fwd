@@ -87,7 +87,7 @@ def _make_wallet(name: str = WALLET_NAME, policy_path: str = "wc/main") -> Walle
     return Wallet(
         name=name,
         address="0x" + "bb" * 20,
-        privkey_ciphertext="vault:v1:x",
+        privkey_ciphertext="seal:v1:x",
         vault_master_key="fwd-master",
         policy_path=policy_path,
         created_at=datetime.now(UTC),

@@ -156,6 +156,12 @@ class VerifyResult:
     rows_checked: int
     first_break_seq: int | None
     detail: str
+    # Set when a windowed walk (from_seq > table minimum) detects that the
+    # anchor row at (from_seq - 1) exists but its stored row_hash does not
+    # match the first walked row's prev_hash — indicating chain tampering
+    # upstream of the requested range start.
+    upstream_break: bool = False
+    upstream_break_seq: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +406,11 @@ class AuditRepo:
         first_seq = db_rows[0].seq
         table_min = await self._min_seq()
 
+        # upstream_break is set when a windowed walk's anchor row exists but
+        # its stored hash does not match the first walked row's prev_hash.
+        _upstream_break: bool = False
+        _upstream_break_seq: int | None = None
+
         if table_min is not None and first_seq == table_min:
             # This is the very first row in the table — prev must be genesis.
             expected_prev = GENESIS_PREV_HASH
@@ -419,6 +430,13 @@ class AuditRepo:
                         f"cannot verify window starting at seq={first_seq}"
                     ),
                 )
+            # Check whether the anchor's stored hash matches the first row's
+            # prev_hash. A mismatch means the chain was tampered upstream of
+            # this window's start — flag it explicitly.
+            first_row_prev = db_rows[0].prev_hash
+            if anchor_hash != first_row_prev:
+                _upstream_break = True
+                _upstream_break_seq = first_seq - 1
             expected_prev = anchor_hash
 
         rows_checked = 0
@@ -465,6 +483,19 @@ class AuditRepo:
             # Advance the expected prev for the next iteration.
             expected_prev = row.row_hash
 
+        if _upstream_break:
+            return VerifyResult(
+                ok=False,
+                rows_checked=rows_checked,
+                first_break_seq=_upstream_break_seq,
+                detail=(
+                    f"upstream break at seq={_upstream_break_seq}: "
+                    f"anchor row_hash does not match seq={first_seq} prev_hash; "
+                    f"chain was tampered upstream of the requested window"
+                ),
+                upstream_break=True,
+                upstream_break_seq=_upstream_break_seq,
+            )
         return VerifyResult(
             ok=True,
             rows_checked=rows_checked,

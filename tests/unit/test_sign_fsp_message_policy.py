@@ -102,6 +102,10 @@ def _make_policy(
     fsp_block: dict[str, object] = {
         "message_types": message_types,
         "wallet_allowlist": wallet_allowlist,
+        # chain_ids required for UPTIME (FSP-CROSSCHAIN-001). Use a
+        # canonical test chain_id; tests that exercise chain_id filtering
+        # override this explicitly.
+        "chain_ids": [14],
     }
     if rate_dict:
         fsp_block["rate"] = rate_dict
@@ -133,12 +137,15 @@ def _make_request(
     wallet: str = WALLET_NAME,
     caller: str = CALLER_NAME,
     reward_epoch_id: int = 42,
+    chain_id: int = 14,
 ) -> SignFspMessageRequest:
     return SignFspMessageRequest(
         wallet=wallet,
         caller=caller,
         message_type=message_type,
         reward_epoch_id=reward_epoch_id,
+        # chain_id required for UPTIME (FSP-CROSSCHAIN-001).
+        chain_id=chain_id,
     )
 
 

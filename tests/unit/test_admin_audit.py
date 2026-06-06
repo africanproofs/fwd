@@ -59,7 +59,7 @@ def _dummy_wallet(name: str = "w1", address: str = "0x" + "ab" * 20) -> Wallet:
     return Wallet(
         name=name,
         address=address,
-        privkey_ciphertext="vault:v1:abc",
+        privkey_ciphertext="seal:v1:abc",
         vault_master_key="fwd-master",
         policy_path=POLICY_PATH,
         created_at=datetime.now(UTC),

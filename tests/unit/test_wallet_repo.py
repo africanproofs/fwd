@@ -33,7 +33,7 @@ async def test_create_then_get(session: AsyncSession) -> None:
     w = await repo.create(
         name="w1",
         address="0x" + "01" * 20,
-        privkey_ciphertext="vault:v1:abc",
+        privkey_ciphertext="seal:v1:abc",
         vault_master_key="fwd-master",
         policy_path="p1",
     )
@@ -51,7 +51,7 @@ async def test_create_duplicate_raises(session: AsyncSession) -> None:
     await repo.create(
         name="dup",
         address="0x" + "02" * 20,
-        privkey_ciphertext="vault:v1:abc",
+        privkey_ciphertext="seal:v1:abc",
         vault_master_key="fwd-master",
         policy_path="p1",
     )
@@ -60,7 +60,7 @@ async def test_create_duplicate_raises(session: AsyncSession) -> None:
         await repo.create(
             name="dup",
             address="0x" + "03" * 20,
-            privkey_ciphertext="vault:v1:def",
+            privkey_ciphertext="seal:v1:def",
             vault_master_key="fwd-master",
             policy_path="p1",
         )
@@ -92,7 +92,7 @@ async def test_list_all_returns_all_wallets_ordered_by_created_at(
     await repo.create(
         name="w-alpha",
         address="0x" + "0a" * 20,
-        privkey_ciphertext="vault:v1:alpha",
+        privkey_ciphertext="seal:v1:alpha",
         vault_master_key="fwd-master",
         policy_path="p1",
     )
@@ -103,7 +103,7 @@ async def test_list_all_returns_all_wallets_ordered_by_created_at(
     await repo.create(
         name="w-beta",
         address="0x" + "0b" * 20,
-        privkey_ciphertext="vault:v1:beta",
+        privkey_ciphertext="seal:v1:beta",
         vault_master_key="fwd-master",
         policy_path="p2",
     )
@@ -112,7 +112,7 @@ async def test_list_all_returns_all_wallets_ordered_by_created_at(
     await repo.create(
         name="w-gamma",
         address="0x" + "0c" * 20,
-        privkey_ciphertext="vault:v1:gamma",
+        privkey_ciphertext="seal:v1:gamma",
         vault_master_key="fwd-master",
         policy_path="p3",
     )
@@ -124,7 +124,7 @@ async def test_list_all_returns_all_wallets_ordered_by_created_at(
     # (the API layer is responsible for stripping ciphertext + vault_master_key
     # from the public response).
     for w in rows:
-        assert w.privkey_ciphertext.startswith("vault:v1:")
+        assert w.privkey_ciphertext.startswith("seal:v1:")
         assert w.vault_master_key == "fwd-master"
 
 

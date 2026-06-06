@@ -24,7 +24,7 @@ def _wallet(name: str, address: str | None = None, policy: str = "policies/test.
     return Wallet(
         name=name,
         address=address or "0x" + "11" * 20,
-        privkey_ciphertext="vault:v1:CIPHERTEXT_SHOULD_NEVER_LEAK",
+        privkey_ciphertext="seal:v1:CIPHERTEXT_SHOULD_NEVER_LEAK",
         vault_master_key="fwd-master",
         policy_path=policy,
         created_at=datetime.now(UTC),

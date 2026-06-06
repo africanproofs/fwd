@@ -26,6 +26,7 @@ https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-sa
 
 from __future__ import annotations
 
+import contextvars
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -44,6 +45,11 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+# Context var that marks a session as read-only — skips BEGIN IMMEDIATE.
+# Default False: all sessions are read-write (BEGIN IMMEDIATE) unless
+# the caller explicitly opts into read-only via session_scope(read_only=True).
+_ro_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ro", default=False)
 
 
 def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:  # type: ignore[no-untyped-def]
@@ -78,6 +84,12 @@ def _begin_immediate(conn) -> None:  # type: ignore[no-untyped-def]
     # the DBAPI connection — otherwise sqlite3's implicit BEGIN (DEFERRED)
     # would already have started a transaction and this BEGIN IMMEDIATE
     # would fail with "cannot start a transaction within a transaction".
+    #
+    # Read-only sessions (session_scope(read_only=True)) skip BEGIN IMMEDIATE
+    # so they do not contend on the SQLite writer lock — safe because they
+    # never write (no commit at the end of session_scope for read_only=True).
+    if _ro_ctx.get():
+        return
     conn.exec_driver_sql("BEGIN IMMEDIATE")
 
 
@@ -99,12 +111,24 @@ def _session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @asynccontextmanager
-async def session_scope() -> AsyncIterator[AsyncSession]:
-    factory = _session_factory()
-    async with factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+async def session_scope(read_only: bool = False) -> AsyncIterator[AsyncSession]:
+    """Async session context manager.
+
+    read_only=True: skips BEGIN IMMEDIATE (no writer-lock contention) and
+    skips the final commit (pure SELECT sessions). Safe only for read-only
+    callers; any accidental write will still propagate via rollback on exit.
+    The canonical read-only consumer is caller_auth's argon2 SELECT.
+    """
+    token = _ro_ctx.set(read_only)
+    try:
+        factory = _session_factory()
+        async with factory() as session:
+            try:
+                yield session
+                if not read_only:
+                    await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    finally:
+        _ro_ctx.reset(token)

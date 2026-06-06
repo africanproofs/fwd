@@ -172,7 +172,7 @@ def generate_policy(
                         "methods": {
                             claim_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": True,
+                                "allow_unconstrained_args": False,
                                 "arg_predicates": {"_recipient": recipient},
                             }
                         },
@@ -218,12 +218,12 @@ def generate_policy(
                         "methods": {
                             uptime_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": True,
+                                "allow_unconstrained_args": False,
                                 "arg_predicates": {"_rewardEpochId": "any"},
                             },
                             rewards_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": True,
+                                "allow_unconstrained_args": False,
                                 "arg_predicates": {"_rewardEpochId": "any"},
                             },
                         },

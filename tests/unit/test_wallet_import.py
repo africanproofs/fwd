@@ -54,7 +54,7 @@ def _dummy_wallet() -> Wallet:
     return Wallet(
         name="w1",
         address="0x" + "ab" * 20,
-        privkey_ciphertext="vault:v1:abc",
+        privkey_ciphertext="seal:v1:abc",
         vault_master_key="fwd-master",
         policy_path="policies/test.yaml",
         created_at=datetime.now(UTC),

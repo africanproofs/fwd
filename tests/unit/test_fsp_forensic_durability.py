@@ -79,6 +79,8 @@ def _policy_with_rate(per_hour: int = 10):  # type: ignore[return]
                     "message_types": ["UPTIME"],
                     "wallet_allowlist": [_WALLET_NAME],
                     "rate": {"per_hour": per_hour},
+                    # chain_ids required for UPTIME (FSP-CROSSCHAIN-001).
+                    "chain_ids": [14],
                 }
             },
             "wallet_constraints": {},
@@ -107,6 +109,8 @@ def _make_request(message_type: str = "UPTIME"):  # type: ignore[return]
         caller=_CALLER_NAME,
         message_type=message_type,
         reward_epoch_id=0,
+        # chain_id required for UPTIME (FSP-CROSSCHAIN-001).
+        chain_id=14,
     )
 
 

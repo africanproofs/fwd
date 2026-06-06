@@ -83,11 +83,14 @@ def _make_caller(name: str = CALLER_A) -> Caller:
 
 
 def _fake_admin_scope(session: AsyncSession) -> AdminScope:
+    from fwd.infra.transaction_repo import TransactionRepo
+
     return AdminScope(
         signer=MagicMock(),
         caller_repo=MagicMock(),
         audit_repo=AuditRepo(session),
         nonce_repo=NonceRepo(session),
+        tx_repo=TransactionRepo(session),
     )
 
 
