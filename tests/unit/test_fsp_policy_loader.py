@@ -161,9 +161,9 @@ def test_cross_domain_address_segmentation_violation(registry: AbiRegistry) -> N
     fsp_wallet = _make_wallet("fsp-wallet", address=shared_address)
 
     errors = check_consistency(policy, [], [evm_wallet, fsp_wallet], registry)
-    assert any("segmentation violation" in e for e in errors), (
-        f"Expected segmentation violation error but got: {errors}"
-    )
+    assert any(
+        "segmentation violation" in e for e in errors
+    ), f"Expected segmentation violation error but got: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -194,9 +194,9 @@ def test_policy_path_in_both_permissions_and_fsp_permissions(registry: AbiRegist
     )
 
     errors = check_consistency(policy, [], [], registry)
-    assert any("BOTH permissions" in e for e in errors), (
-        f"Expected 'BOTH permissions' error but got: {errors}"
-    )
+    assert any(
+        "BOTH permissions" in e for e in errors
+    ), f"Expected 'BOTH permissions' error but got: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -222,9 +222,7 @@ def test_unknown_message_type_in_fsp_permissions(registry: AbiRegistry) -> None:
     )
 
     errors = check_consistency(policy, [], [], registry)
-    assert any("BOGUS_TYPE" in e for e in errors), (
-        f"Expected BOGUS_TYPE error but got: {errors}"
-    )
+    assert any("BOGUS_TYPE" in e for e in errors), f"Expected BOGUS_TYPE error but got: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +248,9 @@ def test_unknown_wallet_in_fsp_permissions_allowlist(registry: AbiRegistry) -> N
     )
 
     errors = check_consistency(policy, [], [], registry)
-    assert any("ghost-wallet" in e for e in errors), (
-        f"Expected ghost-wallet error but got: {errors}"
-    )
+    assert any(
+        "ghost-wallet" in e for e in errors
+    ), f"Expected ghost-wallet error but got: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +286,7 @@ def _carve_out_policy(
         methods[extra_method] = {"max_value_wei": "0"}
     if nonzero_value:
         # Overwrite one of the canonical methods with a non-zero max_value_wei
-        methods["signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))"] = {
-            "max_value_wei": "1"
-        }
+        methods["signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))"] = {"max_value_wei": "1"}
 
     abi_name = "reward_manager" if non_fsm_abi else "flare_systems_manager"
 
@@ -328,9 +324,9 @@ def test_fsp_self_submit_happy_carve_out(registry: AbiRegistry) -> None:
 
     errors = check_consistency(policy, [], [wallet], registry)
     seg_errors = [e for e in errors if "segmentation violation" in e]
-    assert seg_errors == [], (
-        f"Expected no segmentation error for valid carve-out but got: {seg_errors}"
-    )
+    assert (
+        seg_errors == []
+    ), f"Expected no segmentation error for valid carve-out but got: {seg_errors}"
 
 
 def test_fsp_self_submit_refused_wrong_shape_extra_method(registry: AbiRegistry) -> None:
@@ -425,6 +421,4 @@ def test_fsp_self_submit_regression_other_wallet_still_violations(
     # "other-wallet" is not actually in the DB — triggers "unknown wallet" error too
     errors = check_consistency(policy, [], [evm_wallet, fsp_wallet], registry)
     seg_errors = [e for e in errors if "segmentation violation" in e]
-    assert seg_errors, (
-        f"Expected segmentation violation for non-opted-in wallet but got: {errors}"
-    )
+    assert seg_errors, f"Expected segmentation violation for non-opted-in wallet but got: {errors}"

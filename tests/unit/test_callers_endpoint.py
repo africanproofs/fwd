@@ -206,7 +206,11 @@ def test_post_callers_replace_after_revoke_201(monkeypatch: pytest.MonkeyPatch) 
         client = _make_client(monkeypatch)
         r = client.post(
             "/v1/admin/callers",
-            json={"name": "rotating-caller", "policy_path": "policies/rotating.yaml", "replace": True},
+            json={
+                "name": "rotating-caller",
+                "policy_path": "policies/rotating.yaml",
+                "replace": True,
+            },
             headers=_ADMIN_HDR,
         )
     assert r.status_code == 201
@@ -234,7 +238,9 @@ def test_post_callers_active_name_409_even_with_replace(monkeypatch: pytest.Monk
     """POST replace:true on an ACTIVE name → 409 (repo raises CallerExistsError → 409)."""
     from unittest.mock import patch
 
-    with patch("fwd.api.callers.create_caller", new=AsyncMock(side_effect=CallerNameTaken("active"))):
+    with patch(
+        "fwd.api.callers.create_caller", new=AsyncMock(side_effect=CallerNameTaken("active"))
+    ):
         client = _make_client(monkeypatch)
         r = client.post(
             "/v1/admin/callers",

@@ -18,11 +18,20 @@ import pytest
 
 from fwd.app.caller_create import CallerCreateRequest, CallerNameTaken, create_caller
 from fwd.app.caller_revoke import CallerAlreadyRevoked, CallerNotFound, revoke_caller
-from fwd.app.wallet_create import VaultUnavailableError, WalletCreateRequest, WalletNameTaken, create_wallet
-from fwd.infra.caller_repo import Caller, CallerAlreadyRevokedError, CallerExistsError, CallerNotFoundError
+from fwd.app.wallet_create import (
+    VaultUnavailableError,
+    WalletCreateRequest,
+    WalletNameTaken,
+    create_wallet,
+)
+from fwd.infra.caller_repo import (
+    Caller,
+    CallerAlreadyRevokedError,
+    CallerExistsError,
+    CallerNotFoundError,
+)
 from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import Wallet, WalletExistsError
-
 
 # ---------------------------------------------------------------------------
 # Helpers

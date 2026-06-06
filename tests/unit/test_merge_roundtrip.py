@@ -85,9 +85,7 @@ def _assert_valid(tmp_path: Path, text: str) -> dict:
 @pytest.mark.parametrize("net", NETWORKS)
 @pytest.mark.parametrize("caps", CAP_MIXES)
 @pytest.mark.parametrize("mode", SENDER_MODES)
-def test_merge_single_into_inert_roundtrips(
-    tmp_path: Path, net: str, caps: str, mode: str
-) -> None:
+def test_merge_single_into_inert_roundtrips(tmp_path: Path, net: str, caps: str, mode: str) -> None:
     """Every (network × cap-mix × sender-mode) merged into INERT round-trips clean."""
     text = _gen(net, caps, fsp_sender_mode=mode, merge_into=INERT)
     _assert_valid(tmp_path, text)

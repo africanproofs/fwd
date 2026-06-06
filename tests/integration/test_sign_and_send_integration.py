@@ -184,7 +184,7 @@ async def test_sign_transaction_real_master_no_rpc(
         await session.commit()
         tx = await tx_repo.get_by_id(result.tx_id)
         assert tx is not None
-        assert tx.status == "pending"      # NOT "submitted" — zero-egress
+        assert tx.status == "pending"  # NOT "submitted" — zero-egress
         assert tx.wallet == "integ-sign-test"
         assert tx.caller == "integration-test-caller"
         assert tx.chain == _CHAIN_ID

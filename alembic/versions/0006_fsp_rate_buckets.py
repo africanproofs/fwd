@@ -31,9 +31,7 @@ def upgrade() -> None:
         sa.Column("window_kind", sa.String(), nullable=False),
         sa.Column("window_start", sa.DateTime(timezone=True), nullable=False),
         sa.Column("counter", sa.Integer(), nullable=False, server_default="0"),
-        sa.PrimaryKeyConstraint(
-            "caller", "wallet", "message_type", "window_kind", "window_start"
-        ),
+        sa.PrimaryKeyConstraint("caller", "wallet", "message_type", "window_kind", "window_start"),
     )
 
 

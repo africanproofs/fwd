@@ -275,9 +275,9 @@ def test_chained_merges_in_either_order_converge(tmp_path: Path) -> None:
 
     # both orderings carry the same full key set per section
     for section in _DICT_SECTIONS:
-        assert set(ab.get(section, {}) or {}) == set(ba.get(section, {}) or {}), (
-            f"{section} key set differs between merge orders"
-        )
+        assert set(ab.get(section, {}) or {}) == set(
+            ba.get(section, {}) or {}
+        ), f"{section} key set differs between merge orders"
 
 
 # ---------------------------------------------------------------------------

@@ -26,9 +26,7 @@ depends_on = None
 def upgrade() -> None:
     # Add reserved_at to existing transactions table.
     with op.batch_alter_table("transactions") as batch_op:
-        batch_op.add_column(
-            sa.Column("reserved_at", sa.DateTime(timezone=True), nullable=True)
-        )
+        batch_op.add_column(sa.Column("reserved_at", sa.DateTime(timezone=True), nullable=True))
 
     # Create transaction_attempts table.
     op.create_table(

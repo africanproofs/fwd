@@ -124,8 +124,12 @@ async def sign_fsp_message(
         )
     except PolicyDenied as exc:
         await _audit(
-            audit_repo, request, caller,
-            decision="denied", decision_reason=str(exc), outcome=None,
+            audit_repo,
+            request,
+            caller,
+            decision="denied",
+            decision_reason=str(exc),
+            outcome=None,
         )
         await audit_repo.commit()  # Core #19 ARM 1 (deny keeps the rate increment)
         raise
@@ -147,8 +151,12 @@ async def sign_fsp_message(
     if built is None:
         await release_fsp_rate_after_failure(allow=allow, rate_repo=rate_repo, now=now)
         await _audit(
-            audit_repo, request, caller,
-            decision="error", decision_reason="fsp_message_malformed", outcome=None,
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="fsp_message_malformed",
+            outcome=None,
         )
         await audit_repo.commit()  # Core #19 ARM 2 (rate released -> net zero)
         raise FspMessageMalformed(request.message_type)
@@ -159,8 +167,12 @@ async def sign_fsp_message(
     except SealError as exc:
         await release_fsp_rate_after_failure(allow=allow, rate_repo=rate_repo, now=now)
         await _audit(
-            audit_repo, request, caller,
-            decision="error", decision_reason="sign_failure", outcome=None,
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="sign_failure",
+            outcome=None,
         )
         await audit_repo.commit()  # Core #19 ARM 3 (rate released -> net zero)
         raise VaultUnavailableError(str(exc)) from exc
@@ -177,8 +189,11 @@ async def sign_fsp_message(
     # anchors an FSP signature); it lives at the same trust boundary as the
     # hash-chained log + its Litestream replica. NEVER log/record the privkey.
     await _audit(
-        audit_repo, request, caller,
-        decision="approved", decision_reason=None,
+        audit_repo,
+        request,
+        caller,
+        decision="approved",
+        decision_reason=None,
         outcome=_canonical_json(
             {
                 "message_hash": message_hash_hex,

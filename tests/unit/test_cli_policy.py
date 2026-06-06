@@ -94,7 +94,8 @@ def _write(tmp_path: Path, content: str) -> Path:
 
 def test_validate_schema_only_ok(tmp_path: Path) -> None:
     result = runner.invoke(
-        app, ["policy", "validate", "--policy", str(_write(tmp_path, _GOOD_POLICY)), "--schema-only"]
+        app,
+        ["policy", "validate", "--policy", str(_write(tmp_path, _GOOD_POLICY)), "--schema-only"],
     )
     assert result.exit_code == 0, result.output
     assert "schema OK" in result.output
@@ -104,7 +105,13 @@ def test_validate_schema_only_ok(tmp_path: Path) -> None:
 def test_validate_schema_invalid_missing_chains(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
-        ["policy", "validate", "--policy", str(_write(tmp_path, _BAD_SCHEMA_POLICY)), "--schema-only"],
+        [
+            "policy",
+            "validate",
+            "--policy",
+            str(_write(tmp_path, _BAD_SCHEMA_POLICY)),
+            "--schema-only",
+        ],
     )
     assert result.exit_code == 2
     assert "INVALID (schema)" in result.output

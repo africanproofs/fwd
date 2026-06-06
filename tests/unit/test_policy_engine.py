@@ -104,12 +104,14 @@ def _make_policy(
     chains: list[int] | None = None,
     methods: dict[str, MethodRule] | None = None,
     wallet_allowlist: list[str] | None = None,
-    rate: RateLimit | None = RateLimit(per_hour=100, per_day=1000),
+    rate: RateLimit | None = None,
     wallet_name: str = WALLET_NAME,
     wallet_constraint_path: str = "wc/main",
     wallet_constraint: WalletConstraint | None = None,
     include_wallets_binding: bool = True,
 ) -> Policy:
+    if rate is None:
+        rate = RateLimit(per_hour=100, per_day=1000)
     if methods is None:
         methods = {
             "transfer(address,uint256)": MethodRule(

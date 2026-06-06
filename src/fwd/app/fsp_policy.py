@@ -77,7 +77,9 @@ async def evaluate_fsp(
                 ),
             )
         if perm.chain_ids and request.chain_id not in perm.chain_ids:
-            return DenyDecision(step=4, reason=f"chain_id {request.chain_id} not in permitted chain_ids")
+            return DenyDecision(
+                step=4, reason=f"chain_id {request.chain_id} not in permitted chain_ids"
+            )
         if request.message_type not in perm.message_types:
             return DenyDecision(step=5, reason="message_type not permitted")
         if request.wallet not in perm.wallet_allowlist:

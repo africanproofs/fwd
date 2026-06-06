@@ -58,9 +58,7 @@ def test_rewards_kat() -> None:
 def test_uptime_eip191_signature_kat() -> None:
     m = build_fsp_message(UPTIME, 0)
     assert m is not None
-    signed = Account.from_key(_KAT_KEY).sign_message(
-        encode_defunct(primitive=m.message_hash)
-    )
+    signed = Account.from_key(_KAT_KEY).sign_message(encode_defunct(primitive=m.message_hash))
     assert (signed.v, signed.r, signed.s) == _UPTIME_SIG
     assert (
         Account.recover_message(
@@ -79,20 +77,24 @@ def test_rewards_eip191_signature_kat() -> None:
         rewards_hash="0x" + "ab" * 32,
     )
     assert m is not None
-    signed = Account.from_key(_KAT_KEY).sign_message(
-        encode_defunct(primitive=m.message_hash)
-    )
+    signed = Account.from_key(_KAT_KEY).sign_message(encode_defunct(primitive=m.message_hash))
     assert (signed.v, signed.r, signed.s) == _REWARDS_SIG
 
 
 def test_field_order_is_load_bearing() -> None:
     a = build_fsp_message(
-        REWARD_DISTRIBUTION, 3, chain_id=114,
-        no_of_weight_based_claims=56, rewards_hash="0x" + "ab" * 32,
+        REWARD_DISTRIBUTION,
+        3,
+        chain_id=114,
+        no_of_weight_based_claims=56,
+        rewards_hash="0x" + "ab" * 32,
     )
     b = build_fsp_message(
-        REWARD_DISTRIBUTION, 3, chain_id=56,
-        no_of_weight_based_claims=114, rewards_hash="0x" + "ab" * 32,
+        REWARD_DISTRIBUTION,
+        3,
+        chain_id=56,
+        no_of_weight_based_claims=114,
+        rewards_hash="0x" + "ab" * 32,
     )
     assert a is not None and b is not None
     assert a.message_hash != b.message_hash
@@ -106,15 +108,21 @@ def test_malformed_returns_none() -> None:
     assert build_fsp_message(REWARD_DISTRIBUTION, 3) is None
     assert (
         build_fsp_message(
-            REWARD_DISTRIBUTION, 3, chain_id=114,
-            no_of_weight_based_claims=1, rewards_hash="0xzz",
+            REWARD_DISTRIBUTION,
+            3,
+            chain_id=114,
+            no_of_weight_based_claims=1,
+            rewards_hash="0xzz",
         )
         is None
     )
     assert (
         build_fsp_message(
-            REWARD_DISTRIBUTION, 3, chain_id=114,
-            no_of_weight_based_claims=1, rewards_hash="0x" + "ab" * 31,
+            REWARD_DISTRIBUTION,
+            3,
+            chain_id=114,
+            no_of_weight_based_claims=1,
+            rewards_hash="0x" + "ab" * 31,
         )
         is None
     )

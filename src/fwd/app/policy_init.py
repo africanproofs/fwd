@@ -141,8 +141,12 @@ def generate_policy(
 
     registry = AbiRegistry.load(abis_dir)
     claim_sig = _sig_for(registry, "reward_manager", "claim") if CLAIM in caps else None
-    uptime_sig = _sig_for(registry, "flare_systems_manager", "signUptimeVote") if FSP in caps else None
-    rewards_sig = _sig_for(registry, "flare_systems_manager", "signRewards") if FSP in caps else None
+    uptime_sig = (
+        _sig_for(registry, "flare_systems_manager", "signUptimeVote") if FSP in caps else None
+    )
+    rewards_sig = (
+        _sig_for(registry, "flare_systems_manager", "signRewards") if FSP in caps else None
+    )
 
     callers: dict[str, Any] = {}
     wallets: dict[str, Any] = {}
@@ -256,8 +260,13 @@ def generate_policy(
                 "rate": _rate(fsp_rate),
             }
 
-    policy: dict[str, Any] = {"version": 1, "callers": callers, "wallets": wallets,
-                              "permissions": permissions, "wallet_constraints": wallet_constraints}
+    policy: dict[str, Any] = {
+        "version": 1,
+        "callers": callers,
+        "wallets": wallets,
+        "permissions": permissions,
+        "wallet_constraints": wallet_constraints,
+    }
     if fsp_permissions:
         policy["fsp_permissions"] = fsp_permissions
     if fsp_self_submit:

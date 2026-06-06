@@ -69,6 +69,7 @@ def _caller() -> Caller:
 
 def _policy_with_rate(per_hour: int = 10):  # type: ignore[return]
     from fwd.domain.policy import Policy
+
     return Policy.model_validate(
         {
             "version": 1,
@@ -91,6 +92,7 @@ def _policy_with_rate(per_hour: int = 10):  # type: ignore[return]
 def _policy_no_fsp():  # type: ignore[return]
     """Policy where caller exists but has NO fsp_permissions -> deny step 2."""
     from fwd.domain.policy import Policy
+
     return Policy.model_validate(
         {
             "version": 1,
@@ -104,6 +106,7 @@ def _policy_no_fsp():  # type: ignore[return]
 
 def _make_request(message_type: str = "UPTIME"):  # type: ignore[return]
     from fwd.app.sign_fsp_message import SignFspMessageRequest
+
     return SignFspMessageRequest(
         wallet=_WALLET_NAME,
         caller=_CALLER_NAME,
@@ -178,16 +181,19 @@ async def test_arm1_deny_row_survives_rollback(fresh_db: Path) -> None:
             rate_repo = RateRepo(session)
             audit_repo = AuditRepo(session)
             await sign_fsp_message(
-                request, signer_mock,
-                caller=caller, policy=policy,
-                rate_repo=rate_repo, audit_repo=audit_repo,
+                request,
+                signer_mock,
+                caller=caller,
+                policy=policy,
+                rate_repo=rate_repo,
+                audit_repo=audit_repo,
             )
 
     rows = await _all_audit_rows(fresh_db)
     denied = [r for r in rows if r["decision"] == "denied"]
-    assert len(denied) >= 1, (
-        "ARM 1: committed forensic 'denied' row did NOT survive session_scope rollback"
-    )
+    assert (
+        len(denied) >= 1
+    ), "ARM 1: committed forensic 'denied' row did NOT survive session_scope rollback"
 
     # WITHOUT-commit control: append without commit -> should NOT persist.
     with pytest.raises(RuntimeError, match="control-raise"):
@@ -203,8 +209,7 @@ async def test_arm1_deny_row_survives_rollback(fresh_db: Path) -> None:
 
     rows_after = await _all_audit_rows(fresh_db)
     control_rows = [
-        r for r in rows_after
-        if r.get("decision_reason") and "control" in str(r["decision_reason"])
+        r for r in rows_after if r.get("decision_reason") and "control" in str(r["decision_reason"])
     ]
     assert len(control_rows) == 0, (
         "ARM 1 control: un-committed row unexpectedly persisted — "
@@ -243,23 +248,24 @@ async def test_arm2_malformed_row_survives_rollback(fresh_db: Path) -> None:
             # Patch build_fsp_message to return None (malformed).
             with patch("fwd.app.sign_fsp_message.build_fsp_message", return_value=None):
                 await sign_fsp_message(
-                    request, signer_mock,
-                    caller=caller, policy=policy,
-                    rate_repo=rate_repo, audit_repo=audit_repo,
+                    request,
+                    signer_mock,
+                    caller=caller,
+                    policy=policy,
+                    rate_repo=rate_repo,
+                    audit_repo=audit_repo,
                 )
 
     rows = await _all_audit_rows(fresh_db)
     error_rows = [r for r in rows if r["decision"] == "error"]
-    assert len(error_rows) >= 1, (
-        "ARM 2: committed forensic 'error' row did NOT survive session_scope rollback"
-    )
+    assert (
+        len(error_rows) >= 1
+    ), "ARM 2: committed forensic 'error' row did NOT survive session_scope rollback"
 
     # Rate must be net-zero (incremented in gate, then released by release_fsp_rate_after_failure).
     counters = await _fsp_rate_counters(fresh_db)
     for c in counters:
-        assert c == 0, (
-            f"ARM 2: fsp_rate_buckets counter should be 0 (net-zero) but got {c}"
-        )
+        assert c == 0, f"ARM 2: fsp_rate_buckets counter should be 0 (net-zero) but got {c}"
 
     # WITHOUT-commit control.
     with pytest.raises(RuntimeError, match="arm2-control"):
@@ -275,12 +281,13 @@ async def test_arm2_malformed_row_survives_rollback(fresh_db: Path) -> None:
 
     rows_after = await _all_audit_rows(fresh_db)
     control_rows = [
-        r for r in rows_after
+        r
+        for r in rows_after
         if r.get("decision_reason") and "arm2-control" in str(r["decision_reason"])
     ]
-    assert len(control_rows) == 0, (
-        "ARM 2 control: un-committed row persisted — harness would miss a regression"
-    )
+    assert (
+        len(control_rows) == 0
+    ), "ARM 2 control: un-committed row persisted — harness would miss a regression"
 
     await db_mod.get_engine().dispose()
 
@@ -311,23 +318,24 @@ async def test_arm3_sign_fail_row_survives_rollback(fresh_db: Path) -> None:
             rate_repo = RateRepo(session)
             audit_repo = AuditRepo(session)
             await sign_fsp_message(
-                request, signer_mock,
-                caller=caller, policy=policy,
-                rate_repo=rate_repo, audit_repo=audit_repo,
+                request,
+                signer_mock,
+                caller=caller,
+                policy=policy,
+                rate_repo=rate_repo,
+                audit_repo=audit_repo,
             )
 
     rows = await _all_audit_rows(fresh_db)
     error_rows = [r for r in rows if r["decision"] == "error"]
-    assert len(error_rows) >= 1, (
-        "ARM 3: committed forensic 'error' row did NOT survive session_scope rollback"
-    )
+    assert (
+        len(error_rows) >= 1
+    ), "ARM 3: committed forensic 'error' row did NOT survive session_scope rollback"
 
     # Rate must be net-zero (gate incremented, then released on sign failure).
     counters = await _fsp_rate_counters(fresh_db)
     for c in counters:
-        assert c == 0, (
-            f"ARM 3: fsp_rate_buckets counter should be 0 (net-zero) but got {c}"
-        )
+        assert c == 0, f"ARM 3: fsp_rate_buckets counter should be 0 (net-zero) but got {c}"
 
     # WITHOUT-commit control.
     with pytest.raises(RuntimeError, match="arm3-control"):
@@ -343,11 +351,12 @@ async def test_arm3_sign_fail_row_survives_rollback(fresh_db: Path) -> None:
 
     rows_after = await _all_audit_rows(fresh_db)
     control_rows = [
-        r for r in rows_after
+        r
+        for r in rows_after
         if r.get("decision_reason") and "arm3-control" in str(r["decision_reason"])
     ]
-    assert len(control_rows) == 0, (
-        "ARM 3 control: un-committed row persisted — harness would miss a regression"
-    )
+    assert (
+        len(control_rows) == 0
+    ), "ARM 3 control: un-committed row persisted — harness would miss a regression"
 
     await db_mod.get_engine().dispose()

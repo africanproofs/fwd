@@ -212,12 +212,20 @@ def test_merge_adds_network_preserves_existing(tmp_path: Path) -> None:
 
     # both networks present across every section
     assert {
-        "claimer-songbird", "claimer-flare", "fsp-signing-songbird",
-        "fsp-signing-flare", "fsp-sender-songbird", "fsp-sender-flare",
+        "claimer-songbird",
+        "claimer-flare",
+        "fsp-signing-songbird",
+        "fsp-signing-flare",
+        "fsp-sender-songbird",
+        "fsp-sender-flare",
     } <= set(doc["wallets"])
     assert {
-        "claim-songbird", "claim-flare", "fsp-sign-songbird", "fsp-sign-flare",
-        "fsp-submit-songbird", "fsp-submit-flare",
+        "claim-songbird",
+        "claim-flare",
+        "fsp-sign-songbird",
+        "fsp-sign-flare",
+        "fsp-submit-songbird",
+        "fsp-submit-flare",
     } <= set(doc["callers"])
     assert {"fsp/songbird", "fsp/flare"} <= set(doc["fsp_permissions"])
     assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]

@@ -117,8 +117,16 @@ def test_three_networks_claim_fsp_all_present(tmp_path: Path) -> None:
 def test_three_networks_order_independent(tmp_path: Path) -> None:
     """Composing the same three networks in a different add order yields the same
     set of keys per section (union is order-independent on the key set)."""
-    a = _gen("coston2", "claim,fsp", merge_into=_gen("flare", "claim,fsp", merge_into=_gen("songbird", "claim,fsp")))
-    b = _gen("songbird", "claim,fsp", merge_into=_gen("coston2", "claim,fsp", merge_into=_gen("flare", "claim,fsp")))
+    a = _gen(
+        "coston2",
+        "claim,fsp",
+        merge_into=_gen("flare", "claim,fsp", merge_into=_gen("songbird", "claim,fsp")),
+    )
+    b = _gen(
+        "songbird",
+        "claim,fsp",
+        merge_into=_gen("coston2", "claim,fsp", merge_into=_gen("flare", "claim,fsp")),
+    )
     da, db = yaml.safe_load(a), yaml.safe_load(b)
     for section in _DICT_SECTIONS:
         assert set(da.get(section, {})) == set(db.get(section, {})), f"{section} key set differs"
@@ -246,7 +254,10 @@ def test_shared_sender_value_identical_across_nets(tmp_path: Path) -> None:
     fresh_sb = yaml.safe_load(_gen("songbird", "fsp", fsp_sender_mode="shared"))
     fresh_fl = yaml.safe_load(_gen("flare", "fsp", fsp_sender_mode="shared"))
     assert fresh_sb["wallets"]["fsp-sender"] == fresh_fl["wallets"]["fsp-sender"]
-    assert fresh_sb["wallet_constraints"]["wc/fsp-sender"] == fresh_fl["wallet_constraints"]["wc/fsp-sender"]
+    assert (
+        fresh_sb["wallet_constraints"]["wc/fsp-sender"]
+        == fresh_fl["wallet_constraints"]["wc/fsp-sender"]
+    )
 
 
 def test_three_net_shared_sender_single_sender(tmp_path: Path) -> None:

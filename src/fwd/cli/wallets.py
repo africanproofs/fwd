@@ -189,5 +189,3 @@ async def _run_import(request: WalletImportRequest) -> None:
         raise typer.Exit(code=6) from exc
 
     typer.echo(f"imported: {wallet.name} @ {wallet.address}")
-
-

@@ -21,10 +21,10 @@ smoke" gate per the v0.5.0a6 canonical prompt.
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 import pytest  # noqa: TC002
-import secrets
 
 _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 

@@ -112,10 +112,14 @@ async def post_sign_fsp_message(
         ) from exc
     except VaultUnavailableError:
         raise HTTPException(
-            status_code=503, detail={"error": "vault_unavailable", "message": "sealed master unavailable"}
+            status_code=503,
+            detail={"error": "vault_unavailable", "message": "sealed master unavailable"},
         ) from None
 
     return SignFspMessageResponse(
-        message_hash=result.message_hash, v=result.v, r=result.r,
-        s=result.s, signature=result.signature,
+        message_hash=result.message_hash,
+        v=result.v,
+        r=result.r,
+        s=result.s,
+        signature=result.signature,
     )

@@ -376,9 +376,7 @@ async def test_different_caller_same_key_is_not_replay(
     registry: AbiRegistry,
 ) -> None:
     """Same idempotency_key from a DIFFERENT caller is a distinct, normal call."""
-    first = await _sign(
-        session, registry, idempotency_key="shared-key", caller_name=CALLER_NAME
-    )
+    first = await _sign(session, registry, idempotency_key="shared-key", caller_name=CALLER_NAME)
     await session.commit()
 
     # Different caller. Must adjust policy and caller fixtures.

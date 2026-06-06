@@ -142,7 +142,10 @@ async def post_nonce_init(
             await scope.audit_repo.commit()  # survive session_scope rollback (Core #5/#19)
             raise HTTPException(
                 status_code=404,
-                detail={"error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"},
+                detail={
+                    "error": "wallet_not_found",
+                    "message": f"wallet '{body.wallet}' not found",
+                },
             ) from exc
         if existing is not None:
             # Force-overwrite path: approved with before→after outcome (sensitive, Core #5).

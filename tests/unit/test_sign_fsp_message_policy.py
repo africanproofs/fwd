@@ -242,7 +242,9 @@ async def test_no_fsp_permissions_block(session: AsyncSession) -> None:
         "version": 1,
         "callers": {CALLER_NAME: {"policy_path": "fsp/main"}},
         "permissions": {},
-        "fsp_permissions": {"fsp/other": {"message_types": ["UPTIME"], "wallet_allowlist": [WALLET_NAME]}},
+        "fsp_permissions": {
+            "fsp/other": {"message_types": ["UPTIME"], "wallet_allowlist": [WALLET_NAME]}
+        },
         "wallet_constraints": {},
     }
     policy = Policy.model_validate(raw)

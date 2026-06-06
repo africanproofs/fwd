@@ -93,9 +93,7 @@ class EnvelopeSigner:
         finally:
             _zeroize(privkey_buf)
 
-    async def sign_fsp_eip191(
-        self, wallet_name: str, message_hash_32: bytes
-    ) -> SignedDigest:
+    async def sign_fsp_eip191(self, wallet_name: str, message_hash_32: bytes) -> SignedDigest:
         """EIP-191 personal-sign a 32-byte FSP messageHash with the wallet's privkey.
 
         signing-tool signs FSP messages via web3.js

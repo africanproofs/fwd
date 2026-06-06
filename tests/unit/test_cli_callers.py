@@ -216,7 +216,9 @@ def test_callers_create_replace_sends_replace_true(monkeypatch: pytest.MonkeyPat
     assert sent_json["replace"] is True
 
 
-def test_callers_create_no_replace_flag_sends_replace_false(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_callers_create_no_replace_flag_sends_replace_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Omitting --replace sends "replace": false in the POST body."""
     monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")

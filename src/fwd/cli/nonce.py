@@ -37,7 +37,12 @@ def init(
     try:
         r = httpx.post(
             f"{url}/v1/admin/nonce-init",
-            json={"wallet": wallet, "chain": chain, "starting_nonce": starting_nonce, "force": force},
+            json={
+                "wallet": wallet,
+                "chain": chain,
+                "starting_nonce": starting_nonce,
+                "force": force,
+            },
             headers={"Authorization": f"Bearer {admin}"},
             timeout=30.0,
         )

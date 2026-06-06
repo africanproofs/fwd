@@ -77,7 +77,9 @@ def main() -> None:
         print("ERROR: FWD_CALLER_KEY is not set. Set it to the key from 'clifwd callers create'.")
         sys.exit(1)
     if not WALLET_ADDR:
-        print("ERROR: DEMO_WALLET_ADDR is not set. Set it to the address from 'clifwd wallets create'.")
+        print(
+            "ERROR: DEMO_WALLET_ADDR is not set. Set it to the address from 'clifwd wallets create'."
+        )
         sys.exit(1)
 
     caller_headers = {"Authorization": f"Bearer {CALLER_KEY}"}
@@ -105,12 +107,14 @@ def main() -> None:
         "value_wei": "0",
         "data": calldata,
         "gas": 120_000,
-        "max_fee_per_gas": 50_000_000_000,       # 50 gwei
+        "max_fee_per_gas": 50_000_000_000,  # 50 gwei
         "max_priority_fee_per_gas": 1_000_000_000,  # 1 gwei
     }
 
     with httpx.Client(base_url=FWD_URL) as client:
-        resp = client.post("/v1/sign-transaction", json=sign_body, headers=caller_headers, timeout=15)
+        resp = client.post(
+            "/v1/sign-transaction", json=sign_body, headers=caller_headers, timeout=15
+        )
 
     if resp.status_code != 200:
         print(f"ERROR: sign-transaction returned {resp.status_code}: {resp.text}")
@@ -132,7 +136,9 @@ def main() -> None:
     print("STEP 3 — Verify signer locally (eth_account, ZERO network, fwd not involved)")
     print("=" * 70)
 
-    raw_bytes = bytes.fromhex(signed_raw_tx[2:] if signed_raw_tx.startswith("0x") else signed_raw_tx)
+    raw_bytes = bytes.fromhex(
+        signed_raw_tx[2:] if signed_raw_tx.startswith("0x") else signed_raw_tx
+    )
     recovered = Account.recover_transaction(raw_bytes)
 
     print(f"  Expected wallet : {WALLET_ADDR}")
@@ -228,7 +234,9 @@ def main() -> None:
                     headers=caller_headers,
                     timeout=15,
                 )
-            print(f"  POST /v1/transactions/{tx_id}/receipt → {rec_resp.status_code} {rec_resp.json()}")
+            print(
+                f"  POST /v1/transactions/{tx_id}/receipt → {rec_resp.status_code} {rec_resp.json()}"
+            )
         else:
             print("  Receipt not found after 6 attempts (normal for low-gwei on testnet).")
 

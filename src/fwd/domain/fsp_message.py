@@ -68,11 +68,7 @@ def build_fsp_message(
             second = keccak(b"\x00" * 32)
             message = epoch_be32 + second
         else:  # REWARD_DISTRIBUTION
-            if (
-                not isinstance(chain_id, int)
-                or isinstance(chain_id, bool)
-                or chain_id <= 0
-            ):
+            if not isinstance(chain_id, int) or isinstance(chain_id, bool) or chain_id <= 0:
                 return None
             if (
                 not isinstance(no_of_weight_based_claims, int)

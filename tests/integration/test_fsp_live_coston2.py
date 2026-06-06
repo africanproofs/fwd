@@ -38,7 +38,8 @@ _COSTON2_RPC = "https://coston2-api.flare.network/ext/C/rpc"
 
 @pytest.mark.asyncio
 async def test_fsp_sign_offline_determinism(
-    tmp_path, monkeypatch  # type: ignore[no-untyped-def]
+    tmp_path,
+    monkeypatch,  # type: ignore[no-untyped-def]
 ) -> None:
     """KAT key 0x11*32 + UPTIME epoch 0 -> recovered address = _KAT_ADDRESS."""
     from eth_account import Account
@@ -94,9 +95,9 @@ async def test_fsp_sign_offline_determinism(
     # Recover the signer address from the signature.
     msg = encode_defunct(primitive=built.message_hash)
     recovered = Account.recover_message(msg, signature=signed.signature)
-    assert recovered.lower() == _KAT_ADDRESS.lower(), (
-        f"KAT address mismatch: expected {_KAT_ADDRESS!r}, got {recovered!r}"
-    )
+    assert (
+        recovered.lower() == _KAT_ADDRESS.lower()
+    ), f"KAT address mismatch: expected {_KAT_ADDRESS!r}, got {recovered!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +111,8 @@ async def test_fsp_sign_offline_determinism(
     reason="FWD_LIVE_COSTON2=1 not set; skipping live Coston2 check",
 )
 async def test_fsp_sign_live_coston2_no_revert(
-    tmp_path, monkeypatch  # type: ignore[no-untyped-def]
+    tmp_path,
+    monkeypatch,  # type: ignore[no-untyped-def]
 ) -> None:
     """Live: eth_call FlareSystemsManager.signUptimeVote on Coston2 with
     fwd-produced {v,r,s} asserts no signature/signer revert."""
@@ -192,9 +194,7 @@ async def test_fsp_sign_live_coston2_no_revert(
     # A revert with "other" reason (e.g. epoch not open) is acceptable.
     if "error" in body:
         error_msg = str(body["error"]).lower()
-        assert "invalid signature" not in error_msg, (
-            f"Signature validation failed on Coston2: {body['error']}"
-        )
-        assert "wrong signer" not in error_msg, (
-            f"Wrong signer on Coston2: {body['error']}"
-        )
+        assert (
+            "invalid signature" not in error_msg
+        ), f"Signature validation failed on Coston2: {body['error']}"
+        assert "wrong signer" not in error_msg, f"Wrong signer on Coston2: {body['error']}"

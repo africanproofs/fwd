@@ -52,11 +52,11 @@ class SignTransactionRequest:
     wallet: str
     caller: str
     chain: int
-    to: str                        # 0x-prefixed 20-byte hex
-    value_wei: str                 # decimal string
-    data: str                      # 0x-prefixed even-length hex (or "0x")
-    gas: int                       # REQUIRED (no estimate_gas)
-    max_fee_per_gas: int           # REQUIRED (client supplies; fwd cannot fetch)
+    to: str  # 0x-prefixed 20-byte hex
+    value_wei: str  # decimal string
+    data: str  # 0x-prefixed even-length hex (or "0x")
+    gas: int  # REQUIRED (no estimate_gas)
+    max_fee_per_gas: int  # REQUIRED (client supplies; fwd cannot fetch)
     max_priority_fee_per_gas: int  # REQUIRED
     idempotency_key: str | None = None
 
@@ -64,8 +64,8 @@ class SignTransactionRequest:
 @dataclass(frozen=True)
 class SignTransactionResult:
     tx_id: str
-    hash: str            # locally computed: "0x" + signed.hash.hex()
-    signed_raw_tx: str   # "0x" + signed.raw_transaction.hex() — the client broadcasts this
+    hash: str  # locally computed: "0x" + signed.hash.hex()
+    signed_raw_tx: str  # "0x" + signed.raw_transaction.hex() — the client broadcasts this
     nonce: int
 
 
@@ -227,9 +227,10 @@ async def sign_transaction(
     else:
         reason = None
     if reason is not None:
-        await _audit(audit_repo, request, caller, decision="denied",
-                     decision_reason=reason, outcome=None)
-        await audit_repo.commit()          # forensic row survives rollback (Core #5/#19)
+        await _audit(
+            audit_repo, request, caller, decision="denied", decision_reason=reason, outcome=None
+        )
+        await audit_repo.commit()  # forensic row survives rollback (Core #5/#19)
         raise TxParamsRejected(reason)
 
     # 3. Policy gate — BEFORE nonce reservation (D14 / v0.5.0a6).
@@ -282,12 +283,19 @@ async def sign_transaction(
             rate_repo=rate_repo,
             now=now,
         )
-        await _audit(audit_repo, request, caller, decision="error",
-                     decision_reason="nonce_not_initialized", outcome=None)
-        await audit_repo.commit()          # Core #5/#19
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="error",
+            decision_reason="nonce_not_initialized",
+            outcome=None,
+        )
+        await audit_repo.commit()  # Core #5/#19
         raise NonceNotInitialized(
             f"(wallet={request.wallet}, chain={request.chain}) has no nonce; "
-            f"call POST /v1/admin/nonce-init") from exc
+            f"call POST /v1/admin/nonce-init"
+        ) from exc
 
     # 5-6. Build tx_dict + sign. On failure: release nonce + rate, audit error, commit + raise.
     try:
@@ -381,10 +389,10 @@ async def sign_transaction(
         value_wei=request.value_wei,
         request_json=request_json,
         signed_raw=signed_raw_hex,
-        status="pending",           # post-sign / pre-broadcast (NOT "submitted")
-        submitted_at=None,          # the client has not broadcast yet
+        status="pending",  # post-sign / pre-broadcast (NOT "submitted")
+        submitted_at=None,  # the client has not broadcast yet
         idempotency_key=request.idempotency_key,
-        reserved_at=now,            # set at sign time for orphan-lease detection (a13)
+        reserved_at=now,  # set at sign time for orphan-lease detection (a13)
     )
     await tx_repo.add_hash(tx_id, tx_hash, sequence_num=1)
     if attempt_repo is not None:
@@ -398,7 +406,9 @@ async def sign_transaction(
             hash=tx_hash,
             created_at=now,
         )
-    await rate_repo.add_committed_value(wallet=wallet.name, value_wei=int(request.value_wei), now=now)
+    await rate_repo.add_committed_value(
+        wallet=wallet.name, value_wei=int(request.value_wei), now=now
+    )
     await _audit(
         audit_repo,
         request,

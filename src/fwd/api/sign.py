@@ -73,8 +73,9 @@ class SignTransactionResponse(BaseModel):
     nonce: int
 
 
-@router.post("/v1/sign-transaction", response_model=SignTransactionResponse,
-             status_code=status.HTTP_200_OK)
+@router.post(
+    "/v1/sign-transaction", response_model=SignTransactionResponse, status_code=status.HTTP_200_OK
+)
 async def post_sign_transaction(
     body: SignTransactionBody,
     caller: Annotated[Caller, Depends(require_caller)],
@@ -83,11 +84,21 @@ async def post_sign_transaction(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),  # noqa: B008
 ) -> SignTransactionResponse:
     if idempotency_key is not None and len(idempotency_key) > 128:
-        raise HTTPException(status_code=400, detail={
-            "error": "bad_idempotency_key", "message": "Idempotency-Key must be <=128 chars"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "bad_idempotency_key",
+                "message": "Idempotency-Key must be <=128 chars",
+            },
+        )
     request = SignTransactionRequest(
-        wallet=body.wallet, caller=caller.name, chain=body.chain, to=body.to,
-        value_wei=body.value_wei, data=body.data, gas=body.gas,
+        wallet=body.wallet,
+        caller=caller.name,
+        chain=body.chain,
+        to=body.to,
+        value_wei=body.value_wei,
+        data=body.data,
+        gas=body.gas,
         max_fee_per_gas=body.max_fee_per_gas,
         max_priority_fee_per_gas=body.max_priority_fee_per_gas,
         idempotency_key=idempotency_key,
@@ -100,23 +111,44 @@ async def post_sign_transaction(
             policy = http_request.app.state.policy
             registry = http_request.app.state.abi_registry
             result = await sign_transaction(
-                request, scope.signer, scope.tx_repo, scope.nonce_repo,
-                caller=caller, wallet=wallet_obj, policy=policy, registry=registry,
-                rate_repo=scope.rate_repo, audit_repo=scope.audit_repo,
+                request,
+                scope.signer,
+                scope.tx_repo,
+                scope.nonce_repo,
+                caller=caller,
+                wallet=wallet_obj,
+                policy=policy,
+                registry=registry,
+                rate_repo=scope.rate_repo,
+                audit_repo=scope.audit_repo,
                 attempt_repo=scope.attempt_repo,
             )
     except PolicyDenied:
         raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except TxParamsRejected as exc:
-        raise HTTPException(status_code=400, detail={"error": "tx_params_rejected", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400, detail={"error": "tx_params_rejected", "message": str(exc)}
+        ) from exc
     except WalletNotFound:
         raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except IdempotencyConflict as exc:
-        raise HTTPException(status_code=409, detail={"error": "idempotency_conflict", "message": f"Idempotency-Key reused with a different request body: {exc}"}) from exc
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "idempotency_conflict",
+                "message": f"Idempotency-Key reused with a different request body: {exc}",
+            },
+        ) from exc
     except NonceNotInitialized as exc:
-        raise HTTPException(status_code=409, detail={"error": "nonce_not_initialized", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=409, detail={"error": "nonce_not_initialized", "message": str(exc)}
+        ) from exc
     except VaultUnavailableError:
-        raise HTTPException(status_code=503, detail={"error": "vault_unavailable", "message": "sealed master unavailable"}) from None
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "vault_unavailable", "message": "sealed master unavailable"},
+        ) from None
 
-    return SignTransactionResponse(tx_id=result.tx_id, hash=result.hash,
-                                   signed_raw_tx=result.signed_raw_tx, nonce=result.nonce)
+    return SignTransactionResponse(
+        tx_id=result.tx_id, hash=result.hash, signed_raw_tx=result.signed_raw_tx, nonce=result.nonce
+    )

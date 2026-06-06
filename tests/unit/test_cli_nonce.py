@@ -105,7 +105,18 @@ def test_nonce_init_force_flag_sends_force_true_in_body(monkeypatch: pytest.Monk
     )
     with patch("fwd.cli.nonce.httpx.post", return_value=fake) as mock_post:
         result = runner.invoke(
-            app, ["nonce", "init", "--wallet", "alice", "--chain", "114", "--starting-nonce", "0", "--force"]
+            app,
+            [
+                "nonce",
+                "init",
+                "--wallet",
+                "alice",
+                "--chain",
+                "114",
+                "--starting-nonce",
+                "0",
+                "--force",
+            ],
         )
 
     assert result.exit_code == 0, result.stdout + (result.stderr or "")
@@ -114,7 +125,9 @@ def test_nonce_init_force_flag_sends_force_true_in_body(monkeypatch: pytest.Monk
     assert sent_json["force"] is True
 
 
-def test_nonce_init_no_force_flag_sends_force_false_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nonce_init_no_force_flag_sends_force_false_in_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Omitting --force sends force: false in the JSON body."""
     monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
     monkeypatch.setenv("FWD_URL", "http://127.0.0.1:8080")
@@ -183,9 +196,7 @@ def test_nonce_get_unreachable_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
 # clifwd nonce sync
 # ---------------------------------------------------------------------------
 
-_NONCE_SYNC_CMD = [
-    "nonce", "sync", "--wallet", "alice", "--chain", "114", "--on-chain-count", "7"
-]
+_NONCE_SYNC_CMD = ["nonce", "sync", "--wallet", "alice", "--chain", "114", "--on-chain-count", "7"]
 
 
 def test_nonce_sync_200_exit_0_prints_body(monkeypatch: pytest.MonkeyPatch) -> None:

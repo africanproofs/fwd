@@ -46,8 +46,12 @@ RECIPIENT = "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294"
 INERT = "# fwd INERT default-deny policy (installed). Empty on purpose.\nversion: 1\n"
 
 
-def _gen(networks: str, capabilities: str, merge_into: str | None = None,
-         recipient: str | None = RECIPIENT) -> str:
+def _gen(
+    networks: str,
+    capabilities: str,
+    merge_into: str | None = None,
+    recipient: str | None = RECIPIENT,
+) -> str:
     return generate_policy(
         networks=networks.split(","),
         capabilities=capabilities.split(","),
@@ -117,8 +121,9 @@ def test_remerge_three_times_does_not_grow() -> None:
 def test_remerge_no_section_grows_in_size() -> None:
     """Explicitly assert every section count is unchanged after a same-net re-merge."""
     base = yaml.safe_load(_gen("flare,songbird", "claim,fsp"))
-    again = yaml.safe_load(_gen("flare,songbird", "claim,fsp",
-                               merge_into=_gen("flare,songbird", "claim,fsp")))
+    again = yaml.safe_load(
+        _gen("flare,songbird", "claim,fsp", merge_into=_gen("flare,songbird", "claim,fsp"))
+    )
     for section in ("callers", "wallets", "permissions", "wallet_constraints", "fsp_permissions"):
         assert len(again[section]) == len(base[section]), f"{section} grew on re-merge"
     assert len(again["fsp_self_submit"]) == len(base["fsp_self_submit"])

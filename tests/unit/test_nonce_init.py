@@ -389,7 +389,8 @@ async def test_nonce_init_force_overwrites_existing_201(
     # Verify the audit row.
     rows = await _all_audit_rows(session)
     force_rows = [
-        row for row in rows
+        row
+        for row in rows
         if row["action"] == "nonce-init"
         and row["decision"] == "approved"
         and row["decision_reason"] == "force_overwrite"

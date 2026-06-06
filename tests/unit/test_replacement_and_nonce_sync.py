@@ -132,9 +132,16 @@ async def _seed_tx(
 ) -> None:
     addr = contract_address or ("0x" + "11" * 20)
     rj = request_json or json.dumps(
-        {"wallet": WALLET, "chain": CHAIN, "to": addr,
-         "value_wei": value_wei, "data": "0x", "gas": 21000,
-         "max_fee_per_gas": 1_000_000_000, "max_priority_fee_per_gas": 500_000_000}
+        {
+            "wallet": WALLET,
+            "chain": CHAIN,
+            "to": addr,
+            "value_wei": value_wei,
+            "data": "0x",
+            "gas": 21000,
+            "max_fee_per_gas": 1_000_000_000,
+            "max_priority_fee_per_gas": 500_000_000,
+        }
     )
     await session.execute(
         transactions.insert().values(
@@ -168,6 +175,7 @@ async def _seed_tx_hash(
     sequence_num: int = 1,
 ) -> None:
     from fwd.infra.transaction_repo import transaction_hashes
+
     await session.execute(
         transaction_hashes.insert().values(
             tx_id=tx_id,
@@ -350,9 +358,7 @@ async def _audit_rows(session: AsyncSession) -> list[dict[str, Any]]:
 
 
 async def _tx_row(session: AsyncSession, tx_id: str) -> dict[str, Any] | None:
-    result = await session.execute(
-        select(transactions).where(transactions.c.tx_id == tx_id)
-    )
+    result = await session.execute(select(transactions).where(transactions.c.tx_id == tx_id))
     row = result.first()
     return dict(row._mapping) if row is not None else None
 
@@ -498,9 +504,16 @@ async def test_sign_transaction_records_attempt_1_and_reserved_at() -> None:
 
     with patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=allow)):
         await sign_transaction(
-            request, signer, tx_repo, nonce_repo,
-            caller=caller, wallet=wallet_obj, policy=MagicMock(),
-            registry=MagicMock(), rate_repo=rate_repo, audit_repo=audit_repo,
+            request,
+            signer,
+            tx_repo,
+            nonce_repo,
+            caller=caller,
+            wallet=wallet_obj,
+            policy=MagicMock(),
+            registry=MagicMock(),
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
             attempt_repo=attempt_repo,
         )
 
@@ -542,6 +555,7 @@ async def test_sign_replacement_happy_path(db_session: AsyncSession) -> None:
     new_raw = b"\x02\xaa\xbb"
     new_hash_bytes = bytes(range(32))
     from fwd.domain.signer import SignedTransaction
+
     mock_signer = MagicMock()
     mock_signer.sign_transaction = AsyncMock(
         return_value=SignedTransaction(
@@ -587,11 +601,10 @@ async def test_sign_replacement_happy_path(db_session: AsyncSession) -> None:
 
     # Audit row: approved tx-replacement.
     rows = await _audit_rows(db_session)
-    assert any(
-        row["action"] == "tx-replacement" and row["decision"] == "approved"
-        for row in rows
+    assert any(row["action"] == "tx-replacement" and row["decision"] == "approved" for row in rows)
+    approved_row = next(
+        r for r in rows if r["action"] == "tx-replacement" and r["decision"] == "approved"
     )
-    approved_row = next(r for r in rows if r["action"] == "tx-replacement" and r["decision"] == "approved")
     outcome = json.loads(approved_row["outcome"])  # type: ignore[arg-type]
     assert outcome["prev_seq"] == 1
     assert outcome["new_seq"] == 2
@@ -605,13 +618,12 @@ async def test_sign_replacement_same_nonce(db_session: AsyncSession) -> None:
     nonce = 99
     await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=nonce)
     await _seed_tx_hash(db_session, tx_id=tx_id)
-    await _seed_attempt(
-        db_session, tx_id=tx_id, max_priority_fee_per_gas=500_000_000
-    )
+    await _seed_attempt(db_session, tx_id=tx_id, max_priority_fee_per_gas=500_000_000)
 
     captured: dict[str, Any] = {}
 
     from fwd.domain.signer import SignedTransaction
+
     mock_signer = MagicMock()
 
     async def _sign(wallet: str, tx_dict: dict[str, Any]) -> SignedTransaction:
@@ -628,8 +640,11 @@ async def test_sign_replacement_same_nonce(db_session: AsyncSession) -> None:
     min_priority = math.ceil(500_000_000 * 1.125)
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000,
-              "max_priority_fee_per_gas": min_priority},
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": min_priority,
+        },
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 200
@@ -637,6 +652,7 @@ async def test_sign_replacement_same_nonce(db_session: AsyncSession) -> None:
     assert captured["nonce"] == nonce
     # to must be checksummed.
     from eth_utils import to_checksum_address
+
     assert captured["to"] == to_checksum_address("0x" + "11" * 20)
 
 
@@ -647,9 +663,7 @@ async def test_sign_replacement_bump_too_low_returns_400(db_session: AsyncSessio
     await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=5)
     await _seed_tx_hash(db_session, tx_id=tx_id)
     prev_priority = 1_000_000_000
-    await _seed_attempt(
-        db_session, tx_id=tx_id, max_priority_fee_per_gas=prev_priority
-    )
+    await _seed_attempt(db_session, tx_id=tx_id, max_priority_fee_per_gas=prev_priority)
 
     caller = _make_caller()
     scope_cm = _RealReplacementScopeCM(db_session)
@@ -658,8 +672,7 @@ async def test_sign_replacement_bump_too_low_returns_400(db_session: AsyncSessio
     too_low = prev_priority  # same as prev, not bumped
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000,
-              "max_priority_fee_per_gas": too_low},
+        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000, "max_priority_fee_per_gas": too_low},
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 400
@@ -701,8 +714,11 @@ async def test_sign_replacement_cap_exhausted_at_5(db_session: AsyncSession) -> 
     # Use valid bump fees (above prev, under global cap).
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 300_000_000,
-              "max_priority_fee_per_gas": base_priority},
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 300_000_000,
+            "max_priority_fee_per_gas": base_priority,
+        },
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 409
@@ -711,7 +727,8 @@ async def test_sign_replacement_cap_exhausted_at_5(db_session: AsyncSession) -> 
     db_session.expire_all()
     rows = await _audit_rows(db_session)
     assert any(
-        row["action"] == "tx-replacement" and row["decision"] == "denied"
+        row["action"] == "tx-replacement"
+        and row["decision"] == "denied"
         and row["decision_reason"] == "replacement_cap_exhausted"
         for row in rows
     )
@@ -732,8 +749,11 @@ async def test_sign_replacement_wrong_state_pending_returns_409(
 
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000,
-              "max_priority_fee_per_gas": 1_000_000_000},
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": 1_000_000_000,
+        },
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 409
@@ -741,10 +761,7 @@ async def test_sign_replacement_wrong_state_pending_returns_409(
 
     db_session.expire_all()
     rows = await _audit_rows(db_session)
-    assert any(
-        row["action"] == "tx-replacement" and row["decision"] == "denied"
-        for row in rows
-    )
+    assert any(row["action"] == "tx-replacement" and row["decision"] == "denied" for row in rows)
 
 
 @pytest.mark.asyncio
@@ -760,8 +777,11 @@ async def test_sign_replacement_cross_caller_returns_404(db_session: AsyncSessio
 
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000,
-              "max_priority_fee_per_gas": 1_000_000_000},
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": 1_000_000_000,
+        },
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 404
@@ -777,9 +797,7 @@ async def test_sign_replacement_sign_failure_does_not_release_nonce(
     nonce = 7
     await _seed_tx(db_session, tx_id=tx_id, status="submitted", nonce=nonce)
     await _seed_tx_hash(db_session, tx_id=tx_id)
-    await _seed_attempt(
-        db_session, tx_id=tx_id, max_priority_fee_per_gas=500_000_000
-    )
+    await _seed_attempt(db_session, tx_id=tx_id, max_priority_fee_per_gas=500_000_000)
     await _seed_nonce(db_session, next_nonce=nonce + 1)
 
     mock_signer = MagicMock()
@@ -792,8 +810,11 @@ async def test_sign_replacement_sign_failure_does_not_release_nonce(
     min_priority = math.ceil(500_000_000 * 1.125)
     r = client.post(
         f"/v1/transactions/{tx_id}/sign-replacement",
-        json={"gas": 21_000, "max_fee_per_gas": 2_000_000_000,
-              "max_priority_fee_per_gas": min_priority},
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": min_priority,
+        },
         headers={"Authorization": "Bearer fwd_live_x"},
     )
     assert r.status_code == 503
@@ -807,10 +828,7 @@ async def test_sign_replacement_sign_failure_does_not_release_nonce(
 
     # Error audit row committed.
     rows = await _audit_rows(db_session)
-    assert any(
-        row["action"] == "tx-replacement" and row["decision"] == "error"
-        for row in rows
-    )
+    assert any(row["action"] == "tx-replacement" and row["decision"] == "error" for row in rows)
 
 
 @pytest.mark.asyncio
@@ -959,7 +977,9 @@ async def test_multi_replacement_reaches_cap(db_session: AsyncSession) -> None:
         db_session.expire_all()
         tx_row = await _tx_row(db_session, tx_id)
         assert tx_row is not None
-        assert tx_row["status"] == "submitted", f"call {i + 1}: expected submitted, got {tx_row['status']}"
+        assert (
+            tx_row["status"] == "submitted"
+        ), f"call {i + 1}: expected submitted, got {tx_row['status']}"
 
         prev_priority = new_priority
         prev_fee = new_fee
@@ -1061,10 +1081,7 @@ async def test_nonce_sync_rewind_returns_409(db_session: AsyncSession) -> None:
 
     db_session.expire_all()
     rows = await _audit_rows(db_session)
-    assert any(
-        row["action"] == "nonce-sync" and row["decision"] == "denied"
-        for row in rows
-    )
+    assert any(row["action"] == "nonce-sync" and row["decision"] == "denied" for row in rows)
 
 
 @pytest.mark.asyncio
@@ -1100,16 +1117,14 @@ async def test_nonce_sync_missing_row_returns_404(db_session: AsyncSession) -> N
 
     db_session.expire_all()
     rows = await _audit_rows(db_session)
-    assert any(
-        row["action"] == "nonce-sync" and row["decision"] == "denied"
-        for row in rows
-    )
+    assert any(row["action"] == "nonce-sync" and row["decision"] == "denied" for row in rows)
 
 
 @pytest.mark.asyncio
 async def test_nonce_sync_requires_admin_auth(db_session: AsyncSession) -> None:
     """Without overriding admin auth, no admin key configured → 503."""
     from fwd import settings as settings_mod
+
     settings_mod.get_settings.cache_clear()
 
     app = FastAPI()
@@ -1118,6 +1133,7 @@ async def test_nonce_sync_requires_admin_auth(db_session: AsyncSession) -> None:
     app.dependency_overrides[get_admin_scope] = lambda: admin_scope_cm
 
     import os
+
     old_key = os.environ.get("FWD_ADMIN_KEY")
     os.environ["FWD_ADMIN_KEY"] = ""
     settings_mod.get_settings.cache_clear()
@@ -1146,6 +1162,7 @@ async def test_nonce_sync_requires_admin_auth(db_session: AsyncSession) -> None:
 async def test_nonce_holes_stale_pending_surfaces(db_session: AsyncSession) -> None:
     """A pending tx with reserved_at older than lease_sec is returned."""
     from fwd import settings as settings_mod
+
     settings_mod.get_settings.cache_clear()
 
     tx_id = "018f0001-a13-holes-stale-00000000001"
@@ -1177,6 +1194,7 @@ async def test_nonce_holes_stale_pending_surfaces(db_session: AsyncSession) -> N
 async def test_nonce_holes_fresh_pending_not_surfaced(db_session: AsyncSession) -> None:
     """A pending tx with recent reserved_at is NOT returned (within lease window)."""
     from fwd import settings as settings_mod
+
     settings_mod.get_settings.cache_clear()
 
     tx_id = "018f0001-a13-holes-fresh-00000000001"
@@ -1204,6 +1222,7 @@ async def test_nonce_holes_fresh_pending_not_surfaced(db_session: AsyncSession) 
 async def test_nonce_holes_submitted_tx_not_surfaced(db_session: AsyncSession) -> None:
     """A submitted tx (broadcast) with stale reserved_at is NOT in holes (wrong status)."""
     from fwd import settings as settings_mod
+
     settings_mod.get_settings.cache_clear()
 
     tx_id = "018f0001-a13-holes-submitted-0000001"

@@ -206,9 +206,7 @@ async def test_wallet_not_found() -> None:
         patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())),
         pytest.raises(WalletNotFound),
     ):
-        await sign_transaction(
-            _request(), signer, _tx_repo(), _nonce_repo(), **_policy_kwargs()
-        )
+        await sign_transaction(_request(), signer, _tx_repo(), _nonce_repo(), **_policy_kwargs())
 
 
 # ---------------------------------------------------------------------------
@@ -224,9 +222,7 @@ async def test_vault_failure_during_sign() -> None:
         patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())),
         pytest.raises(VaultUnavailableError),
     ):
-        await sign_transaction(
-            _request(), signer, _tx_repo(), _nonce_repo(), **_policy_kwargs()
-        )
+        await sign_transaction(_request(), signer, _tx_repo(), _nonce_repo(), **_policy_kwargs())
 
 
 @pytest.mark.asyncio
@@ -293,9 +289,7 @@ async def test_nonce_not_initialized_raises() -> None:
         patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())),
         pytest.raises(NonceNotInitialized),
     ):
-        await sign_transaction(
-            _request(), _signer(), _tx_repo(), nonce_repo, **_policy_kwargs()
-        )
+        await sign_transaction(_request(), _signer(), _tx_repo(), nonce_repo, **_policy_kwargs())
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +307,10 @@ async def test_cap_gas_exceeded() -> None:
         pytest.raises(TxParamsRejected, match="FWD_MAX_GAS"),
     ):
         await sign_transaction(
-            request, _signer(), _tx_repo(), _nonce_repo(),
+            request,
+            _signer(),
+            _tx_repo(),
+            _nonce_repo(),
             **_policy_kwargs(audit_repo=audit),
         )
     audit.commit.assert_awaited_once()
@@ -329,7 +326,10 @@ async def test_cap_max_fee_per_gas_exceeded() -> None:
         pytest.raises(TxParamsRejected, match="FWD_MAX_FEE_PER_GAS"),
     ):
         await sign_transaction(
-            request, _signer(), _tx_repo(), _nonce_repo(),
+            request,
+            _signer(),
+            _tx_repo(),
+            _nonce_repo(),
             **_policy_kwargs(audit_repo=audit),
         )
     audit.commit.assert_awaited_once()
@@ -345,7 +345,10 @@ async def test_cap_priority_exceeds_max_fee() -> None:
         pytest.raises(TxParamsRejected, match="max_priority_fee_per_gas"),
     ):
         await sign_transaction(
-            request, _signer(), _tx_repo(), _nonce_repo(),
+            request,
+            _signer(),
+            _tx_repo(),
+            _nonce_repo(),
             **_policy_kwargs(audit_repo=audit),
         )
     audit.commit.assert_awaited_once()
@@ -403,9 +406,14 @@ async def test_idempotency_replay() -> None:
     tx_repo.list_hashes_by_tx = AsyncMock(return_value=[])
     audit = _audit_repo_mock()
     audit.find_sign_transaction_seq = AsyncMock(return_value=None)
-    with patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())) as mock_gate:
+    with patch(
+        "fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())
+    ) as mock_gate:
         result = await sign_transaction(
-            request, _signer(), tx_repo, _nonce_repo(),
+            request,
+            _signer(),
+            tx_repo,
+            _nonce_repo(),
             **_policy_kwargs(audit_repo=audit),
         )
     mock_gate.assert_not_awaited()

@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import os
 import secrets
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 from fastapi.testclient import TestClient
 
 from fwd.main import app
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 
 def test_healthz_returns_200_and_expected_shape(

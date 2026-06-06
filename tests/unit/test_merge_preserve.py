@@ -198,9 +198,9 @@ def test_hand_added_extra_contract_under_existing_network_survives(tmp_path: Pat
     merged = _gen_merge("flare", "claim", base_text)
     doc = yaml.safe_load(merged)
 
-    assert doc["permissions"]["perm/claim-songbird"] == expected_perm, (
-        "hand-added extra contract on the existing network was lost/altered"
-    )
+    assert (
+        doc["permissions"]["perm/claim-songbird"] == expected_perm
+    ), "hand-added extra contract on the existing network was lost/altered"
     assert extra_addr in doc["permissions"]["perm/claim-songbird"]["contracts"]
 
 

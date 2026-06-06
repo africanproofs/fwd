@@ -183,14 +183,10 @@ def check_consistency(
             errors.append(f"fsp_permissions '{fperm_path}' has empty message_types")
         for mt in fperm.message_types:
             if mt not in _valid_fsp_types:
-                errors.append(
-                    f"fsp_permissions '{fperm_path}' unknown message_type '{mt}'"
-                )
+                errors.append(f"fsp_permissions '{fperm_path}' unknown message_type '{mt}'")
         for wname in fperm.wallet_allowlist:
             if wname not in known_wallet_names:
-                errors.append(
-                    f"fsp_permissions '{fperm_path}' allowlists unknown wallet '{wname}'"
-                )
+                errors.append(f"fsp_permissions '{fperm_path}' allowlists unknown wallet '{wname}'")
 
     evm_addrs: set[str] = set()
     for perm in policy.permissions.values():
@@ -213,9 +209,7 @@ def check_consistency(
     }
     for wname in policy.fsp_self_submit:
         if wname not in known_wallet_names:
-            errors.append(
-                f"fsp_self_submit names unknown wallet '{wname}'"
-            )
+            errors.append(f"fsp_self_submit names unknown wallet '{wname}'")
             continue
         if wname not in fsp_allowlisted_names:
             errors.append(
@@ -278,10 +272,7 @@ def policy_path_exists(policy: Policy, policy_path: str, kind: str) -> bool:
     POST /v1/admin/callers and POST /v1/admin/wallets before inserting.
     """
     if kind == "caller":
-        return (
-            policy_path in policy.permissions
-            or policy_path in policy.fsp_permissions
-        )
+        return policy_path in policy.permissions or policy_path in policy.fsp_permissions
     if kind == "wallet":
         return policy_path in policy.wallet_constraints
     return False

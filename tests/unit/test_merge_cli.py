@@ -75,14 +75,20 @@ def _doc(result: object) -> dict:
 
 # Conventional default arg sets (claim+fsp; recipient required for claim).
 _SONGBIRD = [
-    "--networks", "songbird",
-    "--capabilities", "claim,fsp",
-    "--recipient", RECIPIENT,
+    "--networks",
+    "songbird",
+    "--capabilities",
+    "claim,fsp",
+    "--recipient",
+    RECIPIENT,
 ]
 _FLARE = [
-    "--networks", "flare",
-    "--capabilities", "claim,fsp",
-    "--recipient", RECIPIENT,
+    "--networks",
+    "flare",
+    "--capabilities",
+    "claim,fsp",
+    "--recipient",
+    RECIPIENT,
 ]
 
 
@@ -228,14 +234,20 @@ def test_merge_adds_network_preserves_existing(
 
     # both networks present across the dict sections
     assert {
-        "claimer-songbird", "claimer-flare",
-        "fsp-signing-songbird", "fsp-signing-flare",
-        "fsp-sender-songbird", "fsp-sender-flare",
+        "claimer-songbird",
+        "claimer-flare",
+        "fsp-signing-songbird",
+        "fsp-signing-flare",
+        "fsp-sender-songbird",
+        "fsp-sender-flare",
     } <= set(doc["wallets"])
     assert {
-        "claim-songbird", "claim-flare",
-        "fsp-sign-songbird", "fsp-sign-flare",
-        "fsp-submit-songbird", "fsp-submit-flare",
+        "claim-songbird",
+        "claim-flare",
+        "fsp-sign-songbird",
+        "fsp-sign-flare",
+        "fsp-submit-songbird",
+        "fsp-submit-flare",
     } <= set(doc["callers"])
     assert {"fsp/songbird", "fsp/flare"} <= set(doc["fsp_permissions"])
     assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]
@@ -266,9 +278,12 @@ def test_merge_three_way_chain_preserves_all(
 
     # add coston2 (claim needs a recipient; coston2 supports both caps)
     coston2 = [
-        "--networks", "coston2",
-        "--capabilities", "claim,fsp",
-        "--recipient", RECIPIENT,
+        "--networks",
+        "coston2",
+        "--capabilities",
+        "claim,fsp",
+        "--recipient",
+        RECIPIENT,
     ]
     _env(monkeypatch, policy)
     try:
@@ -470,12 +485,17 @@ def test_merge_bad_input_still_exits_2(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     _env(monkeypatch, policy)
     try:
-        result = _init([
-            "--networks", "ethereum",
-            "--capabilities", "claim",
-            "--recipient", RECIPIENT,
-            "--merge",
-        ])
+        result = _init(
+            [
+                "--networks",
+                "ethereum",
+                "--capabilities",
+                "claim",
+                "--recipient",
+                RECIPIENT,
+                "--merge",
+            ]
+        )
         assert result.exit_code == 2, result.output  # type: ignore[attr-defined]
         assert "unknown network" in result.output  # type: ignore[attr-defined]
     finally:
@@ -507,4 +527,6 @@ def test_merge_with_out_writes_superset(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert "claimer-flare" in doc["wallets"]
     for section in ("callers", "wallets", "permissions", "wallet_constraints", "fsp_permissions"):
         for key, val in sb_doc[section].items():
-            assert doc[section][key] == val, f"songbird {section}/{key} changed when written via --out"
+            assert (
+                doc[section][key] == val
+            ), f"songbird {section}/{key} changed when written via --out"

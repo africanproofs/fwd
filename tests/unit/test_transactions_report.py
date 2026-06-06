@@ -211,9 +211,7 @@ async def _audit_rows(session: AsyncSession) -> list[dict[str, object]]:
 
 
 async def _tx_row(session: AsyncSession, tx_id: str) -> dict[str, object] | None:
-    result = await session.execute(
-        select(transactions).where(transactions.c.tx_id == tx_id)
-    )
+    result = await session.execute(select(transactions).where(transactions.c.tx_id == tx_id))
     row = result.first()
     return dict(row._mapping) if row is not None else None
 

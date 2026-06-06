@@ -17,7 +17,8 @@ def scope(
     wallet: str = typer.Option(..., "--wallet", help="FSP signing wallet name."),
     policy_path: str = typer.Option(..., "--policy-path", help="fsp_permissions key."),
     message_types: str = typer.Option(
-        "UPTIME,REWARD_DISTRIBUTION", "--message-types",
+        "UPTIME,REWARD_DISTRIBUTION",
+        "--message-types",
         help="Comma-separated permitted FSP message types.",
     ),
 ) -> None:

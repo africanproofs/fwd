@@ -476,9 +476,7 @@ async def post_sign_replacement(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={
                         "error": "replacement_bump_too_low",
-                        "message": (
-                            f"max_fee_per_gas must be >= prev={prev.max_fee_per_gas}"
-                        ),
+                        "message": (f"max_fee_per_gas must be >= prev={prev.max_fee_per_gas}"),
                     },
                 )
 

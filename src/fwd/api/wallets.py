@@ -142,5 +142,3 @@ async def list_wallets_endpoint(
             for w in items
         ]
     )
-
-

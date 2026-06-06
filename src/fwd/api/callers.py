@@ -104,7 +104,9 @@ async def post_callers(
     try:
         async with admin_scope_cm as scope:
             result = await create_caller(
-                CallerCreateRequest(name=body.name, policy_path=body.policy_path, replace=body.replace),
+                CallerCreateRequest(
+                    name=body.name, policy_path=body.policy_path, replace=body.replace
+                ),
                 scope.caller_repo,
                 audit_repo=scope.audit_repo,
             )
