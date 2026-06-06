@@ -5,8 +5,8 @@ nonce, no broadcast, no receipt, no idempotency. RFC6979-deterministic, so a
 retry yields a byte-identical signature — idempotency is unnecessary (a
 future non-deterministic signer, Phase 10, would reopen this).
 
-Core invariant #19 surface delta vs sign_and_send: there are NO broadcast
-arms (no broadcast). The arms here are: policy-deny; build-malformed
+Core invariant #19 surface delta vs sign_transaction: there are NO nonce arms
+(no nonce allocation). The arms here are: policy-deny; build-malformed
 (defensive); sign/decrypt-fail. Each commits its forensic row on the shared
 RequestScope session before re-raising.
 """
@@ -183,7 +183,7 @@ async def sign_fsp_message(
     sig_hex = "0x" + signed.signature.hex()
 
     # 5. Approved audit row. No explicit commit — the clean path commits once
-    # via session_scope on scope exit (mirrors sign_and_send approved path).
+    # via session_scope on scope exit (mirrors sign_transaction approved path).
     # The signature is a CAPABILITY-BEARING artifact (anyone holding it can
     # submit it), recorded because forensically required (no on-chain tx hash
     # anchors an FSP signature); it lives at the same trust boundary as the

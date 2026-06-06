@@ -2,25 +2,14 @@
 
 Per architecture.md § SQLite schema, fwd applies these PRAGMAs at startup:
   journal_mode=WAL, synchronous=NORMAL, busy_timeout=30000, foreign_keys=ON.
-  (busy_timeout bumped 5000 -> 30000 at v0.4.5 to absorb concurrent-writer
-  queueing during sign-and-send bursts; the connect handler below sets
-  30000 — this docstring previously still read 5000, reconciled v0.5.5
-  per Core invariant #18.)
 
-Phase 3b applies them via the connection-event handler below.
-Phase 5a5 adds a BEGIN IMMEDIATE event listener to serialize writers
-per architecture.md § Signing flow step 6.
-
-v0.4.5 fixes a critical concurrency bug surfaced by the Phase 5 GA drill:
-sqlite3's DB-API driver wraps every statement in an implicit BEGIN
-(DEFERRED) by default. SQLAlchemy's `begin` event then fires AFTER the
-implicit BEGIN has already started a transaction, so our `BEGIN IMMEDIATE`
-SQL fails with "cannot start a transaction within a transaction" (which
-surfaces to other concurrent connections as "database is locked"). The
-fix sets `isolation_level=None` on the raw DBAPI connection, which
-disables sqlite3's implicit transactions; SQLAlchemy then begins manually
-via our event handler with `BEGIN IMMEDIATE`. See the SQLAlchemy SQLite
-docs on serializable isolation:
+The connection-event handler below sets isolation_level=None on the raw DBAPI
+connection, which disables sqlite3's implicit BEGIN (DEFERRED) wrapping.
+SQLAlchemy's `begin` event can then issue an explicit BEGIN IMMEDIATE to
+serialize all writers per architecture.md § Signing flow step 6. Without this,
+sqlite3's implicit BEGIN (DEFERRED) would already be open when our `begin`
+event fires, causing "cannot start a transaction within a transaction".
+See the SQLAlchemy SQLite docs on serializable isolation:
 https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-savepoints-transactional-ddl
 """
 
@@ -61,14 +50,9 @@ def _apply_sqlite_pragmas(dbapi_connection, _connection_record) -> None:  # type
     cur = dbapi_connection.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA synchronous=NORMAL")
-    # busy_timeout sized for concurrent writer queueing during sign-and-send.
-    # Each request holds the writer lock for the full sign-and-send critical
-    # section (~1s: Vault decrypt + RPC fee_history + estimate_gas + broadcast +
-    # INSERT). With ~10 concurrent requests we expect ~10s wait at the back of
-    # the queue; 30s gives headroom. Phase 5 follow-up may split the critical
-    # section into reserve-then-commit + work-outside-lock + insert-then-commit
-    # to drop writer-lock time to ~ms; until then, this timeout absorbs the
-    # contention. See docs/history/0.4.5-*.md.
+    # busy_timeout sized for concurrent writer queueing. fwd is sign-only
+    # (no RPC, no broadcast): the writer lock is held for sub-ms per request.
+    # 30s provides generous headroom for concurrent callers. See docs/history/0.4.5-*.md.
     cur.execute("PRAGMA busy_timeout=30000")
     cur.execute("PRAGMA foreign_keys=ON")
     cur.close()

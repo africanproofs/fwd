@@ -163,8 +163,8 @@ class NonceRepo:
 
     async def mark_confirmed(self, wallet: str, chain: int, confirmed_nonce: int) -> None:
         """Set last_confirmed = MAX(last_confirmed, confirmed_nonce).
-        For v0.4.0a6 receipt watcher; a5 unit tests cover it but no caller
-        invokes it yet."""
+        Called by the receipt-report path (api/transactions.py) when a client
+        reports a confirmed broadcast outcome."""
         stmt = (
             update(nonces)
             .where(nonces.c.wallet == wallet, nonces.c.chain == chain)

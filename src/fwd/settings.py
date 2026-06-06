@@ -20,7 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore", case_sensitive=False)
 
-    # Sealed master (v1.0.0a1; replaces Vault)
+    # Sealed master
     fwd_master_key_file: str = Field(default="/run/fwd/master.key")
 
     # State

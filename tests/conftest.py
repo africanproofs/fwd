@@ -1,9 +1,7 @@
 """Test fixtures.
 
-v1.0.0a1: Vault removed; integration tests no longer require a live Vault.
-The `needs_vault` marker and `_vault_reachable()` helper are deleted.
-Integration tests run unconditionally using a SealedMaster over a tmp master
-file (constructed per-test via the `tmp_master_file` fixture).
+Integration tests use a SealedMaster over a tmp master file
+(constructed per-test via the `tmp_master_file` fixture).
 """
 
 from __future__ import annotations

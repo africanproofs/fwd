@@ -1,11 +1,8 @@
-"""AESGCM envelope sealed master — Vault aes256-gcm96 replacement.
+"""AESGCM envelope sealed master.
 
-The master is 32 raw bytes loaded from a 0600 host file; ciphertext format is
-``seal:v1:<b64(nonce12 || aesgcm_ct_tag)>``.  This is the v1.0.0a1 Vault
-replacement (asset class: low-value Flare automation keys, host never public).
-
-The async context-manager surface is identical to the retired VaultClient so
-the three DI sites in app/dependencies.py change name only.
+The master is 32 raw bytes loaded from a 0600 host file (asset class:
+low-value Flare automation keys, host never public). Ciphertext format:
+``seal:v1:<b64(nonce12 || aesgcm_ct_tag)>``.
 """
 
 from __future__ import annotations
@@ -83,8 +80,7 @@ class SealedMaster:
     async def encrypt(self, plaintext: bytes) -> str:
         """Envelope-encrypt ``plaintext`` with AESGCM.
 
-        Returns a ``seal:v1:<b64(nonce12 || ct_with_tag)>`` string —
-        parallel to the retired Vault ``vault:v1:<...>`` format.
+        Returns a ``seal:v1:<b64(nonce12 || ct_with_tag)>`` string.
         """
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 

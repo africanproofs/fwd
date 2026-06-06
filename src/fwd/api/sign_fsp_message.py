@@ -1,6 +1,6 @@
 """POST /v1/sign-fsp-message — caller-auth. EIP-191 FSP message signing.
 
-Distinct lifecycle from /v1/sign-and-send (no nonce/broadcast/receipt) ->
+Distinct lifecycle from /v1/sign-transaction (no nonce/receipt) ->
 its own route. No digest field: fwd reconstructs the messageHash from typed
 fields.
 """

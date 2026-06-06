@@ -2,7 +2,7 @@
 
 Calls the D14 engine once (it decodes + evaluates + increments rate),
 maps a DenyDecision to PolicyDenied, and exposes a release helper for
-the post-Allow / pre-broadcast-failure path (rate release-on-failure
+the post-Allow / pre-sign-failure path (rate release-on-failure
 mirrors the nonce release; D14 / v0.5.0a2 doctrine).
 """
 
@@ -68,10 +68,10 @@ async def release_rate_after_failure(
     now: datetime,
 ) -> None:
     """Undo the engine's step-8/9 rate increments when a request that was
-    ALLOWED then fails before broadcast (RPC/Vault/sign). Mirrors the
-    nonce release. Keys are re-derived from the AllowDecision + policy
+    ALLOWED then fails before or during signing (decrypt/sign failure). Mirrors
+    the nonce release. Keys are re-derived from the AllowDecision + policy
     (no engine change). aggregate_value is NOT touched here — it is only
-    ever added on broadcast success via rate_repo.add_committed_value.
+    ever added on a client-reported receipt via rate_repo.add_committed_value.
     Best-effort: never raises (a failing release must not mask the
     original error).
     """

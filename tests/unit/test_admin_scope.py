@@ -4,7 +4,7 @@ Verifies that AdminScopeCM yields an AdminScope with signer, caller_repo,
 and audit_repo all backed by the same session (D16 atomicity requirement).
 
 We mock SealedMaster to avoid needing a real master key file in unit tests —
-the same pattern used by test_sign_and_send.py for RequestScopeCM.
+the same pattern used by test_sign_transaction.py for RequestScopeCM.
 """
 
 from __future__ import annotations

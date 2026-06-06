@@ -9,10 +9,6 @@ Liveness probe (sealed_master): instantiates SealedMaster() on every /healthz
 request to verify the sealed master is loadable (correct path, mode, size,
 ownership, readability). Returns 503 with status=degraded if it fails.
 This is a liveness probe — not cached, called on every request.
-
-v1.0.0a1: the prior `vault` field (Vault /sys/health probe) is retired
-with the Vault backend — replaced by `master`.
-v1.1.0a9: the `rpc` field is retired (zero-egress; no RPC calls from daemon).
 """
 
 from __future__ import annotations

@@ -189,7 +189,7 @@ class RequestScopeCM:
 
     Opens ONE session_scope and constructs signer + tx_repo + nonce_repo
     + rate_repo + audit_repo + wallet_repo against that shared session.
-    Also opens Vault. Designed for api/sign.py — all flows need all
+    Also opens SealedMaster. Designed for api/sign.py — all flows need all
     components, and pre-v0.4.5 each opened its own session_scope, causing
     SQLite writer-lock contention under our BEGIN IMMEDIATE event handler.
 
@@ -247,8 +247,8 @@ class AdminScopeCM:
     """Single-session scope for admin write operations.
 
     Opens ONE session_scope and constructs signer (via WalletRepo) +
-    caller_repo + audit_repo against the shared session. Also opens Vault.
-    Does NOT open an RpcManager — admin actions never hit chain.
+    caller_repo + audit_repo against the shared session. Also opens SealedMaster.
+    Does NOT use any RPC — admin actions never hit chain.
 
     The audit row commits atomically with the mutation (signer INSERT or
     caller_repo INSERT/UPDATE) under the shared BEGIN IMMEDIATE lock.
@@ -283,7 +283,7 @@ def get_admin_scope() -> AdminScopeCM:
 @dataclass(frozen=True)
 class ReportScope:
     """tx_repo + nonce_repo + audit_repo on ONE shared session for the
-    client report-back endpoints (broadcast-result, receipt). No Vault, no RPC —
+    client report-back endpoints (broadcast-result, receipt). No SealedMaster —
     these paths never sign."""
 
     tx_repo: TransactionRepo
@@ -314,7 +314,7 @@ class ReplacementScope:
     """signer + tx_repo + attempt_repo + nonce_repo + audit_repo on ONE shared
     session for the sign-replacement endpoint (a13).
 
-    Needs the Vault (signs a replacement tx); does not need rate_repo
+    Needs SealedMaster (signs a replacement tx); does not need rate_repo
     (replacement re-signs the same intent at the same nonce — no new rate tick).
     """
 

@@ -4,9 +4,9 @@ POST /v1/admin/nonce-init  — seed a (wallet, chain) nonce row (idempotent guar
 POST /v1/admin/nonce-sync  — bounded-monotonic advance of fwd's nonce view to chain truth.
 GET  /v1/admin/nonce/holes — surface orphaned pending reservations for operator review.
 
-Seeds the nonces row so a (wallet, chain) can sign without an on-chain
-transaction-count probe (the RPC-free replacement for sign_and_send's lazy
-seed). Idempotent guard: 409 if already initialized. 404 if the wallet does
+Seeds the nonces row so a (wallet, chain) can sign. fwd is zero-egress and
+never probes the chain; the operator provides the initial on-chain nonce.
+Idempotent guard: 409 if already initialized. 404 if the wallet does
 not exist. Writes a D16 audit row on the shared AdminScope session; the
 forensic row on a refusal is committed before the HTTPException propagates
 (Core invariant #5 / #19).

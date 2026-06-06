@@ -1,5 +1,5 @@
-"""Caller-auth bearer middleware for /v1/sign-and-send and other
-caller-facing endpoints (Phase 4+).
+"""Caller-auth bearer middleware for /v1/sign-transaction and other
+caller-facing endpoints.
 
 Per decisions.md D11: this is a SEPARATE module from api/admin_auth.py.
 There is no fallback bridge: an admin token presented here returns 401

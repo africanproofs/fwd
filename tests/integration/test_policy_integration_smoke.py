@@ -4,7 +4,6 @@ Scope: bring up the app with TestClient (lifespan fires), verify that
 _startup_policy_load ran successfully, app.state.policy is set, and a
 policy-load audit row with decision="approved" was written.
 
-v1.0.0a1: Vault removed; this test no longer requires a live Vault.
 The lifespan policy-load path does not touch SealedMaster (it only reads
 DB repos); no master key file is needed for this smoke test.
 
@@ -12,10 +11,9 @@ Requires:
   - FWD_DISABLE_MLOCK=1 (set in test so the `elif FWD_POLICY_PATH` branch
     in lifespan fires without calling mlockall or _startup_reconcile).
 
-Note: this test does NOT attempt a full sign-and-send through TestClient --
-that would require a live chain RPC. The smoke is the lifespan policy-load
-path + app.state assertion, which is sufficient for a "policy integration
-smoke" gate per the v0.5.0a6 canonical prompt.
+Note: this test does NOT attempt a full sign-transaction through TestClient.
+The smoke is the lifespan policy-load path + app.state assertion, which is
+sufficient for a "policy integration smoke" gate.
 """
 
 from __future__ import annotations

@@ -8,8 +8,8 @@ The test exercises the full Phase 4 flow with real cryptographic primitives:
   - Real SealedMaster encrypts the wallet privkey; real SealedMaster decrypts
     at sign time; NO RPC (zero-egress, v1.1.0a9).
 
-v1.1.0a9 update: sign_and_send → sign_transaction (zero-egress). No mock RPC.
-Client-supplied gas + fee params. status="pending" in tx row.
+sign_transaction (zero-egress): no mock RPC. Client-supplied gas + fee params.
+status="pending" in tx row.
 
 Verifies:
   - The Phase 4 Caller object is correctly constructed and persisted.

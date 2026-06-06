@@ -296,8 +296,7 @@ class TransactionRepo:
     async def list_by_status(self, status: str) -> list[Transaction]:
         """Return all transactions with the given status, ordered by created_at.
 
-        Used by the receipt watcher (v0.4.0a6) to enumerate pending
-        ('submitted') txs each tick.
+        Returns all transactions with the given status, ordered by created_at.
         """
         assert status in _VALID_STATUSES, f"invalid status: {status}"
         result = await self._session.execute(

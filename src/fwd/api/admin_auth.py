@@ -5,10 +5,10 @@ the request's Authorization: Bearer <token> header against the
 FWD_ADMIN_KEY env var. If FWD_ADMIN_KEY is empty, ALL admin requests are
 refused (fail-closed).
 
-Per decisions.md D11 (Phase 4): admin auth and caller auth are distinct,
-never bridged. Phase 4 ADDED `api/caller_auth.py::require_caller` as a
-SEPARATE module for caller-facing endpoints (/v1/sign-and-send and
-future caller endpoints); it did NOT replace `require_admin`. Both
+Per decisions.md D11: admin auth and caller auth are distinct, never bridged.
+`api/caller_auth.py::require_caller` is a SEPARATE module for caller-facing
+endpoints (/v1/sign-transaction and other caller endpoints); it does NOT
+replace `require_admin`. Both
 modules continue to exist; admin endpoints (/v1/admin/*) keep using
 `require_admin`. There is no fallback path between the two — an admin
 token presented to a caller endpoint returns 401, and vice versa. The

@@ -15,11 +15,11 @@ Arms under test:
   ARM 3 — sign/decrypt-fail:   error row committed, rate released (net zero).
 
 Why a sibling module: the existing test_db.py forensic test is structurally
-sign_and_send-specific (it uses sign-and-send action names and the
-sign_and_send path's exact error flow). The FSP arms are a distinct
+sign_transaction-specific (it uses sign-transaction action names and the
+sign_transaction path's exact error flow). The FSP arms are a distinct
 orchestrator with its own rate substrate (fsp_rate_buckets) and a 3-arm
 (not 4-arm) structure; forcing them into that test would require coupling
-two unrelated subsystems, increasing the risk that a future sign_and_send
+two unrelated subsystems, increasing the risk that a future sign_transaction
 refactor breaks the FSP gate and vice versa. Sibling module = independent,
 self-contained, easier to read, zero cross-coupling. (Per J4 spec: "If
 that enforcement test's structure does not generalize cleanly, add a

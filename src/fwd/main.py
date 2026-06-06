@@ -5,11 +5,8 @@ The uvicorn entry is `fwd.main:app`. Lives at the top level of the package
 correctly skips it - the FastAPI app instance composes routers from the
 api/ layer but is itself an ASGI runtime artifact, not a layer member.
 
-Phase 2 wires only /healthz. Phase 3b adds /v1/admin/wallets.
-Phase 3c adds /v1/sign-and-send.
-v0.3.2 adds:
-  - mlockall() in the lifespan startup hook (Core invariants #1, #16).
-  - structlog scrubber for hex-shaped 32-byte values (architecture.md hazard #3).
+Startup hooks: mlockall() (Core invariants #1, #16) + policy load (D14 fail-fast).
+structlog scrubber for hex-shaped 32-byte values (architecture.md hazard #3).
 """
 
 from __future__ import annotations
@@ -168,7 +165,7 @@ async def _startup_policy_load(_app: FastAPI) -> None:
     """Load and validate policy.yaml + ABI registry at startup (D14 fail-fast).
 
     Stashes the loaded Policy and AbiRegistry on app.state for use by the
-    sign-and-send handler. Writes a policy-load audit row (D16). On
+    sign-transaction handler. Writes a policy-load audit row (D16). On
     consistency errors, logs each error and raises SystemExit(1) per the
     D14 fail-fast mandate.
     """
@@ -282,7 +279,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     `FWD_DISABLE_MLOCK=1` will trigger mlockall and fail without
     CAP_IPC_LOCK; gate via env when needed.
 
-    v1.1.0a9: receipt watcher, nonce reconcile, and RPC egress removed.
+    Startup: lock process memory, then load and validate policy.
     """
     if os.environ.get("FWD_DISABLE_MLOCK") != "1":
         _mlockall()

@@ -193,7 +193,7 @@ class AuditRepo:
         """Commit the underlying session.
 
         Forensic-row durability (D16 / Core invariant #5): a `denied` or
-        `error` sign-and-send audit row is appended on the shared
+        `error` sign-transaction audit row is appended on the shared
         RequestScope session and then the operation raises. That exception
         propagates through `session_scope`, whose `except Exception:` arm
         ROLLS BACK — discarding the just-appended forensic row (the exact
@@ -201,7 +201,7 @@ class AuditRepo:
         commits via this method BEFORE re-raising so the refusal/failure
         record survives (the trailing session_scope rollback is then a
         no-op on an already-committed, empty transaction). The explicit
-        nonce/rate releases on the pre-broadcast path run before this
+        nonce/rate releases on the pre-sign path run before this
         commit, so the committed operational state is correct (net-zero).
         """
         await self._session.commit()
@@ -344,8 +344,7 @@ class AuditRepo:
     async def find_sign_transaction_seq(self, tx_id: str) -> int | None:
         """Return the seq of the approved sign-transaction audit row for *tx_id*, or None.
 
-        v1.1.0a9 zero-egress: sign-transaction replaces sign-and-send.
-        Identical substring-match approach on the compact outcome JSON.
+        Substring-match on the compact outcome JSON.
 
         Returns None when:
           - No matching row.
