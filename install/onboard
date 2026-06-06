@@ -397,6 +397,20 @@ wallet_exists() {
   printf '%s' "$_we_out" | awk '{print $1}' | grep -qx "$1"
 }
 
+# A present wallet's sealed address MUST match the on-chain preflight expectation.
+# Pure check + report; caller decides die-vs-continue. Empty expected = skip.
+wallet_assert_expected() {  # name expected_addr
+  [ -z "${2:-}" ] && return 0
+  _wae_a="$(wallet_addr "$1")"
+  if [ "$(printf '%s' "$2" | tr 'A-F' 'a-f')" != "$(printf '%s' "$_wae_a" | tr 'A-F' 'a-f')" ]; then
+    warn "$1 exists but its sealed address does NOT match the on-chain preflight:"
+    warn "    expected (on-chain): $2"
+    warn "    sealed in fwd      : $_wae_a"
+    return 1
+  fi
+  return 0
+}
+
 wallet_create() {  # name policy role — generate fresh in-vault; echo the derived address + contract role
   role="${3:-wallet}"
   set +e; out="$(clifwd wallets create --name "$1" --policy "$2" 2>&1)"; rc=$?; set -e
@@ -412,7 +426,12 @@ wallet_create() {  # name policy role — generate fresh in-vault; echo the deri
 import_pasted() {  # name policy role [expected_addr]
   role="${3:-key}"
   _ia_expected="${4:-}"
-  if wallet_exists "$1"; then note "already present: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
+  if wallet_exists "$1"; then
+    wallet_assert_expected "$1" "$_ia_expected" \
+      || die "refusing to proceed: '$1' is already sealed with the WRONG address (mismatch above). fwd has no in-place wallet-replace — inspect 'clifwd wallets list', then either reinstall with --reset-state and re-onboard, or remove that wallet row under operator control."
+    note "already present: $1 @ $(wallet_addr "$1") — $role"
+    return 0
+  fi
   if [ "$SKIP_FSP_IMPORT" -eq 1 ]; then
     warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; ONBOARD_INCOMPLETE=1; return 0
   fi
