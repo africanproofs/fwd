@@ -96,8 +96,7 @@ async def post_sign_transaction(
         async with scope_cm as scope:
             wallet_obj = await scope.wallet_repo.get_by_name(body.wallet, missing_ok=True)
             if wallet_obj is None:
-                raise HTTPException(status_code=404, detail={
-                    "error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"})
+                raise HTTPException(status_code=403, detail={"error": "policy_denied"})
             policy = http_request.app.state.policy
             registry = http_request.app.state.abi_registry
             result = await sign_transaction(
@@ -106,18 +105,18 @@ async def post_sign_transaction(
                 rate_repo=scope.rate_repo, audit_repo=scope.audit_repo,
                 attempt_repo=scope.attempt_repo,
             )
-    except PolicyDenied as exc:
-        raise HTTPException(status_code=403, detail={"error": "policy_denied", "message": str(exc)}) from exc
+    except PolicyDenied:
+        raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except TxParamsRejected as exc:
         raise HTTPException(status_code=400, detail={"error": "tx_params_rejected", "message": str(exc)}) from exc
     except WalletNotFound:
-        raise HTTPException(status_code=404, detail={"error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"}) from None
+        raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except IdempotencyConflict as exc:
         raise HTTPException(status_code=409, detail={"error": "idempotency_conflict", "message": f"Idempotency-Key reused with a different request body: {exc}"}) from exc
     except NonceNotInitialized as exc:
         raise HTTPException(status_code=409, detail={"error": "nonce_not_initialized", "message": str(exc)}) from exc
-    except VaultUnavailableError as exc:
-        raise HTTPException(status_code=503, detail={"error": "vault_unavailable", "message": str(exc)}) from exc
+    except VaultUnavailableError:
+        raise HTTPException(status_code=503, detail={"error": "vault_unavailable", "message": "sealed master unavailable"}) from None
 
     return SignTransactionResponse(tx_id=result.tx_id, hash=result.hash,
                                    signed_raw_tx=result.signed_raw_tx, nonce=result.nonce)

@@ -27,9 +27,10 @@ def _mock_caller(name: str) -> Caller:
 
 
 def _mock_audit_repo() -> MagicMock:
-    """Minimal mock AuditRepo: append is AsyncMock."""
+    """Minimal mock AuditRepo: append and commit are AsyncMock."""
     repo = MagicMock()
     repo.append = AsyncMock(return_value=None)
+    repo.commit = AsyncMock(return_value=None)
     return repo
 
 

@@ -46,6 +46,7 @@ async def revoke_caller(name: str, repo: CallerRepo, *, audit_repo: AuditRepo) -
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise CallerNotFound(name) from exc
     except CallerAlreadyRevokedError as exc:
         logger.info("caller.revoke.already_revoked", name=name)
@@ -56,6 +57,7 @@ async def revoke_caller(name: str, repo: CallerRepo, *, audit_repo: AuditRepo) -
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise CallerAlreadyRevoked(name) from exc
 
     await audit_repo.append(

@@ -184,6 +184,12 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
 fi
 
 NETLIST="$(echo "$NETS" | tr ',' ' ')"
+for _vn in $NETLIST; do
+  case "$_vn" in
+    flare|songbird|coston2) ;;
+    *) die "invalid network: '$_vn' (must be one of: flare, songbird, coston2)" ;;
+  esac
+done
 
 # Resolve a network's chain id from the SAME networks.yaml the generator used
 # (baked in-container; honors an FWD_NETWORKS_FILE override) — no host-side drift.

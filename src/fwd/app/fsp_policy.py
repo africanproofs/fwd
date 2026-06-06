@@ -64,10 +64,12 @@ async def evaluate_fsp(
                 step=3,
                 reason="policy_path is also an EVM permissions block (cross-domain forbidden)",
             )
+        if perm.chain_ids and request.chain_id not in perm.chain_ids:
+            return DenyDecision(step=4, reason=f"chain_id {request.chain_id} not in permitted chain_ids")
         if request.message_type not in perm.message_types:
-            return DenyDecision(step=4, reason="message_type not permitted")
+            return DenyDecision(step=5, reason="message_type not permitted")
         if request.wallet not in perm.wallet_allowlist:
-            return DenyDecision(step=5, reason="wallet not in fsp allowlist")
+            return DenyDecision(step=6, reason="wallet not in fsp allowlist")
         ok = await rate_repo.check_and_increment_fsp_caller(
             caller=caller.name,
             wallet=request.wallet,
@@ -76,7 +78,7 @@ async def evaluate_fsp(
             now=now,
         )
         if not ok:
-            return DenyDecision(step=6, reason="fsp caller rate limit exceeded")
+            return DenyDecision(step=7, reason="fsp caller rate limit exceeded")
         return FspAllowDecision(
             caller=caller.name,
             wallet=request.wallet,

@@ -147,6 +147,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise exc
 
     # 2. File mode is 0600.
@@ -161,6 +162,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc_mode).__name__}: {exc_mode}",
         )
+        await audit_repo.commit()
         raise exc_mode
 
     # 3. File owner matches current uid.
@@ -173,6 +175,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc_owner).__name__}: {exc_owner}",
         )
+        await audit_repo.commit()
         raise exc_owner
 
     # 4. Read content; decode to 32 bytes.
@@ -188,6 +191,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc_content).__name__}: {exc_content}",
         )
+        await audit_repo.commit()
         raise exc_content from hex_exc
     if len(privkey_bytes) != 32:
         exc_content = PrivkeyFileBadContent(length=len(privkey_bytes))
@@ -198,6 +202,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc_content).__name__}: {exc_content}",
         )
+        await audit_repo.commit()
         raise exc_content
 
     # 5. Wrap in bytearray (hazard #2). The use case owns the buffer's
@@ -222,6 +227,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise exc_taken from exc
     except WalletImportInvalidLength:
         # Already enforced above; defensive re-raise.
@@ -233,6 +239,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"WalletImportInvalidLength: buffer length {len(privkey_buf)}",
         )
+        await audit_repo.commit()
         raise exc_inv from None
     except WalletAddressMismatch as exc:
         # WalletAddressMismatch surfaces directly to the CLI (its message is
@@ -244,6 +251,7 @@ async def import_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise
 
     # 6. Optional shred of the source file. NOT a refusal — shredding is

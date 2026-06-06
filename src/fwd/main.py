@@ -299,6 +299,7 @@ app = FastAPI(
     description="Flare Wallet Daemon — policy-gated signing service",
     docs_url=None,
     redoc_url=None,
+    openapi_url=None,
     lifespan=lifespan,
 )
 

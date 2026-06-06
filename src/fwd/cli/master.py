@@ -31,7 +31,7 @@ def generate(
         raise typer.Exit(code=2)
 
     key = os.urandom(32)
-    with open(out, "wb") as f:
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(key)
-    os.chmod(out, 0o600)
     typer.echo(f"wrote 32-byte master key to {out} (mode 0600)")

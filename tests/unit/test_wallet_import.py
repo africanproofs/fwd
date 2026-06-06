@@ -41,9 +41,10 @@ def _mock_signer(wallet: Wallet | None = None, side_effect: Exception | None = N
 
 
 def _mock_audit_repo() -> MagicMock:
-    """Minimal mock AuditRepo: append is AsyncMock that returns None."""
+    """Minimal mock AuditRepo: append and commit are AsyncMock."""
     repo = MagicMock()
     repo.append = AsyncMock(return_value=None)
+    repo.commit = AsyncMock(return_value=None)
     return repo
 
 

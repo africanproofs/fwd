@@ -81,6 +81,7 @@ class FspPermissionBlock(BaseModel):
 
     message_types: list[str]
     wallet_allowlist: list[str]
+    chain_ids: list[int] = Field(default_factory=list)
     rate: RateLimit | None = None
 
 

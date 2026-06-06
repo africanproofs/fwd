@@ -291,7 +291,7 @@ async def test_policy_path_also_evm_permissions(session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_message_type_not_permitted(session: AsyncSession) -> None:
-    """Step 4: message_type not in fsp_permissions.message_types."""
+    """Step 5: message_type not in fsp_permissions.message_types."""
     policy = _make_policy(message_types=["UPTIME"])  # REWARD_DISTRIBUTION not permitted
     caller = _make_caller()
     signer = _mock_signer()
@@ -301,33 +301,6 @@ async def test_message_type_not_permitted(session: AsyncSession) -> None:
     with pytest.raises(PolicyDenied) as exc_info:
         await sign_fsp_message(
             _make_request(message_type="REWARD_DISTRIBUTION"),
-            signer,
-            caller=caller,
-            policy=policy,
-            rate_repo=rate_repo,
-            audit_repo=audit_repo,
-        )
-    assert exc_info.value.step == 4
-    signer.sign_fsp_eip191.assert_not_awaited()
-
-    rows = await _get_audit_rows(session)
-    denied = [r for r in rows if r["decision"] == "denied"]
-    assert len(denied) >= 1
-    await session.rollback()
-
-
-@pytest.mark.asyncio
-async def test_wallet_not_in_fsp_allowlist(session: AsyncSession) -> None:
-    """Step 5: wallet not in fsp_permissions.wallet_allowlist."""
-    policy = _make_policy(wallet_allowlist=["other-wallet"])
-    caller = _make_caller()
-    signer = _mock_signer()
-    rate_repo = RateRepo(session)
-    audit_repo = AuditRepo(session)
-
-    with pytest.raises(PolicyDenied) as exc_info:
-        await sign_fsp_message(
-            _make_request(wallet=WALLET_NAME),
             signer,
             caller=caller,
             policy=policy,
@@ -344,8 +317,35 @@ async def test_wallet_not_in_fsp_allowlist(session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+async def test_wallet_not_in_fsp_allowlist(session: AsyncSession) -> None:
+    """Step 6: wallet not in fsp_permissions.wallet_allowlist."""
+    policy = _make_policy(wallet_allowlist=["other-wallet"])
+    caller = _make_caller()
+    signer = _mock_signer()
+    rate_repo = RateRepo(session)
+    audit_repo = AuditRepo(session)
+
+    with pytest.raises(PolicyDenied) as exc_info:
+        await sign_fsp_message(
+            _make_request(wallet=WALLET_NAME),
+            signer,
+            caller=caller,
+            policy=policy,
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
+        )
+    assert exc_info.value.step == 6
+    signer.sign_fsp_eip191.assert_not_awaited()
+
+    rows = await _get_audit_rows(session)
+    denied = [r for r in rows if r["decision"] == "denied"]
+    assert len(denied) >= 1
+    await session.rollback()
+
+
+@pytest.mark.asyncio
 async def test_fsp_rate_exceeded(session: AsyncSession) -> None:
-    """Step 6: first call ok, second denied when per_hour=1."""
+    """Step 7: first call ok, second denied when per_hour=1."""
     policy = _make_policy(per_hour=1)
     caller = _make_caller()
     signer = _mock_signer()
@@ -375,7 +375,7 @@ async def test_fsp_rate_exceeded(session: AsyncSession) -> None:
             rate_repo=rate_repo,
             audit_repo=audit_repo,
         )
-    assert exc_info.value.step == 6
+    assert exc_info.value.step == 7
     signer2.sign_fsp_eip191.assert_not_awaited()
 
     rows = await _get_audit_rows(session)

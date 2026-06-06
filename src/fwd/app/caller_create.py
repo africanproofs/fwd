@@ -81,6 +81,7 @@ async def create_caller(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise CallerNameTaken(request.name) from exc
 
     await audit_repo.append(

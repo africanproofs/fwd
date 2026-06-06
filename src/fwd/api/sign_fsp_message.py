@@ -101,24 +101,19 @@ async def post_sign_fsp_message(
                 rate_repo=scope.rate_repo,
                 audit_repo=scope.audit_repo,
             )
-    except PolicyDenied as exc:
-        raise HTTPException(
-            status_code=403, detail={"error": "policy_denied", "message": str(exc)}
-        ) from exc
+    except PolicyDenied:
+        raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except WalletNotFound:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "wallet_not_found", "message": f"wallet '{body.wallet}' not found"},
-        ) from None
+        raise HTTPException(status_code=403, detail={"error": "policy_denied"}) from None
     except FspMessageMalformed as exc:
         raise HTTPException(
             status_code=422,
             detail={"error": "fsp_message_malformed", "message": str(exc)},
         ) from exc
-    except VaultUnavailableError as exc:
+    except VaultUnavailableError:
         raise HTTPException(
-            status_code=503, detail={"error": "vault_unavailable", "message": str(exc)}
-        ) from exc
+            status_code=503, detail={"error": "vault_unavailable", "message": "sealed master unavailable"}
+        ) from None
 
     return SignFspMessageResponse(
         message_hash=result.message_hash, v=result.v, r=result.r,

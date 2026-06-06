@@ -15,6 +15,10 @@ services:
       # CAP_IPC_LOCK in the effective capability set OR a sufficient
       # RLIMIT_MEMLOCK. Limits documented honestly in CLAUDE.md Core invariant #1.
       - IPC_LOCK
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # The container runs as non-root user `fwd` (uid 1000) per Dockerfile
     # `USER fwd` — capabilities granted via cap_add land in the bounding set
     # but NOT in the effective set for non-root processes. The mlockall call
@@ -63,7 +67,7 @@ services:
     restart: unless-stopped
 
   litestream:
-    image: litestream/litestream:0.3.13
+    image: litestream/litestream:0.5.11
     container_name: ${FWD_CONTAINER:-fwd}-litestream
     depends_on:
       fwd:

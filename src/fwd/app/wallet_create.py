@@ -73,6 +73,7 @@ async def create_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise WalletNameTaken(request.name) from exc
     except SealError as exc:
         logger.error("wallet.create.vault_error", error=str(exc))
@@ -83,6 +84,7 @@ async def create_wallet(
             request_json=_request_json,
             decision_reason=f"{type(exc).__name__}: {exc}",
         )
+        await audit_repo.commit()
         raise VaultUnavailableError(str(exc)) from exc
 
     await audit_repo.append(
