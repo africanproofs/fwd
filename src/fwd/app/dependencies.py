@@ -282,13 +282,15 @@ def get_admin_scope() -> AdminScopeCM:
 
 @dataclass(frozen=True)
 class ReportScope:
-    """tx_repo + nonce_repo + audit_repo on ONE shared session for the
-    client report-back endpoints (broadcast-result, receipt). No SealedMaster —
-    these paths never sign."""
+    """tx_repo + nonce_repo + audit_repo + rate_repo on ONE shared session for
+    the client report-back endpoints (broadcast-result, receipt). No SealedMaster —
+    these paths never sign. rate_repo is needed by receipt to debit
+    aggregate_value_wei on mined_success (D14: only committed value counts)."""
 
     tx_repo: TransactionRepo
     nonce_repo: NonceRepo
     audit_repo: AuditRepo
+    rate_repo: RateRepo
 
 
 class ReportScopeCM:
@@ -299,6 +301,7 @@ class ReportScopeCM:
             tx_repo=TransactionRepo(self._session),
             nonce_repo=NonceRepo(self._session),
             audit_repo=AuditRepo(self._session),
+            rate_repo=RateRepo(self._session),
         )
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]

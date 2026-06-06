@@ -349,6 +349,9 @@ async def post_receipt(
                 tx_id, "mined", confirmed_at=now, receipt_json=receipt
             )
             await scope.nonce_repo.mark_confirmed(tx.wallet, tx.chain, tx.nonce)
+            await scope.rate_repo.add_committed_value(
+                wallet=tx.wallet, value_wei=int(tx.value_wei), now=now
+            )
             await scope.audit_repo.append(
                 action="tx-receipt",
                 decision="approved",

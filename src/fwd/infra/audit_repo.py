@@ -243,8 +243,10 @@ class AuditRepo:
         The `ts` is coerced to UTC-aware before hashing so that the isoformat
         string is stable across the SQLite tz-drop round-trip.
         """
-        assert action in _VALID_ACTIONS, f"invalid action: {action!r}"
-        assert decision in _VALID_DECISIONS, f"invalid decision: {decision!r}"
+        if action not in _VALID_ACTIONS:
+            raise ValueError(f"invalid action: {action!r}")
+        if decision not in _VALID_DECISIONS:
+            raise ValueError(f"invalid decision: {decision!r}")
 
         ts = _as_utc(ts or datetime.now(UTC))
         prev_hash = await self._last_row_hash()
@@ -275,7 +277,8 @@ class AuditRepo:
                 )
             ),
         )
-        assert cursor_result.lastrowid is not None, "INSERT did not return a lastrowid"
+        if cursor_result.lastrowid is None:
+            raise RuntimeError("INSERT did not return a lastrowid")
         seq = cursor_result.lastrowid
 
         return AuditRow(

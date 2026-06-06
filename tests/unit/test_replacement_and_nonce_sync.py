@@ -44,6 +44,8 @@ from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
 from fwd.infra.caller_repo import Caller
 from fwd.infra.nonce_repo import NonceRepo, nonces
 from fwd.infra.nonce_repo import metadata as nonce_metadata
+from fwd.infra.rate_repo import RateRepo
+from fwd.infra.rate_repo import rate_metadata
 from fwd.infra.transaction_repo import (
     TransactionAttemptRepo,
     TransactionRepo,
@@ -108,6 +110,7 @@ async def db_session(tmp_path):  # type: ignore[no-untyped-def]
         await conn.run_sync(transaction_metadata.create_all)
         await conn.run_sync(nonce_metadata.create_all)
         await conn.run_sync(audit_metadata.create_all)
+        await conn.run_sync(rate_metadata.create_all)
     async with AsyncSession(engine) as session:
         yield session
     await engine.dispose()
@@ -270,6 +273,7 @@ class _RealReportScopeCM:
             tx_repo=TransactionRepo(self._session),
             nonce_repo=NonceRepo(self._session),
             audit_repo=AuditRepo(self._session),
+            rate_repo=RateRepo(self._session),
         )
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:

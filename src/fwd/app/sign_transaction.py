@@ -406,9 +406,6 @@ async def sign_transaction(
             hash=tx_hash,
             created_at=now,
         )
-    await rate_repo.add_committed_value(
-        wallet=wallet.name, value_wei=int(request.value_wei), now=now
-    )
     await _audit(
         audit_repo,
         request,

@@ -379,14 +379,14 @@ async def test_verify_windowed_upstream_break_subrange_clean(session: AsyncSessi
 @pytest.mark.asyncio
 async def test_append_rejects_unknown_action(session: AsyncSession) -> None:
     repo = AuditRepo(session)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         await repo.append(action="not-a-real-action", decision="approved")
 
 
 @pytest.mark.asyncio
 async def test_append_rejects_unknown_decision(session: AsyncSession) -> None:
     repo = AuditRepo(session)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         await repo.append(action="policy-load", decision="maybe")
 
 

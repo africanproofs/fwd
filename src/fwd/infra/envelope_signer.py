@@ -57,7 +57,6 @@ class EnvelopeSigner:
 
     async def address(self, wallet_name: str) -> str:
         wallet = await self._repo.get_by_name(wallet_name)
-        assert wallet is not None  # raises WalletNotFoundError otherwise
         return wallet.address
 
     async def sign_transaction(
@@ -78,7 +77,6 @@ class EnvelopeSigner:
         overwrite. Phase 10 with ctypes is the canonical fix. v1 accepts.
         """
         wallet = await self._repo.get_by_name(wallet_name)
-        assert wallet is not None  # raises WalletNotFoundError when missing_ok=False
         plaintext_bytes = await self._vault.decrypt(wallet.privkey_ciphertext)
         privkey_buf = bytearray(plaintext_bytes)
         try:
@@ -106,9 +104,9 @@ class EnvelopeSigner:
         privkey, zeroized in finally. Same Core invariant #16 contract as
         sign_transaction.
         """
-        assert len(message_hash_32) == 32, "message_hash_32 must be exactly 32 bytes"
+        if len(message_hash_32) != 32:
+            raise ValueError("message_hash_32 must be exactly 32 bytes")
         wallet = await self._repo.get_by_name(wallet_name)
-        assert wallet is not None  # raises WalletNotFoundError when missing_ok=False
         plaintext_bytes = await self._vault.decrypt(wallet.privkey_ciphertext)
         privkey_buf = bytearray(plaintext_bytes)
         try:

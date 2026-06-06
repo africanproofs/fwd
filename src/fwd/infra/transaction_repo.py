@@ -135,7 +135,8 @@ class TransactionRepo:
         idempotency_key: str | None = None,
         reserved_at: datetime | None = None,
     ) -> Transaction:
-        assert status in _VALID_STATUSES, f"invalid status: {status}"
+        if status not in _VALID_STATUSES:
+            raise ValueError(f"invalid status: {status}")
         existing = await self.get_by_id(tx_id, missing_ok=True)
         if existing is not None:
             raise TransactionExistsError(tx_id)
@@ -298,7 +299,8 @@ class TransactionRepo:
 
         Returns all transactions with the given status, ordered by created_at.
         """
-        assert status in _VALID_STATUSES, f"invalid status: {status}"
+        if status not in _VALID_STATUSES:
+            raise ValueError(f"invalid status: {status}")
         result = await self._session.execute(
             select(transactions)
             .where(transactions.c.status == status)
@@ -391,7 +393,8 @@ class TransactionRepo:
         signed_raw: str | None = None,
         submitted_at: datetime | None = None,
     ) -> None:
-        assert status in _VALID_STATUSES, f"invalid status: {status}"
+        if status not in _VALID_STATUSES:
+            raise ValueError(f"invalid status: {status}")
         values: dict[str, object] = {"status": status}
         if confirmed_at is not None:
             values["confirmed_at"] = confirmed_at
