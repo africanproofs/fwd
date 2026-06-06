@@ -275,8 +275,13 @@ fi
 
 # ---- Step 1: fwd health ----
 step "Checking fwd" "fwd must be running before onboarding can load policy or store keys."
-clifwd health >/dev/null 2>&1 || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
+_hj="$(clifwd health 2>/dev/null)" || die "fwd not healthy (is container '$FWD_CONTAINER' up? try: sudo fwd start)"
 note "healthy"
+_sm="$(printf '%s' "$_hj" | python3 -c \
+  'import sys,json; d=json.load(sys.stdin); print(d.get("sealed_master",""))' 2>/dev/null || true)"
+if [ "$_sm" = "error" ] || { [ -n "$_sm" ] && [ "$_sm" != "ok" ]; }; then
+  die "sealed_master not ready (sealed_master='$_sm') -- master.key may have been regenerated; restore backup or regenerate all wallets. See RESTORE-RUNBOOK.md."
+fi
 
 # ---- Step 2: on-chain preflight ----
 # Reads registered identity (EntityManager) + claim setup state for --identity.
@@ -338,10 +343,10 @@ else
   CHANGED=1
   if [ -f "$POLICY" ]; then
     BAK="$POLICY.bak-pre-onboard-$(date +%Y%m%d-%H%M%S)"
-    cp "$POLICY" "$BAK"
+    cp "$POLICY" "$BAK" || die "failed to backup policy to $BAK"
     note "backed up the existing policy -> $BAK"
   fi
-  cat "$TMP" > "$POLICY"
+  cat "$TMP" > "$POLICY" || die "failed to write $POLICY -- check disk space and permissions"
   note "wrote $POLICY"
 fi
 rm -f "$TMP"; trap - EXIT INT TERM
@@ -381,10 +386,16 @@ note "loaded (fwd recreated, healthy)"; POLICY_ST=ok
 
 # ============================ helpers (provisioning) ============================
 wallet_addr() {  # name -> stored address (what fwd derived) or a placeholder
-  _a="$(clifwd wallets list 2>/dev/null | awk -v n="$1" '$1==n {print $2}')"
+  _wa_out="$(clifwd wallets list 2>/dev/null)"; _wa_rc=$?
+  [ "$_wa_rc" -ne 0 ] && { printf '<fwd-unreachable>'; return 0; }
+  _a="$(printf '%s' "$_wa_out" | awk -v n="$1" '$1==n {print $2}')"
   [ -n "$_a" ] && printf '%s' "$_a" || printf '<not present>'
 }
-wallet_exists() { clifwd wallets list 2>/dev/null | awk '{print $1}' | grep -qx "$1"; }
+wallet_exists() {
+  _we_out="$(clifwd wallets list 2>&1)"; _we_rc=$?
+  [ "$_we_rc" -ne 0 ] && { warn "wallet_exists: fwd unreachable -- cannot verify '$1' (is the container up?)"; return 1; }
+  printf '%s' "$_we_out" | awk '{print $1}' | grep -qx "$1"
+}
 
 wallet_create() {  # name policy role — generate fresh in-vault; echo the derived address + contract role
   role="${3:-wallet}"
@@ -403,7 +414,7 @@ import_pasted() {  # name policy role [expected_addr]
   _ia_expected="${4:-}"
   if wallet_exists "$1"; then note "already present: $1 @ $(wallet_addr "$1") — $role"; return 0; fi
   if [ "$SKIP_FSP_IMPORT" -eq 1 ]; then
-    warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
+    warn "deferred (--skip-fsp-import) $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; ONBOARD_INCOMPLETE=1; return 0
   fi
   if [ "$TTY_OK" -ne 1 ]; then
     warn "no terminal to paste $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
@@ -414,7 +425,7 @@ import_pasted() {  # name policy role [expected_addr]
     _attempt=$((_attempt + 1))
     ask_secret "  paste the private key for $1 — $role (hex, hidden) — or press Enter to skip: "
     if [ -z "$SECRET" ]; then
-      warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; return 0
+      warn "skipped $1 — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; ONBOARD_INCOMPLETE=1; return 0
     fi
     # normalize (strip whitespace + 0x) and validate on the host BEFORE staging:
     # a raw secp256k1 key is exactly 64 hex chars (32 bytes).
@@ -441,7 +452,7 @@ import_pasted() {  # name policy role [expected_addr]
       *) warn "import failed: $out. Try again, or Enter to skip." ;;
     esac
   done
-  warn "gave up on $1 after $_attempt attempts — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"
+  warn "gave up on $1 after $_attempt attempts — import later: clifwd wallets import --name $1 --policy $2 --privkey-file <file>"; ONBOARD_INCOMPLETE=1
 }
 
 caller_create() {  # name policy
@@ -590,6 +601,10 @@ caller_ensure() {  # name policy outvar envfile envkey
     3) _ce_have="$(getval "$4" "$5" "")"
        if [ -n "$_ce_have" ]; then
          token_ok "$_ce_have" || die "token for $1 in $(basename "$4") is malformed/tampered (not fwd_live_<43>) — refusing to use it; fix or remove that line"
+         _ce_prefix="$(printf '%s' "$_ce_have" | cut -c1-12)"
+         if ! clifwd callers list 2>/dev/null | grep -qF "$_ce_prefix"; then
+           warn "CM-02: token for $1 in $(basename "$4") (prefix ${_ce_prefix}...) not found in fwd -- may be revoked; re-run with --rotate-missing-callers if claims fail"
+         fi
          eval "$3=\$_ce_have"; note "caller $1 exists; preserving the token already in $(basename "$4")"
        elif [ "$ROTATE_MISSING" -eq 1 ]; then
          note "caller $1 exists but its one-time token is lost and $(basename "$4") has none — rotating"
@@ -634,7 +649,7 @@ env_write() {  # net claim_tok sign_tok submit_tok
     done
   } > "$_ew_tmp"
   if grep -qi 'PRIVATE_KEY' "$_ew_tmp"; then rm -f "$_ew_tmp"; die "refusing to write $_ew_dst — it contains a *PRIVATE_KEY* name"; fi
-  chmod 0600 "$_ew_tmp"; mv -f "$_ew_tmp" "$_ew_dst"
+  chmod 0600 "$_ew_tmp" || die "chmod failed: $_ew_tmp"; mv -f "$_ew_tmp" "$_ew_dst" || die "mv failed: $_ew_tmp -> $_ew_dst"
   note "clif env written: $_ew_dst (0600, keyless)"
 }
 
@@ -713,6 +728,15 @@ else
   warn "no clif layer present — skipped writing clif .env files (install with --with-clif to enable)"
 fi
 
+# Post-provisioning consistency gate
+set +e; _pv_rc=0; clifwd policy validate >/dev/null 2>&1 || _pv_rc=$?; set -e
+if [ "$_pv_rc" -eq 0 ]; then
+  note "policy consistent (wallets and callers verified)"
+else
+  warn "policy validate reported inconsistencies -- run: clifwd policy validate"
+  [ -n "$BAK" ] && warn "to restore: cat '$BAK' > '$POLICY' && sudo fwd restart"
+fi
+
 # ---- summary cockpit (both modes — the operator's current-state view) ----
 printf '\n\033[1monboarding summary\033[0m\n'
 printf '%-10s %-7s %-8s %-8s %-7s %s\n' network policy wallets callers nonce 'clif env'
@@ -778,8 +802,9 @@ printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
-  printf '\n\033[1;31m⚠ onboard finished WITH UNRESOLVED NONCE DRIFT\033[0m — fwd nonce is AHEAD of chain for:%s\n' "$UNRESOLVED_NONCES"
-  printf '   Those wallets were left as-is (no rewind). Resolve before use — investigate in-flight txs; rewind via `clifwd nonce init --force` ONLY if safe. This is NOT a completed onboard.\n'
+  [ -n "$UNRESOLVED_NONCES" ] && printf '\n\033[1;31m⚠ nonce drift\033[0m — fwd nonce AHEAD of chain for:%s\n   Investigate in-flight txs; rewind via clifwd nonce init --force ONLY if safe.\n' "$UNRESOLVED_NONCES"
+  printf '\n\033[1;31m⚠ onboard INCOMPLETE\033[0m — one or more wallets were deferred or failed; re-run to import:\n'
+  printf '   fwd onboard rewards fsp --import-existing [--networks <net>]  (existing wallets are skipped)\n'
   exit 1
 else
   printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'

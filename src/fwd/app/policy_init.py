@@ -84,11 +84,12 @@ def _merge_policies(base: dict[str, Any], additions: dict[str, Any]) -> dict[str
     merged["version"] = additions.get("version", merged.get("version", 1))
     for section in _MERGE_DICT_SECTIONS:
         add = additions.get(section)
-        if not add:
+        if not add or not isinstance(add, dict):
             continue
         cur = merged.get(section)
         merged[section] = {**(cur if isinstance(cur, dict) else {}), **add}
-    ss = [w for w in merged.get("fsp_self_submit", []) if isinstance(w, str)]
+    _existing_ss = merged.get("fsp_self_submit", [])
+    ss = [w for w in (_existing_ss if isinstance(_existing_ss, list) else []) if isinstance(w, str)]
     for w in additions.get("fsp_self_submit", []):
         if w not in ss:
             ss.append(w)
