@@ -84,29 +84,32 @@ no-ops silently if already claimed). Do not promote Flare until the Songbird can
 
 ## 6. Enable and start automation
 
-```sh
-sudo fwd start songbird          # claim daemon only
-```
-
-For FSP automation, first set this in `/opt/fwd/clif/.env.songbird` (it is `false` by default — clif
-`fsp auto` deliberately refuses and exits when disabled):
+One **epoch-anchored daemon per network** now sequences the whole lifecycle per reward epoch
+(optional uptime sign → wait → reward-publication poll → reward sign → finalization poll →
+claim that epoch → idle). It SIGNS, so it is hard-off by default. Set this in
+`/opt/fwd/clif/.env.songbird` (clif `epoch run` refuses + exits when it is false):
 
 ```
 FSP_AUTO_ENABLED=true
+# optional — also sign uptime votes (off by default):
+# UPTIME_AUTO_ENABLED=true
+# optional cadence tuning (defaults shown):
+# EPOCH_REWARD_INITIAL_DELAY_SEC=3600   # wait 1h after epoch end before checking for publication
+# EPOCH_POLL_INTERVAL_SEC=1800          # 30m active-window poll
 ```
 
-Then start the FSP daemon:
+Then start the daemon:
 
 ```sh
-sudo fwd start songbird fsp       # FSP auto-signer only
+sudo fwd start songbird           # the epoch sign→claim daemon (clif-epoch-songbird)
 ```
 
 `fwd start <net>` reports what it *requested* — `up -d` returning 0 does not prove a daemon stayed
-up; confirm with `fwd status` / `fwd logs <svc>`. After the canary is clean, repeat for Flare:
+up; confirm with `fwd status` / `fwd logs clif-epoch-songbird` / `clif epoch status`. After the
+Songbird canary is clean, repeat for Flare:
 
 ```sh
 sudo fwd start flare
-sudo fwd start flare fsp
 ```
 
 ## 7. Final checks

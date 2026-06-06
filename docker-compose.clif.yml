@@ -4,16 +4,16 @@
 # and the `fwd` service name are shared):
 #
 #   docker compose -f docker-compose.yml -f docker-compose.clif.yml up -d            # fwd only
-#   docker compose -f … --profile songbird up -d                                     # + songbird CLAIM daemon
-#   docker compose -f … --profile songbird --profile songbird-fsp up -d              # + FSP auto-signer (opt-in)
+#   docker compose -f … --profile songbird up -d                                     # + songbird epoch daemon
 #
 # The host `fwd` wrapper (install/fwd) includes this file automatically when it is
-# present. `up` / `fwd start` bring up fwd only; the clif daemons are PER-NETWORK:
-# the CLAIM daemon is `profiles: ["<net>"]` (`fwd start <net>` / `--profile <net>`);
-# the FSP auto-signer is `profiles: ["<net>-fsp"]` (opt-in: `fwd start <net> fsp`, only
-# meaningful with FSP_AUTO_ENABLED=true — clif refuses + exits otherwise). The one-shot
-# `clif` (profile `cli`) backs the `clif` host wrapper. No single shared clif daemon;
-# each network reads its own `.env.<net>`.
+# present. `up` / `fwd start` bring up fwd only; the clif daemon is PER-NETWORK:
+# ONE epoch-anchored sign→claim daemon per network (`epoch run`),
+# `profiles: ["<net>"]` (`fwd start <net>` / `--profile <net>`). It replaces the
+# former per-network CLAIM + FSP pollers with a single daemon that sequences
+# uptime(optional)→reward-sign→claim per reward epoch. The one-shot `clif`
+# (profile `cli`) backs the `clif` host wrapper. Each network reads its own
+# `.env.<net>`.
 #
 # Build-from-source: clif is a SEPARATE repo. The installer (build-from-source)
 # places clif's pinned source at $CLIF_SRC (default ./clif, relative to this
@@ -21,9 +21,10 @@
 # sign, then broadcasts itself (dual-homed: `fwd-callers` to reach fwd:8080,
 # `egress` for its own RPC/broadcast). fwd is NOT on `egress` (zero-egress).
 #
-# Per-provider config lives in clif's gitignored .env (NETWORK, the fwd caller
-# tokens, wallet names, recipient) — never committed. The FSP daemon stays
-# hard-off unless FSP_AUTO_ENABLED=true in that .env (clif enforces).
+# Per-provider config lives in clif's gitignored .env.<net> (NETWORK, the fwd
+# caller tokens, wallet names, recipient) — never committed. The daemon SIGNS, so
+# it stays hard-off unless FSP_AUTO_ENABLED=true in that .env (clif enforces); the
+# UPTIME phase is additionally gated by UPTIME_AUTO_ENABLED (default false).
 
 services:
   clif:
@@ -39,109 +40,55 @@ services:
     #   docker compose -f docker-compose.yml -f docker-compose.clif.yml \
     #     --profile cli run --rm clif chain nonce --network songbird --address 0x.. --json
 
-  clif-auto-coston2:
+  clif-epoch-coston2:
     build:
       context: ${CLIF_SRC:-./clif}
     image: clif:dev
-    container_name: clif-auto-coston2
-    command: ["auto"]
+    container_name: clif-epoch-coston2
+    command: ["epoch", "run"]
     env_file:
       - ${CLIF_SRC:-./clif}/.env.coston2
     networks: [fwd-callers, egress]
     profiles: ["coston2"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "clif", "status"]
+      test: ["CMD", "clif", "epoch", "status"]
       interval: 300s
       timeout: 15s
       retries: 3
       start_period: 1200s
 
-  clif-fsp-auto-coston2:
+  clif-epoch-songbird:
     build:
       context: ${CLIF_SRC:-./clif}
     image: clif:dev
-    container_name: clif-fsp-auto-coston2
-    command: ["fsp", "auto"]
-    env_file:
-      - ${CLIF_SRC:-./clif}/.env.coston2
-    networks: [fwd-callers, egress]
-    profiles: ["coston2-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "clif", "fsp", "status"]
-      interval: 300s
-      timeout: 15s
-      retries: 3
-      start_period: 1200s
-
-  clif-auto-songbird:
-    build:
-      context: ${CLIF_SRC:-./clif}
-    image: clif:dev
-    container_name: clif-auto-songbird
-    command: ["auto"]
+    container_name: clif-epoch-songbird
+    command: ["epoch", "run"]
     env_file:
       - ${CLIF_SRC:-./clif}/.env.songbird
     networks: [fwd-callers, egress]
     profiles: ["songbird"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "clif", "status"]
+      test: ["CMD", "clif", "epoch", "status"]
       interval: 300s
       timeout: 15s
       retries: 3
       start_period: 1200s
 
-  clif-fsp-auto-songbird:
+  clif-epoch-flare:
     build:
       context: ${CLIF_SRC:-./clif}
     image: clif:dev
-    container_name: clif-fsp-auto-songbird
-    command: ["fsp", "auto"]
-    env_file:
-      - ${CLIF_SRC:-./clif}/.env.songbird
-    networks: [fwd-callers, egress]
-    profiles: ["songbird-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "clif", "fsp", "status"]
-      interval: 300s
-      timeout: 15s
-      retries: 3
-      start_period: 1200s
-
-  clif-auto-flare:
-    build:
-      context: ${CLIF_SRC:-./clif}
-    image: clif:dev
-    container_name: clif-auto-flare
-    command: ["auto"]
+    container_name: clif-epoch-flare
+    command: ["epoch", "run"]
     env_file:
       - ${CLIF_SRC:-./clif}/.env.flare
     networks: [fwd-callers, egress]
     profiles: ["flare"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "clif", "status"]
-      interval: 300s
-      timeout: 15s
-      retries: 3
-      start_period: 1200s
-
-  clif-fsp-auto-flare:
-    build:
-      context: ${CLIF_SRC:-./clif}
-    image: clif:dev
-    container_name: clif-fsp-auto-flare
-    command: ["fsp", "auto"]
-    env_file:
-      - ${CLIF_SRC:-./clif}/.env.flare
-    networks: [fwd-callers, egress]
-    profiles: ["flare-fsp"]   # opt-in (FSP auto-signer is hard-off unless FSP_AUTO_ENABLED=true)
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "clif", "fsp", "status"]
+      test: ["CMD", "clif", "epoch", "status"]
       interval: 300s
       timeout: 15s
       retries: 3

@@ -142,6 +142,8 @@ Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a
 
 - **v1.1.0a87** — fix the CM-02 caller-token check (false positive since a82): it sliced `cut -c1-12` of the full token (`fwd_live_` + 3 chars) and grepped `callers list`, but fwd's stored `api_key_prefix` is the first 8 chars of the *random* portion (chars 10–17, no `fwd_live_`) — so the grep could never hit and CM-02 warned for every valid caller. Now `cut -c10-17` + `grep -qF --`; genuine rotated/revoked tokens still warn. — `1.1.0a87-cm02-prefix-false-positive-fix.md`
 
+- **v1.1.0a88** — install/compose wiring for clif's epoch-anchored sign→claim daemon (clif 0.5.16, D17): the 6 per-network `clif-auto-*`+`clif-fsp-auto-*` services collapse to one `clif-epoch-<net>` (`epoch run`, healthcheck `clif epoch status`); `fwd start <net>` launches it; onboard writes `UPTIME_AUTO_ENABLED`/`EPOCH_REWARD_INITIAL_DELAY_SEC`/`EPOCH_POLL_INTERVAL_SEC`; production-setup §6 rewritten. fwd daemon unchanged (still the passive zero-egress signer). — `1.1.0a88-clif-epoch-daemon-wiring.md`
+
 ## Quarantined operator-procedure snapshots
 
 Point-in-time operator procedures that no longer match the current code, kept here as history (not current-state runbooks — there is no `docs/runbooks/` directory):

@@ -663,9 +663,13 @@ env_write() {  # net claim_tok sign_tok submit_tok
       printf 'FSP_SUBMIT_CALLER_TOKEN=%s\n' "$_ew_sub"
       printf 'FSP_SIGNING_WALLET_NAME=%s\n' "fsp-signing-$_ew_net"
       printf 'FSP_SENDER_WALLET_NAME=%s\n' "$(sender_name "$_ew_net")"
+      printf 'UPTIME_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" UPTIME_AUTO_ENABLED false)"
     fi
     printf 'CLIF_STATE_DIR=.clif-state/%s\n' "$_ew_net"
     printf 'FSP_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" FSP_AUTO_ENABLED false)"
+    # epoch sign→claim daemon cadence (preserved across re-runs if the operator tuned them)
+    printf 'EPOCH_REWARD_INITIAL_DELAY_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_REWARD_INITIAL_DELAY_SEC 3600)"
+    printf 'EPOCH_POLL_INTERVAL_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_POLL_INTERVAL_SEC 1800)"
     for _ew_rv in FLARE_RPC SONGBIRD_RPC COSTON2_RPC; do
       _ew_ov="$(getval "$_ew_dst" "$_ew_rv" "")"; [ -n "$_ew_ov" ] && printf '%s=%s\n' "$_ew_rv" "$_ew_ov"
     done
@@ -821,6 +825,9 @@ for net in $NETLIST; do
 done
 printf '  clifwd audit verify\n'
 printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event on-chain and run 'clifwd audit verify'.\n"
+printf '\nTo enable unattended automation (AFTER you rehearse): set FSP_AUTO_ENABLED=true in %s/.env.<net>\n' "$CLIF_SRC"
+printf '   (and UPTIME_AUTO_ENABLED=true to also sign uptime), then: sudo fwd start <net>\n'
+printf '   → one epoch-anchored daemon per network sequences sign→claim each reward epoch (clif epoch run).\n'
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
