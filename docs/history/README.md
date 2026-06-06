@@ -140,6 +140,8 @@ Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a
 
 - **v1.1.0a86** — re-sync `poetry.lock` to the a84 custody pins: a84 reformatted the pins in `pyproject.toml` (caret→explicit range, same resolution) without regenerating the lock, so Poetry's content-hash mismatched and the Dockerfile's `poetry install --only main --no-root` refused — `curl|bash` build-from-source failed while 783 unit tests (already-installed env) passed (Core #14 boundary). `poetry lock --no-update` (content-hash-only diff, no transitive bumps); verified by a real `docker compose build fwd`. — `1.1.0a86-poetry-lock-resync.md`
 
+- **v1.1.0a87** — fix the CM-02 caller-token check (false positive since a82): it sliced `cut -c1-12` of the full token (`fwd_live_` + 3 chars) and grepped `callers list`, but fwd's stored `api_key_prefix` is the first 8 chars of the *random* portion (chars 10–17, no `fwd_live_`) — so the grep could never hit and CM-02 warned for every valid caller. Now `cut -c10-17` + `grep -qF --`; genuine rotated/revoked tokens still warn. — `1.1.0a87-cm02-prefix-false-positive-fix.md`
+
 ## Quarantined operator-procedure snapshots
 
 Point-in-time operator procedures that no longer match the current code, kept here as history (not current-state runbooks — there is no `docs/runbooks/` directory):

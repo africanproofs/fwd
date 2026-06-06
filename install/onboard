@@ -620,9 +620,12 @@ caller_ensure() {  # name policy outvar envfile envkey
     3) _ce_have="$(getval "$4" "$5" "")"
        if [ -n "$_ce_have" ]; then
          token_ok "$_ce_have" || die "token for $1 in $(basename "$4") is malformed/tampered (not fwd_live_<43>) — refusing to use it; fix or remove that line"
-         _ce_prefix="$(printf '%s' "$_ce_have" | cut -c1-12)"
-         if ! clifwd callers list 2>/dev/null | grep -qF "$_ce_prefix"; then
-           warn "CM-02: token for $1 in $(basename "$4") (prefix ${_ce_prefix}...) not found in fwd -- may be revoked; re-run with --rotate-missing-callers if claims fail"
+         # fwd's api_key_prefix (shown by `callers list`) is the first 8 chars of the
+         # RANDOM portion — chars 10-17 of the token; the constant "fwd_live_" (9 chars)
+         # is NOT part of it. Match that exact slice, else the grep can never hit.
+         _ce_prefix="$(printf '%s' "$_ce_have" | cut -c10-17)"
+         if ! clifwd callers list 2>/dev/null | grep -qF -- "$_ce_prefix"; then
+           warn "CM-02: token for $1 in $(basename "$4") (prefix ${_ce_prefix}…) not found in fwd -- may be revoked; re-run with --rotate-missing-callers if claims fail"
          fi
          eval "$3=\$_ce_have"; note "caller $1 exists; preserving the token already in $(basename "$4")"
        elif [ "$ROTATE_MISSING" -eq 1 ]; then
