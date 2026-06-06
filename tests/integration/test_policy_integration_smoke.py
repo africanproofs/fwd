@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 
 import pytest  # noqa: TC002
+import secrets
 
 _ABIS_DIR = Path(__file__).resolve().parents[2] / "config" / "abis"
 
@@ -66,8 +67,14 @@ def test_lifespan_policy_load_writes_approved_audit_row(
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(_POLICY_YAML)
 
+    # Write a valid 0600 master key file so /healthz sealed_master probe passes.
+    key_file = tmp_path / "master.key"
+    key_file.write_bytes(secrets.token_bytes(32))
+    os.chmod(key_file, 0o600)
+
     # Set env vars so the lifespan elif-branch fires.
     monkeypatch.setenv("FWD_DISABLE_MLOCK", "1")
+    monkeypatch.setenv("FWD_MASTER_KEY_FILE", str(key_file))
     monkeypatch.setenv("FWD_POLICY_PATH", str(policy_file))
     monkeypatch.setenv("FWD_ABIS_DIR", str(_ABIS_DIR))
     monkeypatch.setenv("FWD_WATCHER_DISABLED", "1")

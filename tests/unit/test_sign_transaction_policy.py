@@ -111,7 +111,7 @@ def _make_policy(
     *,
     methods: dict[str, MethodRule] | None = None,
     wallet_allowlist: list[str] | None = None,
-    per_hour: int | None = None,
+    per_hour: int | None = 100,
     wallet_constraint: WalletConstraint | None = None,
     contract_addr: str = ERC20_CONTRACT,
     caller_name: str = CALLER_NAME,

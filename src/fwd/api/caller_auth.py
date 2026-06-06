@@ -12,6 +12,7 @@ dependency without renaming.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -21,6 +22,8 @@ from fwd.app.dependencies import CallerRepoCM, get_caller_repo
 
 if TYPE_CHECKING:
     from fwd.app.dependencies import Caller
+
+logger = logging.getLogger(__name__)
 
 
 async def require_caller(
@@ -38,6 +41,7 @@ async def require_caller(
     are not in the callers table and would never match.
     """
     if authorization is None or not authorization.lower().startswith("bearer "):
+        logger.warning("auth.failed key_prefix=%s", "<missing>")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "unauthorized", "message": "missing bearer token"},
@@ -48,6 +52,9 @@ async def require_caller(
         caller = await resolve_caller(presented, repo)
 
     if caller is None:
+        # Log only the first 8 chars of the presented key (already masked).
+        key_prefix = presented[:8] if len(presented) >= 8 else presented
+        logger.warning("auth.failed key_prefix=%s", key_prefix)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"error": "unauthorized", "message": "invalid bearer token"},

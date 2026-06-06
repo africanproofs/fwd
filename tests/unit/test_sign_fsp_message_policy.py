@@ -85,7 +85,7 @@ def _make_policy(
     *,
     message_types: list[str] | None = None,
     wallet_allowlist: list[str] | None = None,
-    per_hour: int | None = None,
+    per_hour: int | None = 100,
     fsp_path: str = POLICY_PATH,
     caller_name: str = CALLER_NAME,
     also_in_evm_permissions: bool = False,

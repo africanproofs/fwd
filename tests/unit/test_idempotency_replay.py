@@ -119,6 +119,7 @@ def _make_policy() -> Policy:
                         }
                     },
                     "wallet_allowlist": [WALLET_NAME],
+                    "rate": {"per_hour": 100, "per_day": 1000},
                 }
             },
             "wallet_constraints": {WC_PATH: {}},
@@ -402,6 +403,7 @@ async def test_different_caller_same_key_is_not_replay(
                         }
                     },
                     "wallet_allowlist": [WALLET_NAME],
+                    "rate": {"per_hour": 100, "per_day": 1000},
                 }
             },
             "wallet_constraints": {WC_PATH: {}},

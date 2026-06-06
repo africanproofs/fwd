@@ -84,7 +84,7 @@ def _make_wallet(name: str = WALLET_NAME, policy_path: str = "wc/main") -> Walle
 
 def _make_policy(
     *,
-    per_hour: int | None = None,
+    per_hour: int | None = 100,
     max_value_wei: str = "1000000000000000000",
 ) -> Policy:
     methods: dict[str, object] = {

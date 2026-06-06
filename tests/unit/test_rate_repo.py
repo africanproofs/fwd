@@ -169,7 +169,8 @@ async def test_caller_all_or_nothing_per_hour_and_per_day(session: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_caller_rate_none_returns_true_no_db_access(session: AsyncSession) -> None:
+async def test_caller_rate_none_returns_false_fail_closed(session: AsyncSession) -> None:
+    # fail-closed: unconfigured rate (None) must deny, not allow.
     repo = RateRepo(session)
     ok = await repo.check_and_increment_caller(
         caller="c",
@@ -179,7 +180,7 @@ async def test_caller_rate_none_returns_true_no_db_access(session: AsyncSession)
         rate=None,
         now=datetime(2026, 5, 16, 12, 0, 0, 0, tzinfo=UTC),
     )
-    assert ok is True
+    assert ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +315,8 @@ async def test_wallet_rate_incremented_not_aggregate(session: AsyncSession) -> N
 
 
 @pytest.mark.asyncio
-async def test_wallet_constraint_none_returns_true(session: AsyncSession) -> None:
+async def test_wallet_constraint_none_returns_false_fail_closed(session: AsyncSession) -> None:
+    # fail-closed: unconfigured constraint (None) must deny, not allow.
     repo = RateRepo(session)
     ok = await repo.check_and_increment_wallet(
         wallet="w",
@@ -322,7 +324,7 @@ async def test_wallet_constraint_none_returns_true(session: AsyncSession) -> Non
         value_wei=999999,
         now=datetime(2026, 5, 16, 12, 0, 0, 0, tzinfo=UTC),
     )
-    assert ok is True
+    assert ok is False
 
 
 # ---------------------------------------------------------------------------

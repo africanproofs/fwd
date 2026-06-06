@@ -1,11 +1,14 @@
 """GET /healthz — liveness + sealed-master readiness.
 
 Reports:
-  master: "ok" | "unavailable"   (the sealed master key file passes the
-          same gate SealedMaster.__init__ enforces: regular file, mode
-          0600, owned by this uid, exactly 32 bytes — a pure stat probe;
-          no key material is loaded into the health path)
-  fwd:    "ok"                   (the service is responding)
+  master:        "ok" | "unavailable"  (stat probe — no key material loaded)
+  sealed_master: "ok" | "unavailable"  (liveness: SealedMaster() instantiation)
+  fwd:           "ok"                  (the service is responding)
+
+Liveness probe (sealed_master): instantiates SealedMaster() on every /healthz
+request to verify the sealed master is loadable (correct path, mode, size,
+ownership, readability). Returns 503 with status=degraded if it fails.
+This is a liveness probe — not cached, called on every request.
 
 v1.0.0a1: the prior `vault` field (Vault /sys/health probe) is retired
 with the Vault backend — replaced by `master`.
@@ -19,8 +22,10 @@ import stat
 from typing import Literal
 
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from fwd.app.health import sealed_master_liveness
 from fwd.settings import get_settings
 
 router = APIRouter()
@@ -28,6 +33,7 @@ router = APIRouter()
 
 class HealthResponse(BaseModel):
     master: Literal["ok", "unavailable"]
+    sealed_master: Literal["ok", "unavailable"]
     fwd: Literal["ok"]
 
 
@@ -53,9 +59,21 @@ def _master_status() -> Literal["ok", "unavailable"]:
     return "ok"
 
 
-@router.get("/healthz", response_model=HealthResponse)
-async def healthz() -> HealthResponse:
-    return HealthResponse(
-        master=_master_status(),
-        fwd="ok",
-    )
+@router.get("/healthz")
+async def healthz() -> JSONResponse:
+    sealed_master_status = sealed_master_liveness()
+    master_status = _master_status()
+
+    body = {
+        "master": master_status,
+        "sealed_master": sealed_master_status,
+        "fwd": "ok",
+    }
+
+    if sealed_master_status == "unavailable":
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "detail": "sealed master unavailable"},
+        )
+
+    return JSONResponse(status_code=200, content=body)

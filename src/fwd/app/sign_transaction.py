@@ -245,6 +245,13 @@ async def sign_transaction(
             now=now,
         )
     except PolicyDenied as exc:
+        logger.warning(
+            "sign.denied",
+            caller=request.caller,
+            wallet=request.wallet,
+            step=exc.step,
+            reason=exc.reason,
+        )
         await _audit(
             audit_repo,
             request,

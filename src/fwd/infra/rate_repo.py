@@ -29,6 +29,8 @@ rate_metadata = MetaData()
 rate_buckets = Table(
     "rate_buckets",
     rate_metadata,
+    # Bucket key includes caller — per-caller-per-wallet rate isolation.
+    # One caller cannot exhaust another caller's rate budget for the same wallet.
     Column("caller", String, nullable=False, primary_key=True),
     Column("wallet", String, nullable=False, primary_key=True),
     Column("contract", String, nullable=False, primary_key=True),
@@ -119,10 +121,13 @@ class RateRepo:
         window is at or over its cap (nothing is incremented on False —
         all-or-nothing semantics per D14).
 
-        If *rate* is None, no limit applies: return True without DB access.
+        # fail-closed: unconfigured rate = deny
+        If *rate* is None, no rate cap is configured for this caller+wallet
+        combination — deny by default to prevent unlimited access.
+        Operators must explicitly set a rate in the policy to permit signing.
         """
         if rate is None:
-            return True
+            return False
 
         windows: list[tuple[str, int]] = []
         if rate.per_hour is not None:
@@ -232,10 +237,12 @@ class RateRepo:
     ) -> bool:
         """FSP analogue of check_and_increment_caller (fsp_rate_buckets).
 
-        All-or-nothing across windows; rate is None -> True without DB.
+        All-or-nothing across windows.
+        # fail-closed: unconfigured rate = deny
+        rate is None -> False (no explicit rate cap = deny).
         """
         if rate is None:
-            return True
+            return False
 
         windows: list[tuple[str, int]] = []
         if rate.per_hour is not None:
@@ -346,8 +353,9 @@ class RateRepo:
         Returns True if allowed; False if any limit is exceeded (nothing
         incremented on False).
         """
+        # fail-closed: unconfigured constraint = deny
         if constraint is None:
-            return True
+            return False
 
         # Aggregate cap check (day window only).
         if constraint.max_aggregate_value_wei_per_day is not None:

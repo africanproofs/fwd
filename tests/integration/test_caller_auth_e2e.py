@@ -97,6 +97,7 @@ def _make_integ_policy(wallet_name: str, caller_name: str) -> Policy:
                         }
                     },
                     "wallet_allowlist": [wallet_name],
+                    "rate": {"per_hour": 100, "per_day": 1000},
                 }
             },
             "wallet_constraints": {
