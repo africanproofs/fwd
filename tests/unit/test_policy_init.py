@@ -52,8 +52,9 @@ def test_claim_only_flare_roundtrips(tmp_path: Path) -> None:
     ]
     assert cr["chains"] == [14]
     method = next(iter(cr["methods"].values()))
-    # POLICY-INIT-SAFETY-001: fail-closed default; operators must opt in to True.
-    assert method["allow_unconstrained_args"] is False
+    # claim(_proofs tuple[]) is non-scalar — allow_unconstrained_args must be True
+    # to allow the claim to proceed; _recipient predicate pins the beneficiary.
+    assert method["allow_unconstrained_args"] is True
     assert method["arg_predicates"]["_recipient"] == RECIPIENT
 
 
@@ -69,8 +70,12 @@ def test_fsp_only_songbird_roundtrips_with_carveout(tmp_path: Path) -> None:
     assert submit["wallet_allowlist"] == ["fsp-signing-songbird", "fsp-sender-songbird"]
     assert submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["chains"] == [19]
     for m in submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["methods"].values():
-        # POLICY-INIT-SAFETY-001: fail-closed default; operators must opt in to True.
-        assert m["allow_unconstrained_args"] is False
+        # signUptimeVote(tuple) and signRewards(tuple[], tuple) are non-scalar —
+        # allow_unconstrained_args must be True; chain binding via fsp_permissions.chain_ids.
+        assert m["allow_unconstrained_args"] is True
+    # FSP-CROSSCHAIN-001: UPTIME requires chain_ids — generated policy must include them.
+    fsp_perm = doc["fsp_permissions"]["fsp/songbird"]
+    assert fsp_perm["chain_ids"] == [19]
 
 
 def test_claim_and_fsp_multinetwork_roundtrips(tmp_path: Path) -> None:

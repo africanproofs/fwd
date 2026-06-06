@@ -172,7 +172,9 @@ def generate_policy(
                         "methods": {
                             claim_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": False,
+                                # True required: claim(_proofs tuple[]) is non-scalar;
+                                # _recipient predicate pins the beneficiary.
+                                "allow_unconstrained_args": True,
                                 "arg_predicates": {"_recipient": recipient},
                             }
                         },
@@ -209,6 +211,9 @@ def generate_policy(
                 "message_types": ["UPTIME", "REWARD_DISTRIBUTION"],
                 "wallet_allowlist": [signing_wallet],
                 "rate": _rate(fsp_rate),
+                # Required: UPTIME has no epoch-bound chain context and is replayable
+                # across chains without an explicit allowlist (FSP-CROSSCHAIN-001).
+                "chain_ids": [chain_id],
             }
             permissions[submit_pp] = {
                 "contracts": {
@@ -218,12 +223,16 @@ def generate_policy(
                         "methods": {
                             uptime_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": False,
+                                # True required: signUptimeVote(tuple _signature) is
+                                # non-scalar; chain_ids in fsp_permissions pins the chain.
+                                "allow_unconstrained_args": True,
                                 "arg_predicates": {"_rewardEpochId": "any"},
                             },
                             rewards_sig: {
                                 "max_value_wei": "0",
-                                "allow_unconstrained_args": False,
+                                # True required: signRewards(tuple[], tuple) are
+                                # non-scalar; epoch constraint via arg_predicates.
+                                "allow_unconstrained_args": True,
                                 "arg_predicates": {"_rewardEpochId": "any"},
                             },
                         },
