@@ -267,7 +267,7 @@ except Exception: sys.stdout.write("0")' 2>/dev/null || echo 0)"
     if [ "${_W:-0}" -gt 0 ]; then
       die "existing state volume '$_STATE_VOL' holds $_W wallet(s) sealed under a PREVIOUS master that this install just regenerated — they cannot be decrypted, and fwd will refuse to start. Choose one and re-run:
   - CLEAN install (discard that old state):  add  --reset-state
-  - RECOVER it:  restore its master.key + policy.yaml from backup into $SRC/config/ first (see RESTORE-RUNBOOK.md)
+  - RECOVER it:  restore its master.key + policy.yaml from backup into $SRC/config/ first (see docs/restore-runbook.md)
 Refusing to bring up a daemon that cannot use its own state."
     fi
   fi
@@ -286,7 +286,7 @@ else
   log "--no-start: staged but not started. Start later with:  sudo fwd start"
 fi
 
-# --- 8. onboard by default, or stop at the custody gate (--inert / headless) ---
+# --- 8. onboard only if --onboard-rewards (+TTY); else stop at the custody gate ---
 ONBOARD=0
 if [ "$ONBOARD_REWARDS" -eq 1 ] && [ "$START" -eq 1 ] && { true >/dev/tty; } 2>/dev/null; then
   ONBOARD=1

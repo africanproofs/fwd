@@ -1,8 +1,9 @@
 #!/bin/sh
 # clifwd onboard — guided, single-terminal reward-onboarding wizard.
 #
-# Surfaced as `clifwd onboard rewards [fsp|validator]` (the clifwd host wrapper
-# routes `onboard` here), and run by default at install time. Class `fsp`
+# Surfaced as `fwd onboard rewards [fsp|validator]` (and as the compatibility
+# alias `clifwd onboard rewards ...`). Onboarding is opt-in; the installer only
+# runs it when invoked with `--onboard-rewards` and a TTY. Class `fsp`
 # (default) sets up the two revenue operations — claiming FTSO rewards
 # (RewardManager.claim) and signing FSP rewards (signUptimeVote / signRewards):
 # it generates the reward policy, loads it, then provisions each function in its
@@ -84,7 +85,7 @@ ask_secret() {  # prompt -> SECRET (hidden; echo OFF before the prompt to avoid 
 
 usage() {
   cat >&2 <<EOF
-usage: clifwd onboard rewards [fsp|validator] [--recipient 0xADDR] [options]
+usage: fwd onboard rewards [fsp|validator] [--recipient 0xADDR] [options]  (alias: clifwd onboard rewards)
 
   Guided single-terminal wizard, organized by function (fee claiming, FSP reward
   signing). Prompts (on the terminal) for your recipient and, in each function's
@@ -123,7 +124,7 @@ case "${1:-}" in
 esac
 if [ "$CLASS" = validator ]; then
   echo "onboard: validator reward onboarding is a future class — not yet supported." >&2
-  echo "         today: clifwd onboard rewards fsp --recipient 0xADDR [--networks ...]" >&2
+  echo "         today: fwd onboard rewards fsp --recipient 0xADDR [--networks ...]" >&2
   exit 2
 fi
 
@@ -280,7 +281,7 @@ note "healthy"
 _sm="$(printf '%s' "$_hj" | python3 -c \
   'import sys,json; d=json.load(sys.stdin); print(d.get("sealed_master",""))' 2>/dev/null || true)"
 if [ "$_sm" = "error" ] || { [ -n "$_sm" ] && [ "$_sm" != "ok" ]; }; then
-  die "sealed_master not ready (sealed_master='$_sm') -- master.key may have been regenerated; restore backup or regenerate all wallets. See RESTORE-RUNBOOK.md."
+  die "sealed_master not ready (sealed_master='$_sm') -- master.key may have been regenerated; restore backup or regenerate all wallets. See docs/restore-runbook.md."
 fi
 
 # ---- Step 2: on-chain preflight ----

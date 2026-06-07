@@ -1,6 +1,9 @@
 # Architecture
 
-This document is the canonical design for `fwd`. Decisions are recorded in `decisions.md`; threats in `threat-model.md`; the phased build-out in `implementation-plan.md`. This file describes *what `fwd` is* — the zero-egress, sign-only signer (custody = sealed local master; clients broadcast).
+This document is the canonical design for `fwd`. Decisions are recorded in
+`decisions.md`; threats in `threat-model.md`; historical build-out records live
+under `docs/history/`. This file describes *what `fwd` is* — the zero-egress,
+sign-only signer (custody = sealed local master; clients broadcast).
 
 ## One-paragraph summary
 
@@ -43,7 +46,7 @@ This document is the canonical design for `fwd`. Decisions are recorded in `deci
    via POST /v1/transactions/{id}/broadcast-result + /receipt.
 ```
 
-Two Docker services and two named volumes. Backups go to a local `backup` volume; off-host transport is the operator's job. The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). The `litestream` sidecar is pinned **`network_mode: none`** — it replicates over the shared `fwd-state`/`backup` volumes (`type: file`) and needs no network, so the whole stack is egress-free.
+The base signer is two Docker services and two named volumes. Backups go to a local `backup` volume; off-host transport is the operator's job. The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). The `litestream` sidecar is pinned **`network_mode: none`** — it replicates over the shared `fwd-state`/`backup` volumes (`type: file`) and needs no network, so the base stack is egress-free. With `--with-clif`, `docker-compose.clif.yml` adds keyless clif one-shots and per-network `clif-epoch-<net>` daemons; those clif services are dual-homed for RPC/broadcast, but `fwd` remains zero-egress.
 
 | Service | Image | Role |
 |---|---|---|
@@ -74,8 +77,8 @@ v1: bearer API keys. Each caller has a key issued by `fwd`'s admin CLI:
 
 ```
 $ clifwd callers create \
-    --name ftso-fee-claimer \
-    --policy ftso-claim-flare-prod
+    --name claim-songbird \
+    --policy perm/claim-songbird
 fwd_live_a8f3c9d2b1e4...
 ```
 
@@ -528,48 +531,60 @@ The sealed master needs no authentication to anything: `SealedMaster` loads the 
 ## Policy YAML format
 
 Authoritative shape per `decisions.md` D13 (caller-keyed indirection) +
-D14 (Phase 7 implementation refinements). Loaded once at startup from
+D14 (policy-engine implementation refinements). Loaded once at startup from
 `$FWD_POLICY_PATH` (default `/etc/fwd/policy.yaml`); operator mounts via
 docker-compose volume bind. The file is **operator-controlled and
 gitignored** (Core invariant #12).
+
+Do not hand-write the reward-provider policy from this architecture document.
+Generate it with `clifwd policy init`, then validate it with
+`clifwd policy validate`. The current copyable example is
+[`docs/policy.example.yaml`](policy.example.yaml).
 
 ```yaml
 version: 1
 
 callers:
-  ftso-fee-claimer-prod:
-    policy_path: ftso-claim
+  claim-songbird:
+    policy_path: perm/claim-songbird
+  fsp-sign-songbird:
+    policy_path: fsp/songbird
+  fsp-submit-songbird:
+    policy_path: perm/fsp-submit-songbird
 
 wallets:
-  claim-recipient-flare-prod:
-    policy_path: claim-recipient
+  claimer-songbird:
+    policy_path: wc/claimer-songbird
+  fsp-signing-songbird:
+    policy_path: wc/fsp-songbird
+  fsp-sender-songbird:
+    policy_path: wc/fsp-sender-songbird
 
 permissions:
-  ftso-claim:
+  perm/claim-songbird:
     contracts:
-      "0xRewardManager...":              # checksummed; case-insensitive at match
-        abi: reward_manager              # references config/abis/registry.yaml
-        chains: [14]                     # REQUIRED, non-empty: valid chain IDs
-                                         # (request.chain must match — step 2)
+      "0xE26AD68b17224951b5740F33926Cc438764eB9a7":
+        abi: reward_manager
+        chains: [19]
         methods:
-          "claim(address,uint256)":      # full ABI signature, not bare name
-            max_value_wei: "0"           # decimal string, parsed to int
-            # allow_unconstrained_args: true  # required ONLY if the method has
-            #   non-scalar (array/tuple) args (this one does not)
+          "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])":
+            max_value_wei: "0"
+            allow_unconstrained_args: true
             arg_predicates:
-              recipient: "0x7c3579ab3e647395c96a1efc98af9a31c5ecc294"
-              epochId: any               # sentinel; matches any decoded value
-    wallet_allowlist: ["claim-recipient-flare-prod"]
-    rate:                                # per (caller, wallet, contract, method)
-      per_hour: 100
-      per_day: 1000
+              _recipient: "0xYOUR_CLAIM_RECIPIENT_ADDRESS"
+    wallet_allowlist: [claimer-songbird]
+    rate: { per_hour: 4, per_day: 8 }
 
 wallet_constraints:
-  claim-recipient:
+  wc/claimer-songbird:
     max_aggregate_value_wei_per_day: "0"
-    rate:
-      per_hour: 200
-      per_day: 2000
+    rate: { per_hour: 4, per_day: 8 }
+
+fsp_permissions:
+  fsp/songbird:
+    message_types: [UPTIME, REWARD_DISTRIBUTION]
+    wallet_allowlist: [fsp-signing-songbird]
+    rate: { per_hour: 50, per_day: 500 }
 ```
 
 **Reload.** Startup-only in v1 (see `decisions.md` D14). Policy.yaml
@@ -578,7 +593,7 @@ to Phase 10.
 
 ## Policy engine
 
-The Phase 7 policy engine evaluates each `/v1/sign-transaction` request
+The policy engine evaluates each `/v1/sign-transaction` request
 against the loaded `policy.yaml`. Pure-function shape (per `decisions.md` D14):
 
 ```python
@@ -778,6 +793,8 @@ out-of-band snapshots of `clifwd audit verify`. Phase 10 on-chain anchor
 
 **Restore drill.** Operator copies the `backup` volume contents AND the operator-held `master.key` onto the new host; `litestream restore` `state.db` from the volume; bring up `fwd` + `litestream`; smoke-test via `docker exec fwd clifwd health`. Nonce state is NOT auto-reconciled from chain (fwd has no egress); the operator re-seeds/advances via the admin `nonce-init` / `nonce-sync` endpoints if the restored view trails chain truth.
 
+Step-by-step operator procedure: [`docs/restore-runbook.md`](restore-runbook.md).
+
 Target RTO: ≤ 30 minutes from a clean host.
 
 ## Observability
@@ -878,7 +895,7 @@ The most severe disclosure path is a logged privkey — accidental `logger.excep
 
 **Enforced by:** `src/fwd/main.py::_scrub_hex_secrets` (a structlog processor inserted before `JSONRenderer` in the processor chain) plus `tests/unit/test_log_scrubber.py` (10 tests: redacts unknown fields, passes whitelisted public fields, handles uppercase/mixed case, rejects shorter/longer hex).
 
-The scrubber is **field-aware**: a 32-byte hex string in a known-public field (`tx_hash`, `block_hash`, `transactionHash`, `blockHash`, `stateRoot`, `transactionsRoot`, `receiptsRoot`, `parentHash`, `mixHash`) passes through; in any other field, it is replaced with `<redacted-32-byte-hex>`. The whitelist is in `src/fwd/main.py::_PUBLIC_HEX_FIELDS`. Phase 7 may extend the whitelist for ABI-decoded values; the scrubber's contract (field-aware redaction) does not change.
+The scrubber is **field-aware**: a 32-byte hex string in a known-public field (`tx_hash`, `block_hash`, `transactionHash`, `blockHash`, `stateRoot`, `transactionsRoot`, `receiptsRoot`, `parentHash`, `mixHash`) passes through; in any other field, it is replaced with `<redacted-32-byte-hex>`. The whitelist is in `src/fwd/main.py::_PUBLIC_HEX_FIELDS`. Future releases may extend the whitelist for ABI-decoded values; the scrubber's contract (field-aware redaction) does not change.
 
 **Why field-aware:** naïvely redacting every 32-byte hex string would also redact transaction hashes, breaking operational debugging (operators rely on tx hashes to follow request chains). The whitelist preserves the operational signal while still catching the catastrophic leak class.
 
@@ -903,6 +920,6 @@ v1 ships one implementation: `EnvelopeSigner` — fetches the wallet's sealed-ma
 
 - Specific `policy.yaml` values for production wallets — they live in a separate private location.
 - Host hardening (firewall rules, SSH config, package set) — operator-side; not yet a runbook.
-- Phased build-out — `implementation-plan.md`.
+- Phased build-out history — `docs/history/implementation-plan.md`.
 - Decision rationale for the choices above — `decisions.md`.
 - Attack surface analysis — `threat-model.md`.

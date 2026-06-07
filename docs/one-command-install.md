@@ -108,33 +108,36 @@ The install script should:
 
 ### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd start [<net> [fsp]] | stop | restart | status | logs | onboard
+sudo fwd start [<net>] | stop | restart | status | logs | onboard
 sudo fwd upgrade | backup status     # Phase-1 stubs — exit 2 with a pointer to this doc
 ```
 Compose is an implementation detail of these. `fwd start` brings up fwd (+ litestream)
-only; `fwd start songbird` starts that network's **claim** daemon ONLY; `fwd start songbird
-fsp` starts its **FSP auto-signer** ONLY (opt-in — only meaningful with `FSP_AUTO_ENABLED=true`;
-clif refuses + exits otherwise). A claim+FSP provider runs **both** commands; keeping them
-independent stops a sign-only (no-claim) host from launching a beneficiary-less claim daemon
-(which clif `auto` exits on → restart-loop). Each network reads its own `.env.<net>`; there
-is no single shared clif daemon. `fwd start` and `fwd status` print a compact started /
-current-state cockpit (what came up, what didn't and how to start it, clif env presence per
-network, the next action).
+only. `fwd start songbird` starts that network's single **epoch sign-and-claim**
+daemon (`clif-epoch-songbird`): optional uptime signing, reward-publication polling,
+reward signing, finalization polling, and the epoch claim in one state machine.
+The legacy `fsp` argument is still accepted (`fwd start songbird fsp`) but maps to
+the same daemon and prints a note; signing and claiming are no longer separate
+services. The daemon signs, so `FSP_AUTO_ENABLED=true` must be set in that
+network's `.env.<net>`; `UPTIME_AUTO_ENABLED=true` additionally signs uptime
+votes. Each network reads its own `.env.<net>`; there is no single shared clif
+daemon. `fwd start` and `fwd status` print a compact started/current-state cockpit
+(what came up, what did not and how to start it, clif env presence per network,
+the next action).
 
 ### `clifwd` (application CLI + reward onboarding)
 ```sh
 clifwd health
 clifwd policy init --networks … --recipient 0x…
 clifwd wallets import --name … --privkey-file /path/in/container …
-clifwd onboard rewards --recipient 0x… --networks songbird   # runs on the HOST
+sudo fwd onboard rewards --identity 0x… --recipient 0x… --networks songbird
 ```
 Normal usage delegates into the container (`docker exec "${FWD_CONTAINER:-fwd}"
 clifwd …`) — same Python package, env, mounted state, policy, and custody backend
 as the daemon; for file-based ops (`wallets import`), `--privkey-file` is evaluated
 **inside** the container. The one exception is `clifwd onboard …`, which runs on
-the **host** (it `docker compose restart`s the daemon and writes the host policy
-file — neither possible from inside the container) — see the reward-onboarding
-section below.
+the **host** as a compatibility alias for `sudo fwd onboard …` (it restarts the
+daemon and writes the host policy file — neither possible from inside the
+container) — see the reward-onboarding section below.
 
 ## Reward onboarding — an opt-in, one-terminal step
 
@@ -144,7 +147,10 @@ claiming are a separate, **opt-in** step — run the guided wizard any time with
 host command:
 
 ```sh
-sudo fwd onboard rewards --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS --networks songbird
+sudo fwd onboard rewards \
+  --identity 0xYOUR_OFFLINE_IDENTITY_ADDRESS \
+  --recipient 0xYOUR_CLAIM_RECIPIENT_ADDRESS \
+  --networks songbird
 ```
 
 (or chain it onto the install with `--onboard-rewards`, which requires a TTY + a
@@ -187,8 +193,8 @@ as a voter) — or, with `--import-existing`, the **CUTOVER** (stop the old subm
 it and fwd do not collide on nonces); (2) **rehearse** through the `clif` wrapper on the
 **Songbird canary** before Flare; (3) **verify** the `RewardClaimed` event on-chain and
 `clifwd audit verify`; (4) only then start always-on automation with `sudo fwd start <net>`
-(add `… fsp` to also start the FSP auto-signer). The wizard prints this exact sequence at the
-end, in both compact and guided modes.
+(the single epoch sign-and-claim daemon). The wizard prints this exact sequence at
+the end, in both compact and guided modes.
 
 **Pasting your key (single terminal).** At the import step the wizard prompts you to
 **paste each private key directly (hidden input)** — no pre-placed file. fwd pipes
@@ -201,7 +207,7 @@ keys, per the threat model.) Paste blank to defer a key and import it later.
 **Reward class.** The command takes a class: `rewards fsp` (the default — FTSO
 claim + FSP signing, today's provider rewards) or `rewards validator`
 (staking/validator rewards — a future class, not yet implemented). Bare
-`clifwd onboard rewards` means `fsp`.
+`fwd onboard rewards` means `fsp`.
 
 **Migrating an existing provider?** Add **`--import-existing`**. By default onboard
 *generates* a fresh claim executor + FSP sender (greenfield; cleanest custody — the
@@ -216,10 +222,11 @@ trade-off: an imported key carries its pre-fwd plaintext exposure into fwd, and 
 must **stop the old submitter/claimer** for those accounts (fwd becomes their sole
 user — otherwise the two collide on nonces).
 
-That is the whole onboarding. The manual runbook below is exactly what the one
-command does, step by step — use it if you want to drive each step yourself.
+That is the whole onboarding. The manual runbook below is exactly what
+`sudo fwd onboard rewards` does, step by step — use it if you want to drive each
+step yourself.
 
-### The manual runbook (what `clifwd onboard rewards` does)
+### The manual runbook (what `sudo fwd onboard rewards` does)
 
 The runbook is the exact ordered sequence for the default on **Songbird** (AP's
 canary); every name matches the generator's output, so it is copy-paste end to
@@ -288,7 +295,7 @@ Then rehearse a real claim + FSP sign on Songbird (the canary) through clif, ver
 the `RewardClaimed` event on-chain and `clifwd audit verify`, and only then go to
 Flare.
 
-(`clifwd onboard rewards` above runs exactly steps 2–8 and prints the step-9
+(`sudo fwd onboard rewards` above runs exactly steps 2–8 and prints the step-9
 checklist with your concrete addresses — the runbook is the manual equivalent.)
 
 ## Release & pinning
@@ -367,7 +374,8 @@ Production custody is not initialized.
 Next: the reward-onboarding runbook (default claim + FSP): policy init → restart →
 wallets create/import → callers create → policy validate → nonce init → on-chain authorize.
 ```
-Production readiness gate: custody init complete; `clifwd health` healthy;
-`clifwd audit verify` succeeds; a wallet imported without leaking key material to
-HTTP/shell-history/logs/audit; the first caller issued a policy-bound token;
-`clifwd policy validate` green.
+Production readiness gate: custody init complete; on-chain authorization and gas
+funding complete; Songbird rehearsal produced the expected on-chain event;
+`clifwd health` healthy; `clifwd audit verify` succeeds; `clifwd policy validate`
+green; intended `clif-epoch-<net>` daemon started only after
+`FSP_AUTO_ENABLED=true`.

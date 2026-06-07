@@ -144,6 +144,8 @@ Per-version deep ship records. The full chronological narrative v0.1.0→v1.0.0a
 
 - **v1.1.0a88** — install/compose wiring for clif's epoch-anchored sign→claim daemon (clif 0.5.16, D17): the 6 per-network `clif-auto-*`+`clif-fsp-auto-*` services collapse to one `clif-epoch-<net>` (`epoch run`, healthcheck `clif epoch status`); `fwd start <net>` launches it; onboard writes `UPTIME_AUTO_ENABLED`/`EPOCH_REWARD_INITIAL_DELAY_SEC`/`EPOCH_POLL_INTERVAL_SEC`; production-setup §6 rewritten. fwd daemon unchanged (still the passive zero-egress signer). — `1.1.0a88-clif-epoch-daemon-wiring.md`
 
+- **v1.1.0a89** — operator-docs refresh: README rewritten as a concise current front door (~−340 lines; inert install → opt-in `fwd onboard rewards` → single `clif-epoch-<net>` daemon); new `docs/restore-runbook.md` (host recovery — reuses sealed ciphertext, never re-pastes keys; commands code-verified); architecture/dependencies/one-command-install brought current (epoch daemon, `--with-clif` overlay, de-Phased, generate-don't-hand-write policy guard); install scripts' operator-text aligned (`docs/restore-runbook.md`, canonical `fwd onboard`, opt-in §8 comment). No daemon change. — `1.1.0a89-docs-refresh-restore-runbook.md`
+
 ## Quarantined operator-procedure snapshots
 
 Point-in-time operator procedures that no longer match the current code, kept here as history (not current-state runbooks — there is no `docs/runbooks/` directory):

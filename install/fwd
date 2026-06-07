@@ -14,7 +14,7 @@
 # FSP_AUTO_ENABLED=true in that network's .env (clif refuses + exits otherwise).
 #
 # `upgrade` and `backup` are finalized with install.sh in Phase 1 (they need the
-# release-manifest fetch + the documented restore runbook); stubbed here so the
+# release-manifest fetch + docs/restore-runbook.md); stubbed here so the
 # command contract is visible and honest.
 set -eu
 
