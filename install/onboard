@@ -677,7 +677,12 @@ env_write() {  # net claim_tok sign_tok submit_tok
   } > "$_ew_tmp"
   if grep -qi 'PRIVATE_KEY' "$_ew_tmp"; then rm -f "$_ew_tmp"; die "refusing to write $_ew_dst — it contains a *PRIVATE_KEY* name"; fi
   chmod 0600 "$_ew_tmp" || die "chmod failed: $_ew_tmp"; mv -f "$_ew_tmp" "$_ew_dst" || die "mv failed: $_ew_tmp -> $_ew_dst"
-  note "clif env written: $_ew_dst (0600, keyless)"
+  # onboard runs as root (sudo fwd onboard), but the `clif` host wrapper runs as the
+  # non-root operator and does a host-side `docker compose` env_file read of this file.
+  # Match install.sh's clif-dir chown (1000:1000 — the clif/fwd container user) so the
+  # root-written env stays operator-readable; else `clif … claim` fails "permission denied".
+  chown 1000:1000 "$_ew_dst" 2>/dev/null || true
+  note "clif env written: $_ew_dst (0600, keyless, uid 1000)"
 }
 
 # ====================== Function: FSP REWARD SIGNING ======================
