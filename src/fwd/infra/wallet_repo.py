@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from sqlalchemy import Column, DateTime, MetaData, String, Table, select
 
@@ -83,6 +83,11 @@ class WalletRepo:
             policy_path=policy_path,
             created_at=now,
         )
+
+    @overload
+    async def get_by_name(self, name: str, *, missing_ok: Literal[False] = ...) -> Wallet: ...
+    @overload
+    async def get_by_name(self, name: str, *, missing_ok: Literal[True]) -> Wallet | None: ...
 
     async def get_by_name(self, name: str, *, missing_ok: bool = False) -> Wallet | None:
         result = await self._session.execute(select(wallets).where(wallets.c.name == name))

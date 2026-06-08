@@ -25,8 +25,7 @@ from fwd.infra.audit_repo import AuditRepo, audit_log, audit_metadata
 from fwd.infra.caller_repo import Caller
 from fwd.infra.nonce_repo import NonceRepo, nonces
 from fwd.infra.nonce_repo import metadata as nonce_metadata
-from fwd.infra.rate_repo import RateRepo
-from fwd.infra.rate_repo import rate_metadata
+from fwd.infra.rate_repo import RateRepo, rate_metadata
 from fwd.infra.transaction_repo import TransactionRepo, transaction_hashes, transactions
 from fwd.infra.transaction_repo import metadata as transaction_metadata
 

@@ -348,7 +348,7 @@ The mounted surface (in `src/fwd/main.py`) is frozen for v1. Rows tagged **(defe
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `POST` | `/v1/sign-transaction` | caller | Build → policy → sign; returns `{ tx_id, hash, signed_raw_tx, nonce }`. Does not broadcast. |
-| `POST` | `/v1/sign-fsp-message` | caller | EIP-191 `personal_sign` over a fwd-**reconstructed** FSP messageHash (UPTIME / REWARD_DISTRIBUTION) from typed fields — no caller-supplied digest. On-chain FSP-protocol *acceptance* is deferred — the fwd-generated key is not yet a registered voter, so `signUptimeVote` reverts `'invalid signing policy address'` after recovering fwd's signer. |
+| `POST` | `/v1/sign-fsp-message` | caller | EIP-191 `personal_sign` over a fwd-**reconstructed** FSP messageHash (UPTIME / REWARD_DISTRIBUTION) from typed fields — no caller-supplied digest. On-chain FSP-protocol *acceptance* is deferred — the imported signing-policy key is the canonical on-chain-registered voter, so acceptance is inferred but not independently demonstrated end-to-end: a live `signUptimeVote` reverts on the FSM window guard `'epoch not ended yet'`, which fires before the signer-registration check. |
 | `POST` | `/v1/transactions/{tx_id}/broadcast-result` | caller | Client reports the broadcast outcome (`accepted` / `rejected_releaseable` / `rejected_nonce_too_low`). |
 | `POST` | `/v1/transactions/{tx_id}/receipt` | caller | Client reports the on-chain receipt (`mined_success` / `mined_reverted` + block). |
 | `POST` | `/v1/transactions/{tx_id}/sign-replacement` | caller | Re-sign the same intent at the same nonce with bumped fees (stuck-tx replacement). |

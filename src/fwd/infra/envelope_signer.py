@@ -1,4 +1,4 @@
-"""EnvelopeSigner — Vault-Transit envelope-encryption Signer implementation.
+"""EnvelopeSigner — sealed-master envelope-encryption Signer implementation.
 
 Per architecture.md § Signing flow + § The signer interface:
 - Phase 3b ships address() and create_wallet() for wallet provisioning.
@@ -8,7 +8,7 @@ The wallet-create flow is:
   1. Account.create() generates a fresh secp256k1 privkey.
   2. Wrap as bytearray immediately (per architecture.md § Implementation
      hazards #2: bytearray, not bytes).
-  3. Vault encrypt(plaintext_bytes) → "vault:v1:<...>".
+  3. SealedMaster encrypt(plaintext_bytes) → "seal:v1:<...>".
   4. WalletRepo.create(name, address, privkey_ciphertext, ...).
   5. Zeroize the bytearray in-place.
 
