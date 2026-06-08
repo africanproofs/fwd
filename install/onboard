@@ -572,7 +572,7 @@ env_write() {  # net claim_tok sign_tok submit_tok
       printf 'UPTIME_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" UPTIME_AUTO_ENABLED false)"
     fi
     printf 'CLIF_STATE_DIR=.clif-state/%s\n' "$_ew_net"
-    printf 'FSP_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" FSP_AUTO_ENABLED false)"
+    printf 'FSP_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" FSP_AUTO_ENABLED true)"
     # epoch sign→claim daemon cadence (preserved across re-runs if the operator tuned them)
     printf 'EPOCH_REWARD_INITIAL_DELAY_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_REWARD_INITIAL_DELAY_SEC 3600)"
     printf 'EPOCH_POLL_INTERVAL_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_POLL_INTERVAL_SEC 1800)"
@@ -725,9 +725,9 @@ for net in $NETLIST; do
 done
 printf '  clifwd audit verify\n'
 printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event on-chain and run 'clifwd audit verify'.\n"
-printf '\nTo enable unattended automation (AFTER you rehearse): in the SEPARATE clif deployment set\n'
-printf '   FSP_AUTO_ENABLED=true (and UPTIME_AUTO_ENABLED=true to also sign uptime) in %s/.env.<net>,\n' "$CLIF_ENV_DIR"
-printf '   then: clifctl up <net>  → one epoch-anchored daemon per network sequences sign→claim (clif epoch run).\n'
+printf '\nFSP_AUTO_ENABLED=true is written by default — the onboard is the gate.\n'
+printf '   clifctl up <net>  → starts the epoch-anchored sign→claim daemon immediately.\n'
+printf '   Set UPTIME_AUTO_ENABLED=true in %s/.env.<net> to also sign uptime votes.\n' "$CLIF_ENV_DIR"
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
