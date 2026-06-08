@@ -8,27 +8,37 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     POETRY_VERSION=1.8.5 \
     POETRY_VIRTUALENVS_CREATE=false \
     POETRY_NO_INTERACTION=1 \
-    POETRY_REQUESTS_TIMEOUT=120
+    POETRY_REQUESTS_TIMEOUT=300
 
-# POETRY_REQUESTS_TIMEOUT (default 15s) is raised so a slow PyPI-CDN wheel
-# during the parallel `docker compose build` (fwd + clif at once) does not
-# read-timeout the whole image build on a variable link.
+# Network resilience for build-from-source on a variable/flaky provider link:
+# POETRY_REQUESTS_TIMEOUT (default 15s) is raised so a slow PyPI-CDN wheel does
+# not read-timeout the build; apt and poetry steps additionally RETRY (apt
+# Acquire::Retries, poetry install up to 3x) so a transient unreachable/timeout
+# on one package does not fail the whole image build. Build images SEQUENTIALLY
+# (one at a time) — building fwd + clif in parallel can saturate a constrained
+# link and cause spurious unreachable/timeout failures.
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     build-essential \
     libffi-dev \
     libsecp256k1-dev \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --timeout 120 --retries 5 "poetry==${POETRY_VERSION}"
+RUN pip install --no-cache-dir --timeout 300 --retries 5 "poetry==${POETRY_VERSION}" \
+ || (echo "poetry pip retry 1/2" && sleep 5  && pip install --no-cache-dir --timeout 300 --retries 5 "poetry==${POETRY_VERSION}") \
+ || (echo "poetry pip retry 2/2" && sleep 15 && pip install --no-cache-dir --timeout 300 --retries 5 "poetry==${POETRY_VERSION}")
 
 WORKDIR /build
 COPY pyproject.toml poetry.lock ./
-RUN poetry install --only main --no-root
+RUN poetry install --only main --no-root \
+ || (echo "poetry install retry 1/2" && sleep 5  && poetry install --only main --no-root) \
+ || (echo "poetry install retry 2/2" && sleep 15 && poetry install --only main --no-root)
 
 COPY src/ ./src/
-RUN poetry install --only main
+RUN poetry install --only main \
+ || (echo "poetry install retry 1/2" && sleep 5  && poetry install --only main) \
+ || (echo "poetry install retry 2/2" && sleep 15 && poetry install --only main)
 
 # ---------- Runtime stage ----------
 FROM python:3.12-slim-bookworm AS runtime
@@ -37,7 +47,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:${PATH}"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     libsecp256k1-dev \
     curl \
     && rm -rf /var/lib/apt/lists/* \
