@@ -13,9 +13,9 @@ Every dependency `fwd` requires, grouped by tier. The "Status" column flags what
 
 **`fwd` needs NO chain RPC** (zero-egress): it never broadcasts and never reads the chain. The Flare / Songbird / Coston2 RPC endpoints are **caller** prerequisites (the client broadcasts the signed tx), listed under § Cross-project dependencies — not `fwd` infrastructure.
 
-**Net-new base operational surface:** one local `backup` volume + the
-operator-held `master.key` file. With `--with-clif`, add per-network clif env
-files and the caller-side RPC endpoints that clif already needs for broadcast.
+**Net-new operational surface:** one local `backup` volume + the operator-held
+`master.key` file. (The clif consumer is a *separate* deployment with its own env
+files + caller-side RPC endpoints — not fwd infrastructure.)
 
 Notably **NOT required:**
 - AWS account
@@ -37,17 +37,13 @@ Base install (`docker-compose.yml`):
 | `fwd` | Built locally from the public source by `docker compose` (local `Dockerfile`, tagged `${FWD_IMAGE_TAG:-dev}`) | The signing daemon (FastAPI). Custody is in-process: `SealedMaster` AES-256-GCM under a mode-0600 host-file master. |
 | `litestream` | `litestream/litestream:<version-pinned>` | Continuous SQLite replication to a local `backup` volume (no cloud) |
 
-Optional `--with-clif` overlay (`docker-compose.clif.yml`):
-
-| Service | Image | Role |
-|---|---|---|
-| `clif` | Built locally from the pinned public `clif` source | One-shot keyless client used by the host `clif` wrapper for manual claims, FSP signing calls, and chain nonce reads. Profile-gated; not a daemon. |
-| `clif-epoch-songbird` | Same local `clif` image | Songbird epoch sign-and-claim daemon. Started only by `sudo fwd start songbird`; requires `FSP_AUTO_ENABLED=true` in `/opt/fwd/clif/.env.songbird`. |
-| `clif-epoch-flare` | Same local `clif` image | Flare epoch sign-and-claim daemon. Started only by `sudo fwd start flare`; requires `FSP_AUTO_ENABLED=true` in `/opt/fwd/clif/.env.flare`. |
-| `clif-epoch-coston2` | Same local `clif` image | Coston2 testnet epoch daemon. Use only if registered for Coston2 FSP signing. |
-
-`clif` is dual-homed: it attaches to `fwd-callers` to reach `fwd` and to a normal
-`egress` bridge for RPC/broadcast. `fwd` itself is never attached to `egress`.
+That is the entire fwd deployment — **fwd-only**. The clif consumer (reward claiming +
+FSP signing) is a **separate deployment** with its own `docker-compose.yml` (project
+`clif`): a `clif-epoch-<net>` daemon per network + a one-shot for manual ops, dual-homed
+to its OWN `egress` bridge (for RPC/broadcast) and to fwd's `fwd-callers` network as an
+`external` network (to reach `fwd:8080`). Built/run/managed by clif's own `clifctl` —
+fwd never clones, builds, or launches it; `fwd` itself is never attached to `egress`.
+Onboarding writes clif's per-network env to `/opt/clif/.env.<net>` (`--clif-env-dir`).
 
 ## Python runtime libraries (inside the `fwd` container)
 

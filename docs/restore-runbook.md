@@ -29,11 +29,12 @@ On the new or rebuilt host:
 
 ```sh
 git clone https://github.com/africanproofs/fwd.git
-sudo sh fwd/install/install.sh --with-clif --no-start
+sudo sh fwd/install/install.sh --no-start
 ```
 
-This creates the install layout under `/opt/fwd` and builds the images. It may
-generate placeholder config; the next step overwrites it with the restored files.
+This creates the fwd install layout under `/opt/fwd` and builds the fwd image (fwd-only;
+clif is a separate deployment, restored independently). It may generate placeholder config;
+the next step overwrites it with the restored files.
 
 ## 2. Restore Operator Config
 
@@ -44,10 +45,14 @@ sudo install -m 0600 /path/to/backup/master.key /opt/fwd/src/config/master.key
 sudo install -m 0600 /path/to/backup/policy.yaml /opt/fwd/src/config/policy.yaml
 sudo install -m 0600 /path/to/backup/.env /opt/fwd/src/.env
 
-# If clif was installed:
-sudo install -m 0600 /path/to/backup/.env.songbird /opt/fwd/clif/.env.songbird
-sudo install -m 0600 /path/to/backup/.env.flare /opt/fwd/clif/.env.flare
-sudo chown -R 1000:1000 /opt/fwd/src/config /opt/fwd/src/.env /opt/fwd/clif
+sudo chown -R 1000:1000 /opt/fwd/src/config /opt/fwd/src/.env
+
+# clif is a SEPARATE deployment — restore its per-network env to /opt/clif (or just
+# re-run `fwd onboard …` to regenerate it after fwd is back up):
+sudo mkdir -p /opt/clif
+sudo install -m 0600 /path/to/backup/.env.songbird /opt/clif/.env.songbird
+sudo install -m 0600 /path/to/backup/.env.flare /opt/clif/.env.flare
+sudo chown -R 1000:1000 /opt/clif
 ```
 
 Skip a network env file if that network was not onboarded.
@@ -144,16 +149,17 @@ use `clifwd nonce init` with the chain nonce instead of `nonce sync`.
 Run one manual rehearsal before restarting automation:
 
 ```sh
-clif --network songbird claim --type fee
+clifctl run songbird claim --type fee   # via the separate clif deployment
 clifwd audit verify
 sudo fwd status
 ```
 
 Only after the restored host signs correctly, the expected on-chain event is
-verified, and nonces are reconciled should you restart the epoch daemon:
+verified, and nonces are reconciled should you restart the epoch daemon — from the
+SEPARATE clif deployment:
 
 ```sh
-sudo fwd start songbird
+clifctl up songbird
 ```
 
 Repeat the same checks before enabling Flare.

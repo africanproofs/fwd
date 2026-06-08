@@ -1,18 +1,19 @@
-# One-command install — the FTSO provider stack
+# One-command install — the fwd signer
 
-`fwd` (and, optionally, the `clif` claim/FSP layer) should install with the same
-operational simplicity as tools such as K3s:
+`fwd` (the zero-egress custody/signing daemon) installs with the same operational
+simplicity as tools such as K3s:
 
 ```sh
-curl -sfL https://get.proofs.africa/fwd | sh -            # fwd custody daemon
-curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif   # + clif layer
+curl -sfL https://get.proofs.africa/fwd | sh -            # fwd signer (fwd-only)
 ```
 
-This is the **target operator experience** for any Flare FTSO provider running
-their own stack (not just AP). It does not remove Docker Compose from the
-runtime — the installer uses Compose underneath; the point is that a normal
-operator should not have to copy compose files, remember `docker exec`, or learn
-container volume names for day-to-day use.
+The installer is **fwd-only**. The `clif` consumer (reward claiming + FSP signing) is a
+SEPARATE deployment with its own compose project + egress that joins fwd's internal callers
+network; fwd never clones, builds, or launches it (clif's own `clifctl` manages it). This is
+the **target operator experience** for any Flare FTSO provider running their own stack (not
+just AP). It does not remove Docker Compose from the runtime — the installer uses Compose
+underneath; the point is that a normal operator should not have to copy compose files,
+remember `docker exec`, or learn container volume names for day-to-day use.
 
 The build-from-source installer (`install/install.sh`), the host wrappers
 (`fwd` / `clifwd` / `clif`), and the guided onboarding (`install/onboard`) are
@@ -49,19 +50,22 @@ defaulted for a signer:
    or on-chain authorization. The operator then runs the gated onboarding
    (below). *Installing software is reversible; initializing custody is not.*
 
-## Install unit — fwd core, `--with-clif` opt-in
+## Install unit — fwd only
 
-The base unit is **fwd** (the reusable signer): its own `internal: true`
-network, no egress, no host port. `--with-clif` layers a Compose overlay
-(`docker-compose.clif.yml`) adding the `clif` claim/FSP daemons, dual-homed to
-fwd's `fwd-callers` network plus an `egress` bridge for their own RPC/broadcast.
-fwd stands alone; clif is opt-in.
+The install unit is **fwd alone** (the reusable signer): its own `internal: true`
+callers network, no egress, no host port — `fwd` + `litestream`, nothing else. The
+`clif` consumer is a SEPARATE deployment: its own compose project with the
+`clif-epoch-<net>` claim/FSP daemon(s), dual-homed to its OWN `egress` bridge (for
+RPC/broadcast) plus fwd's `fwd-callers` network as an `external` network (to reach
+`fwd:8080`). Keeping clif out of fwd's project is what preserves fwd's zero-egress
+boundary — no egress service ever lives in the fwd project. clif is managed by its own
+`clifctl`.
 
 ## Image delivery — build from source on the host
 
 The installer git-clones **pinned source** (a release tag + commit sha) from the
-public repository — `github.com/africanproofs/fwd` (and, under `--with-clif`,
-`github.com/africanproofs/clif`) — and `docker compose build`s locally. There is
+public `github.com/africanproofs/fwd` repository and `docker compose build`s locally
+(fwd only — clif is fetched + built by its own separate installer). There is
 **no dependency on a published image registry** and **no trust in a prebuilt
 binary** for a custody tool — the operator builds from auditable, pinned source.
 The host needs `docker`, `docker compose v2`, and `git`; the language/build
@@ -82,25 +86,25 @@ The install script should:
    `--dir`) and lay out everything under it:
    ```text
    $FWD_DIR             install root
-   $FWD_DIR/src         fetched source + compose bundle (the compose dir)
+   $FWD_DIR/src         fetched fwd source + compose bundle (the compose dir)
    $FWD_DIR/src/.env    operator runtime config (FWD_ADMIN_KEY, FWD_IMAGE_TAG)
    $FWD_DIR/src/config  policy.yaml + sealed master.key (gitignored, host-owned)
-   $FWD_DIR/clif        clif source + per-network .env files (under --with-clif)
+   /opt/clif            clif's per-network .env files, written by onboarding (--clif-env-dir;
+                        clif itself is a SEPARATE deployment, not installed here)
    ```
    Persistent state and the local backup replica are Docker named volumes
    (`fwd-state`, `backup`) in the compose project — not host paths.
-4. Fetch the pinned source (fwd; clif too under `--with-clif`). *Deferred
+4. Fetch the pinned fwd source. *Deferred
    Phase-1 sub-step: per-artifact checksum verification of the fetched source.*
 5. `docker compose build` from that source.
 6. Generate the sealed master **locally** (`clifwd master generate`, mode 0600,
    owned by the `fwd` uid) — it is **never fetched or transmitted**.
 7. Generate a strong `FWD_ADMIN_KEY` into `$FWD_DIR/src/.env` (preserving
    existing operator values on re-run).
-8. Install the host wrappers (`fwd` lifecycle, `clifwd` CLI, `clif` keyless
-   client), baking the compose-dir and container-name defaults into each.
-9. Start the stack **inert** (empty default-deny policy, zero wallets); under
-   `--with-clif`, build clif but leave its daemons stopped until onboarding
-   completes.
+8. Install the host wrappers (`fwd` lifecycle, `clifwd` CLI), baking the compose-dir,
+   container-name, and clif-env-dir defaults into each.
+9. Start the stack **inert** (empty default-deny policy, zero wallets) — fwd +
+   litestream only; it never builds or launches clif.
 10. Run `clifwd health`, then print the next required operator action — and
     refuse to imply production custody is complete before it is.
 
@@ -108,21 +112,27 @@ The install script should:
 
 ### `fwd` (lifecycle wrapper)
 ```sh
-sudo fwd start [<net>] | stop | restart | status | logs | onboard
+sudo fwd start | stop | restart | status | logs | onboard
 sudo fwd upgrade | backup status     # Phase-1 stubs — exit 2 with a pointer to this doc
 ```
-Compose is an implementation detail of these. `fwd start` brings up fwd (+ litestream)
-only. `fwd start songbird` starts that network's single **epoch sign-and-claim**
-daemon (`clif-epoch-songbird`): optional uptime signing, reward-publication polling,
-reward signing, finalization polling, and the epoch claim in one state machine.
-The legacy `fsp` argument is still accepted (`fwd start songbird fsp`) but maps to
-the same daemon and prints a note; signing and claiming are no longer separate
-services. The daemon signs, so `FSP_AUTO_ENABLED=true` must be set in that
-network's `.env.<net>`; `UPTIME_AUTO_ENABLED=true` additionally signs uptime
-votes. Each network reads its own `.env.<net>`; there is no single shared clif
-daemon. `fwd start` and `fwd status` print a compact started/current-state cockpit
-(what came up, what did not and how to start it, clif env presence per network,
-the next action).
+Compose is an implementation detail of these. `fwd start` brings up **fwd + litestream
+only** — the zero-egress signer. It never launches clif: `fwd start <net>` is rejected with
+a redirect to clif's `clifctl up <net>`. The automation lives in the SEPARATE clif
+deployment (`clifctl` below). `fwd status` prints a compact cockpit (fwd state, clif env
+presence per network, the next action).
+
+### `clifctl` (clif's lifecycle/one-shot tool — separate deployment)
+```sh
+clifctl up <net> | down <net> | restart <net> | status <net> | logs <net>
+clifctl run <net> <args…>     # one-shot manual ops: claim / fsp / preflight / chain nonce
+```
+`clifctl up <net>` brings up that network's single **epoch sign-and-claim** daemon
+(`clif-epoch-<net>`): optional uptime signing, reward-publication polling, reward signing,
+finalization polling, and the epoch claim in one state machine. It signs, so
+`FSP_AUTO_ENABLED=true` must be set in that network's `/opt/clif/.env.<net>`;
+`UPTIME_AUTO_ENABLED=true` additionally signs uptime votes. Each network reads its own
+`.env.<net>`. The clif project joins fwd's `fwd-callers` network (external) to reach
+`fwd:8080` and has its own `egress` bridge — fwd never co-hosts it.
 
 ### `clifwd` (application CLI + reward onboarding)
 ```sh
@@ -190,9 +200,10 @@ cockpit by default, or set `FWD_OUTPUT=guided`), and a comma list for `--network
 order: (1) the printed on-chain authorization from your **offline identity key**
 (`ClaimSetupManager.setClaimExecutors` + `setAllowedClaimRecipients`; register the FSP signer
 as a voter) — or, with `--import-existing`, the **CUTOVER** (stop the old submitter first, so
-it and fwd do not collide on nonces); (2) **rehearse** through the `clif` wrapper on the
-**Songbird canary** before Flare; (3) **verify** the `RewardClaimed` event on-chain and
-`clifwd audit verify`; (4) only then start always-on automation with `sudo fwd start <net>`
+it and fwd do not collide on nonces); (2) **rehearse** via the separate clif (`clifctl run
+<net> …`) on the **Songbird canary** before Flare; (3) **verify** the `RewardClaimed` event
+on-chain and `clifwd audit verify`; (4) only then start always-on automation in the clif
+deployment with `clifctl up <net>`
 (the single epoch sign-and-claim daemon). The wizard prints this exact sequence at
 the end, in both compact and guided modes.
 
@@ -302,9 +313,9 @@ checklist with your concrete addresses — the runbook is the manual equivalent.
 
 The installer clones **pinned source** — `FWD_REF` / `--ref` (a release pins a
 tag; default `main`) plus an optional `FWD_SHA` that the cloned `HEAD` must
-equal (the integrity pin). clif is pinned the same way via `CLIF_REF` under
-`--with-clif`. Source repos default to the public
-`github.com/africanproofs/{fwd,clif}.git`.
+equal (the integrity pin). The source repo defaults to the public
+`github.com/africanproofs/fwd.git`. (clif, the separate deployment, is pinned the same way
+by its own installer.)
 
 The **deferred Phase-1 sub-step** layers a fetched, checksummed manifest on top
 of git-ref pinning — **source refs + checksums, not image digests**
@@ -314,7 +325,6 @@ artifact's checksum:
 ```yaml
 version: 1.1.0
 fwd_source:  { repo: https://github.com/africanproofs/fwd.git,  tag: v1.1.0, sha: <hex> }
-clif_source: { repo: https://github.com/africanproofs/clif.git, tag: v0.5.x, sha: <hex> }   # --with-clif
 compose_sha256: <hex>
 networks_sha256: <hex>
 ```
@@ -377,5 +387,5 @@ wallets create/import → callers create → policy validate → nonce init → 
 Production readiness gate: custody init complete; on-chain authorization and gas
 funding complete; Songbird rehearsal produced the expected on-chain event;
 `clifwd health` healthy; `clifwd audit verify` succeeds; `clifwd policy validate`
-green; intended `clif-epoch-<net>` daemon started only after
-`FSP_AUTO_ENABLED=true`.
+green; the separate clif deployment's `clif-epoch-<net>` daemon started (via
+`clifctl up <net>`) only after `FSP_AUTO_ENABLED=true`.

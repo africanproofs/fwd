@@ -3,15 +3,15 @@
 # Installed to /usr/local/bin/fwd by install.sh.
 #
 # Operates from $FWD_DIR (default /opt/fwd), which holds the compose bundle +
-# fetched source. The `--with-clif` overlay is included automatically when
-# docker-compose.clif.yml is present + clif is installed ($CLIF_SRC exists).
+# fetched source. fwd is the ZERO-EGRESS SIGNER ONLY: this wrapper manages fwd +
+# litestream and nothing else. The clif consumer (reward claiming + FSP signing) is
+# a SEPARATE deployment with its own compose project + egress — manage it with clif's
+# own `clifctl`. fwd never launches clif.
 #
-#   sudo fwd start [<net>] | stop | restart | status | logs
+#   sudo fwd start | stop | restart | status | logs | onboard
 #
-# `fwd start` brings up fwd (+ litestream) only; `fwd start <net>` (flare|songbird|coston2)
-# starts that network's clif EPOCH daemon — one sign→claim state machine per reward epoch
-# (replaces the former separate CLAIM + FSP pollers). It SIGNS, so it requires
-# FSP_AUTO_ENABLED=true in that network's .env (clif refuses + exits otherwise).
+# `fwd start` brings up fwd (+ litestream). To run the automation, deploy clif
+# separately and `clifctl up <net>`.
 #
 # `upgrade` and `backup` are finalized with install.sh in Phase 1 (they need the
 # release-manifest fetch + docs/restore-runbook.md); stubbed here so the
@@ -19,14 +19,11 @@
 set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
-CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
+# Where onboarding writes clif's per-network env (clif is a separate deployment).
+CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
 cd "$FWD_DIR"
 
 COMPOSE="-f docker-compose.yml"
-[ -d "$CLIF_SRC" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
-# clif build context + env live at the install root; export so the overlay
-# resolves them (the wrappers run compose from the bundle dir, not the root).
-export CLIF_SRC CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
 # Pin the compose project to the container name so this wrapper operates the SAME project the
 # installer created — immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
 export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
@@ -36,73 +33,50 @@ cmd="${1:-}"
 
 case "$cmd" in
   start)
-    # `fwd start` = fwd (+ litestream) only. `fwd start <net>` starts that network's EPOCH
-    # daemon (--profile <net>): one epoch-anchored sign→claim state machine that replaces the
-    # former separate CLAIM + FSP pollers (the legacy `fsp` arg is accepted but maps to the same
-    # single daemon). It SIGNS, so it requires FSP_AUTO_ENABLED=true (clif refuses + exits
-    # otherwise → restart-loop until set). This case runs `up -d`, reports what it ASKED to bring
-    # up, then exits with compose's status. `up -d` returning 0 does NOT prove a daemon stayed
-    # up — `fwd status` does.
-    case "$COMPOSE" in *docker-compose.clif.yml*) _has_clif=1 ;; *) _has_clif=0 ;; esac
+    # fwd start = fwd + litestream only. A <net>/fsp arg is rejected: the epoch sign→claim
+    # automation is now a SEPARATE clif deployment (clifctl up <net>), not bundled into fwd.
     case "${1:-}" in
-      flare|songbird|coston2)
-        _net="$1"; shift
-        if [ "${1:-}" = fsp ]; then
-          shift
-          printf 'note: signing and claiming are now ONE epoch daemon (clif-epoch-%s) — "fsp" is no longer a separate service.\n' "$_net" >&2
-        fi
-        _prof="$_net"; _svc="clif-epoch-$_net"
-        set +e; docker compose $COMPOSE --profile "$_prof" up -d "$@"; _rc=$?; set -e
-        if [ "$_rc" -eq 0 ]; then
-          printf 'requested (docker compose up -d):\n  fwd\n  litestream\n'
-          if [ "$_has_clif" -eq 1 ]; then
-            printf '  %s  (epoch sign→claim daemon)\n' "$_svc"
-            printf 'confirm it stayed up (up -d does not guarantee it): sudo fwd status  |  sudo fwd logs %s\n' "$_svc"
-          else
-            printf '(clif not installed — fwd + litestream only)\n'
-          fi
-        fi
-        exit "$_rc"
-        ;;
-      fsp) echo "fwd start: 'fsp' needs a network — e.g. 'fwd start songbird' (signing+claiming are now one daemon)" >&2; exit 2 ;;
-      *)
-        set +e; docker compose $COMPOSE up -d "$@"; _rc=$?; set -e
-        [ "$_rc" -eq 0 ] && printf 'requested (docker compose up -d):\n  fwd\n  litestream\n'
-        exit "$_rc"
-        ;;
+      flare|songbird|coston2|fsp)
+        echo "fwd start no longer launches clif — the automation is a SEPARATE deployment." >&2
+        echo "Deploy clif and run its lifecycle tool:  clifctl up ${1}" >&2
+        echo "(fwd is the zero-egress signer; 'fwd start' brings up fwd + litestream only.)" >&2
+        exit 2 ;;
     esac
+    set +e; docker compose $COMPOSE up -d "$@"; _rc=$?; set -e
+    [ "$_rc" -eq 0 ] && printf 'requested (docker compose up -d):\n  fwd\n  litestream\n'
+    exit "$_rc"
     ;;
   stop)    exec docker compose $COMPOSE stop "$@" ;;
   restart) exec docker compose $COMPOSE restart "$@" ;;
   status)
-    # bounded cockpit: real compose state + clif env presence per network + next action.
-    # Exits with `docker compose ps`'s status so a monitor/script sees a Docker/daemon failure.
-    printf 'fwd daemon:\n'
+    # fwd-only cockpit: real compose state + the next action. Exits with `docker compose ps`'s
+    # status so a monitor/script sees a Docker/daemon failure.
+    printf 'fwd daemon (zero-egress signer):\n'
     set +e; docker compose $COMPOSE ps "$@"; _rc=$?; set -e
-    if [ -d "$CLIF_SRC" ]; then
-      printf '\nclif env files (%s):\n' "$CLIF_SRC"
+    if [ -d "$CLIF_ENV_DIR" ]; then
+      printf '\nclif env files (%s):\n' "$CLIF_ENV_DIR"
       _any=0
       for _n in flare songbird coston2; do
-        if [ -f "$CLIF_SRC/.env.$_n" ]; then printf '  %-9s present\n' "$_n"; _any=1; fi
+        if [ -f "$CLIF_ENV_DIR/.env.$_n" ]; then printf '  %-9s present\n' "$_n"; _any=1; fi
       done
-      if [ "$_any" -eq 0 ]; then printf '  (none yet — run: sudo fwd onboard rewards …)\n'; fi
+      [ "$_any" -eq 0 ] && printf '  (none yet — run: sudo fwd onboard rewards …)\n'
     fi
-    printf '\nnext: sudo fwd start <net>  (epoch sign→claim daemon; needs FSP_AUTO_ENABLED=true)\n'
+    printf '\nnext: sudo fwd onboard rewards …  then deploy clif separately and: clifctl up <net>\n'
     [ "$_rc" -ne 0 ] && printf 'fwd status: docker compose ps exited %s\n' "$_rc" >&2
     exit "$_rc"
     ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
-  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$FWD_DIR/install/onboard" "$@" ;;
+  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_ENV_DIR="$CLIF_ENV_DIR" "$FWD_DIR/install/onboard" "$@" ;;
   upgrade|backup)
     echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
     exit 2
     ;;
   ""|help|-h|--help)
-    echo "usage: fwd {start [<net>]|stop|restart|status|logs|onboard} [args...]" >&2
-    echo "       fwd start  (fwd only) | fwd start songbird  (epoch sign→claim daemon; needs FSP_AUTO_ENABLED=true)" >&2
+    echo "usage: fwd {start|stop|restart|status|logs|onboard} [args...]" >&2
+    echo "       fwd start  → fwd + litestream (the zero-egress signer; never launches clif)" >&2
     echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
-    echo "       (guided stack onboarding: fwd custody + clif env + nonce seeding)" >&2
-    echo "       output is compact by default; add --guided (or FWD_OUTPUT=guided) to onboard for the walk-through" >&2
+    echo "       (provisions fwd custody + writes clif's env to $CLIF_ENV_DIR; --guided for the walk-through)" >&2
+    echo "       automation: deploy clif separately, then clifctl up <net>  (NOT 'fwd start <net>')" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0
     ;;

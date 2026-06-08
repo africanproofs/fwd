@@ -9,22 +9,23 @@ are all complete. Until then it is not production-ready, and no step here implie
 For installer internals and the custody gate, see [`one-command-install.md`](one-command-install.md);
 for the onboarding wizard's mechanics, see its "Reward onboarding" section.
 
-## 1. Install the stack (with clif), inert
+## 1. Install fwd (the signer), inert
 
 ```sh
-curl -sfL https://get.proofs.africa/fwd | sudo sh -s -- --with-clif
+curl -sfL https://get.proofs.africa/fwd | sudo sh -
 ```
 
 Until `get.proofs.africa` hosting lands (Phase-1 pending), clone the public source and run the
 installer directly — identical effect:
 
 ```sh
-git clone https://github.com/africanproofs/fwd.git && sudo sh fwd/install/install.sh --with-clif
+git clone https://github.com/africanproofs/fwd.git && sudo sh fwd/install/install.sh
 ```
 
-This builds `fwd` + `clif`, installs the host wrappers (`fwd`, `clifwd`, `clif`), starts **only
-`fwd` + `litestream`**, and leaves custody **inert** (empty default-deny policy, zero wallets,
-signs nothing). Output is a compact operator cockpit by default; add `--guided` (or `FWD_OUTPUT=guided`) for the verbose, first-timer walk-through.
+This builds `fwd`, installs the host wrappers (`fwd`, `clifwd`), starts **only `fwd` +
+`litestream`**, and leaves custody **inert** (empty default-deny policy, zero wallets, signs
+nothing). It is **fwd-only** — the clif consumer is a separate deployment (§6). Output is a
+compact cockpit by default; add `--guided` (or `FWD_OUTPUT=guided`) for the first-timer walk-through.
 
 ## 2. Run reward onboarding — canary first
 
@@ -56,8 +57,8 @@ is not set up:**
 - **import the FSP signing key** when prompted (`fsp-signing-<net>` — must match your registered voter key)
 - create/import the **FSP gas sender** (`fsp-sender-<net>`)
 - let onboarding **mint the clif caller tokens** (written to the env, not printed unless `--show-secrets`)
-- let it **seed nonces from chain truth** through the keyless clif one-shot (no hand-typing; fwd has no egress)
-- confirm it **writes `/opt/fwd/clif/.env.<net>`** (0600, keyless — never a `PRIVATE_KEY`)
+- let it **seed fresh wallets' nonces to 0**; for *imported* wallets it defers — seed from chain truth via the separate clif (`clifctl run <net> chain nonce --address <addr>` → `clifwd nonce init …`), since fwd has no egress
+- confirm it **writes `/opt/clif/.env.<net>`** (0600, keyless — never a `PRIVATE_KEY`)
 
 ## 4. Complete the on-chain authorization (from the offline identity key)
 
@@ -70,24 +71,27 @@ fwd never holds the identity key — you do these offline. The wizard prints the
   gas) and `fsp-sender-<net>` (pays the FSP submit gas). Both are fresh, zero-balance wallets and
   cannot operate unfunded. The FSP signing key needs **no** gas (it signs detached).
 
-## 5. Rehearse with the host `clif` wrapper (not raw Compose)
+## 5. Rehearse via the separate clif deployment (`clifctl run`)
 
 ```sh
-clif --network songbird claim --type fee
-clif --network songbird fsp uptime --epoch <N>
-clif --network songbird fsp rewards --epoch <N>
+clifctl run songbird preflight --identity 0x… --recipient 0x…   # verify on-chain auth first
+clifctl run songbird claim --type fee
+clifctl run songbird fsp uptime --epoch <N>
+clifctl run songbird fsp rewards --epoch <N>
 clifwd audit verify
 ```
 
 **Verify the real `RewardClaimed` event on-chain** (a mined, status-0x1 tx is *not* proof — `claim`
 no-ops silently if already claimed). Do not promote Flare until the Songbird canary is clean.
 
-## 6. Enable and start automation
+## 6. Enable and start automation (separate clif deployment)
 
-One **epoch-anchored daemon per network** now sequences the whole lifecycle per reward epoch
-(optional uptime sign → wait → reward-publication poll → reward sign → finalization poll →
-claim that epoch → idle). It SIGNS, so it is hard-off by default. Set this in
-`/opt/fwd/clif/.env.songbird` (clif `epoch run` refuses + exits when it is false):
+The automation is a **separate clif deployment** (its own compose project + egress, joining
+fwd's callers network). Clone clif and use its `clifctl` — fwd never launches it. One
+**epoch-anchored daemon per network** sequences the whole lifecycle per reward epoch (optional
+uptime sign → wait → reward-publication poll → reward sign → finalization poll → claim that
+epoch → idle). It SIGNS, so it is hard-off by default. Set this in `/opt/clif/.env.songbird`
+(clif `epoch run` refuses + exits when it is false):
 
 ```
 FSP_AUTO_ENABLED=true
@@ -98,18 +102,18 @@ FSP_AUTO_ENABLED=true
 # EPOCH_POLL_INTERVAL_SEC=1800          # 30m active-window poll
 ```
 
-Then start the daemon:
+Then bring up the daemon from the clif deployment:
 
 ```sh
-sudo fwd start songbird           # the epoch sign→claim daemon (clif-epoch-songbird)
+clifctl up songbird               # the epoch sign→claim daemon (clif-epoch-songbird)
 ```
 
-`fwd start <net>` reports what it *requested* — `up -d` returning 0 does not prove a daemon stayed
-up; confirm with `fwd status` / `fwd logs clif-epoch-songbird` / `clif epoch status`. After the
-Songbird canary is clean, repeat for Flare:
+`clifctl up` requests the daemon — `up -d` returning 0 does not prove it stayed up; confirm with
+`clifctl status songbird` / `clifctl logs songbird`. After the Songbird canary is clean, repeat
+for Flare:
 
 ```sh
-sudo fwd start flare
+clifctl up flare
 ```
 
 ## 7. Final checks

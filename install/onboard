@@ -131,7 +131,7 @@ fi
 NETS="songbird"; RECIP=""; CAPS="claim,fsp"; SKIP_FSP_IMPORT=0; IMPORT_EXISTING=0
 IDENTITY=""; FSP_SENDER_MODE="per-network"; ACCEPT_PENDING=0; ROTATE_MISSING=0; SHOW_SECRETS=0
 SIGNING_POLICY_HINT=""; FSP_SENDER_ADDRESS_HINT=""
-ONBOARD_INCOMPLETE=0; UNRESOLVED_NONCES=""; POLICY_ST=ok
+ONBOARD_INCOMPLETE=0; UNSEEDED_NONCES=""; POLICY_ST=ok
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --recipient)       RECIP="${2:-}"; shift 2 ;;
@@ -200,12 +200,12 @@ chain_of() {
     "$1"
 }
 
-# clif availability — resolved early so the on-chain preflight (Step 2) can use it.
-# Graceful degradation: without clif, preflight and nonce reads are skipped.
-CLIF_OK=0
-if [ -d "${CLIF_SRC:-}" ] && [ -f "$FWD_DIR/docker-compose.clif.yml" ] && [ -x "$FWD_DIR/install/clif" ]; then
-  CLIF_OK=1
-fi
+# clif is a SEPARATE deployment (its own compose project + egress). onboard NEVER invokes
+# clif: it provisions fwd custody and hands clif its generated env in CLIF_ENV_DIR. On-chain
+# preflight + nonce-seed-from-chain are the operator's job via clif (clifctl run <net>
+# preflight / chain nonce) — surfaced in the final checklist. fwd is zero-egress.
+CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
+mkdir -p "$CLIF_ENV_DIR" 2>/dev/null || true
 
 printf '\033[1;36m=== fwd reward onboarding (%s) ===\033[0m\n' "$CLASS"
 guided 'Preparing %s function(s) on %s:\n' "$NFUNC" "$NETS"
@@ -284,39 +284,12 @@ if [ "$_sm" = "error" ] || { [ -n "$_sm" ] && [ "$_sm" != "ok" ]; }; then
   die "sealed_master not ready (sealed_master='$_sm') -- master.key may have been regenerated; restore backup or regenerate all wallets. See docs/restore-runbook.md."
 fi
 
-# ---- Step 2: on-chain preflight ----
-# Reads registered identity (EntityManager) + claim setup state for --identity.
-# JSON pass captures signing_policy_address + executor per network for import hints.
-# Human-readable pass displays the full picture. Informational — wizard never blocks.
-if { [ "$HAS_CLAIM" -eq 1 ] || [ "$HAS_FSP" -eq 1 ]; } && [ "$CLIF_OK" -eq 1 ]; then
-  step "On-chain preflight" \
-    "Reading registered identity + claim state for $IDENTITY."
-  _PF_FAILS=0
-  for _pf_net in $NETLIST; do
-    # JSON pass: capture signing_policy_address and executor for later import hints.
-    if [ -n "$IDENTITY" ]; then
-      _pf_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
-        "$FWD_DIR/install/clif" preflight --identity "$IDENTITY" --network "$_pf_net" --json \
-        2>/dev/null || true)"
-      _pf_spa="$(printf '%s' "$_pf_j" | python3 -c \
-        'import sys,json; d=json.load(sys.stdin); print(d.get("signing_policy_address",""))' \
-        2>/dev/null || true)"
-      _pf_exe="$(printf '%s' "$_pf_j" | python3 -c \
-        'import sys,json; d=json.load(sys.stdin); a=d.get("executors",[]); print(a[0] if a else "")' \
-        2>/dev/null || true)"
-      eval "_PREFLIGHT_SPA_${_pf_net}=\"\$_pf_spa\""
-      eval "_PREFLIGHT_EXE_${_pf_net}=\"\$_pf_exe\""
-    fi
-    # Human-readable pass: display full identity picture.
-    _pf_args="--identity $IDENTITY"
-    [ -n "$RECIP" ] && _pf_args="$_pf_args --recipient $RECIP"
-    FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
-      "$FWD_DIR/install/clif" preflight --network "$_pf_net" $_pf_args || _PF_FAILS=$((_PF_FAILS + 1))
-  done
-  [ "$_PF_FAILS" -gt 0 ] && warn "preflight had RPC errors on $_PF_FAILS network(s) — continuing"
-else
-  note "no clif layer — skipping on-chain preflight"
-fi
+# ---- Step 2: on-chain preflight — operator-run via the separate clif ----
+# fwd is zero-egress and onboard never invokes clif, so the on-chain preflight (executor /
+# recipient / registered-voter check) is run by the operator against the separate clif
+# deployment after onboarding:  clifctl run <net> preflight --identity <id> --recipient <recip>
+# Import-address verification comes from --signing-policy / --fsp-sender-address when supplied.
+note "on-chain preflight is operator-run via clif (clifctl run <net> preflight) — see the final checklist"
 
 # ---- Step 3: build the reward policy ----
 step "Building your reward policy" \
@@ -370,9 +343,7 @@ note "policy validates"
 # from any partial prior run — no manual `rm policy.yaml` or restart ever needed.
 step "Loading the policy" "fwd reads policy at startup, so onboarding recreates the container to load the new policy. Wallets and state stay in place."
 ( cd "$FWD_DIR"
-  COMPOSE="-f docker-compose.yml"
-  [ -d "${CLIF_SRC:-}" ] && [ -f docker-compose.clif.yml ] && COMPOSE="$COMPOSE -f docker-compose.clif.yml"
-  docker compose $COMPOSE up -d --force-recreate fwd >/dev/null ) || die "policy reload (force-recreate) failed (is the stack up? try: sudo fwd start)"
+  docker compose -f docker-compose.yml up -d --force-recreate fwd >/dev/null ) || die "policy reload (force-recreate) failed (is the stack up? try: sudo fwd start)"
 i=0; while [ "$i" -lt 20 ]; do
   st="$(docker inspect -f '{{.State.Health.Status}}' "$FWD_CONTAINER" 2>/dev/null || echo starting)"
   [ "$st" = healthy ] && break
@@ -485,46 +456,27 @@ caller_create() {  # name policy
   unset key
 }
 
-nonce_seed() {  # name chain starting_nonce
-  set +e; out="$(clifwd nonce init --wallet "$1" --chain "$2" --starting-nonce "$3" 2>&1)"; rc=$?; set -e
-  if [ "$rc" -eq 0 ]; then note "nonce seeded: $1 @ chain $2 = $3"
-  elif printf '%s' "$out" | grep -q nonce_already_initialized; then note "nonce exists (skip): $1 @ chain $2"
-  else die "nonce init $1/$2 failed: $out"
-  fi
-}
-ask_nonce() {  # name -> echoes the starting nonce to stdout
-  if [ "$IMPORT_EXISTING" -eq 1 ] && [ "$TTY_OK" -eq 1 ]; then
-    printf '   %s sends transactions, so fwd needs its next nonce (fwd is offline; it cannot read the chain).\n' "$1" >/dev/tty
-    ask_tty "   nonce for $1 = its current on-chain transaction count (look up $(wallet_addr "$1") on the block explorer; enter 0 if this key has never sent a tx) [default 0]: "
-    if [ -z "$REPLY" ]; then warn "no nonce given for $1 — using 0 (fix later via clifwd nonce-sync if the key has already sent txs)"; printf '0'
-    else printf '%s' "$REPLY"; fi
+# Seed a tx-sending wallet's nonce WITHOUT reading the chain (fwd is zero-egress; onboard
+# never invokes clif). A freshly-GENERATED wallet has on-chain nonce 0 → seed it. An IMPORTED
+# wallet may carry on-chain history → defer: the operator reads chain truth via clif and seeds
+# it (clifctl run <net> chain nonce → clifwd nonce init). Idempotent: existing row left as-is.
+seed_nonce_or_defer() {  # name chain
+  set +e; _sn_cur="$(fwd_nonce_get "$1" "$2")"; _sn_grc=$?; set -e
+  if [ "$_sn_grc" -eq 0 ]; then note "nonce row exists (left as-is): $1 @ chain $2 = $_sn_cur"; return 0; fi
+  [ "$_sn_grc" -eq 4 ] || die "could not read fwd nonce for $1/$2"
+  if [ "$IMPORT_EXISTING" -eq 0 ]; then
+    nonce_init_exact "$1" "$2" 0; note "nonce seeded: $1 @ chain $2 = 0 (fresh wallet)"
   else
-    printf '0'
+    UNSEEDED_NONCES="${UNSEEDED_NONCES:-} $1(chain=$2)"; ONBOARD_INCOMPLETE=1
+    warn "nonce NOT seeded for imported $1 — seed from chain truth: clifctl run <net> chain nonce --address $(wallet_addr "$1")  then  clifwd nonce init --wallet $1 --chain $2 --starting-nonce <count>"
   fi
 }
-seed_sender() {  # name chain — seed nonce if the wallet exists, else a deferred note
-  if wallet_exists "$1"; then nonce_seed "$1" "$2" "$(ask_nonce "$1")"
-  else warn "$1 not present (import deferred) — after importing: clifwd nonce init --wallet $1 --chain $2 --starting-nonce <n>"; fi
-}
-
-# Without a clif layer there is no env to write tokens to — show them so they're not lost.
-[ "$CLIF_OK" -eq 0 ] && [ "$SHOW_SECRETS" -eq 0 ] && { SHOW_SECRETS=1; warn "no clif layer present — caller tokens will be printed (no env to write them to)"; }
 
 sender_name() {  # net -> the FSP gas-payer wallet name
   if [ "$FSP_SENDER_MODE" = per-network ]; then printf 'fsp-sender-%s' "$1"; else printf 'fsp-sender'; fi
 }
 sender_wc() {    # net -> the FSP gas-payer wallet_constraints policy_path
   if [ "$FSP_SENDER_MODE" = per-network ]; then printf 'wc/fsp-sender-%s' "$1"; else printf 'wc/fsp-sender'; fi
-}
-
-# read chain truth via the keyless clif one-shot (egress); echoes "latest pending chain_id"
-read_chain_nonce() {  # net addr
-  [ "$CLIF_OK" -eq 1 ] || return 1
-  _rcn_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
-            "$FWD_DIR/install/clif" chain nonce --network "$1" --address "$2" --json 2>/dev/null)" || return 1
-  [ -n "$_rcn_j" ] || return 1
-  printf '%s' "$_rcn_j" | docker exec -i "$FWD_CONTAINER" python -c \
-    'import sys,json; d=json.load(sys.stdin); print(d["latest"], d["pending"], d["chain_id"])' 2>/dev/null
 }
 
 # echo fwd's current next_nonce for (name, chain); return 4 if no row, 1 on error
@@ -546,56 +498,9 @@ confirm() {  # prompt -> 0 if yes (default no; non-tty = no)
   case "$REPLY" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-cutover_msg() {  # name addr net latest pending
-  warn "Pending txs exist for $1 ($2) on $3:"
-  warn "  latest=$4 pending=$5"
-  warn "Do not cut over while another submitter or in-flight tx owns this account."
-  warn "Stop the old submitter, wait for pending txs to mine/drop, then rerun."
-  warn "To intentionally seed to pending, rerun with --accept-pending-nonces."
-}
-
-# the no-hand-typing nonce state machine (chain truth -> fwd row reconciliation)
-reconcile_nonce() {  # name chain net addr
-  _rn_name="$1"; _rn_chain="$2"; _rn_net="$3"; _rn_addr="$4"
-  if _rn_vals="$(read_chain_nonce "$_rn_net" "$_rn_addr")" && [ -n "$_rn_vals" ]; then
-    # shellcheck disable=SC2086
-    set -- $_rn_vals; _rn_latest="$1"; _rn_pending="$2"; _rn_cid="$3"
-    [ "$_rn_cid" = "$_rn_chain" ] || die "clif chain_id ($_rn_cid) != fwd chain ($_rn_chain) for $_rn_net"
-    if [ "$_rn_pending" -eq "$_rn_latest" ]; then _rn_target="$_rn_latest"
-    elif [ "$_rn_pending" -gt "$_rn_latest" ]; then
-      if [ "$ACCEPT_PENDING" -eq 1 ]; then _rn_target="$_rn_pending"
-      else cutover_msg "$_rn_name" "$_rn_addr" "$_rn_net" "$_rn_latest" "$_rn_pending"; die "cutover blocked for $_rn_name (pending > latest)"; fi
-    else _rn_target="$_rn_latest"; fi
-  else
-    warn "couldn't read chain nonce for $_rn_name ($_rn_addr) via clif — falling back to manual entry (the value you enter is reconciled against fwd's row, same as chain truth)"
-    _rn_target="$(ask_nonce "$_rn_name")"
-    case "$_rn_target" in ''|*[!0-9]*) die "manual nonce for $_rn_name must be a non-negative integer (got: '$_rn_target')" ;; esac
-  fi
-  set +e; _rn_cur="$(fwd_nonce_get "$_rn_name" "$_rn_chain")"; _rn_grc=$?; set -e
-  if [ "$_rn_grc" -eq 4 ]; then
-    nonce_init_exact "$_rn_name" "$_rn_chain" "$_rn_target"; note "nonce seeded: $_rn_name @ chain $_rn_chain = $_rn_target (chain truth)"; return 0
-  fi
-  [ "$_rn_grc" -eq 0 ] || die "could not read fwd nonce for $_rn_name/$_rn_chain"
-  if [ "$_rn_cur" -eq "$_rn_target" ]; then note "nonce in sync: $_rn_name @ chain $_rn_chain = $_rn_cur"; return 0; fi
-  if [ "$_rn_cur" -lt "$_rn_target" ]; then
-    set +e; nonce_try_sync "$_rn_name" "$_rn_chain" "$_rn_target"; _rn_src=$?; set -e
-    if [ "$_rn_src" -eq 0 ]; then note "nonce advanced: $_rn_name $_rn_cur -> $_rn_target"; return 0; fi
-    if [ "$_rn_src" -eq 5 ]; then
-      if [ "$ACCEPT_PENDING" -eq 1 ] || confirm "chain is far ahead for $_rn_name ($_rn_cur -> $_rn_target); force fwd nonce to $_rn_target?"; then
-        nonce_init_force "$_rn_name" "$_rn_chain" "$_rn_target"; note "nonce force-advanced: $_rn_name -> $_rn_target"; return 0
-      fi
-      die "refusing large nonce jump for $_rn_name; re-run with --accept-pending-nonces"
-    fi
-    die "nonce sync failed for $_rn_name (rc=$_rn_src)"
-  fi
-  # cur > target: fwd ahead of chain — never silently rewind
-  if confirm "fwd nonce for $_rn_name ($_rn_cur) is AHEAD of chain ($_rn_target); rewind? (safe only if no fwd-signed tx is in flight)"; then
-    nonce_init_force "$_rn_name" "$_rn_chain" "$_rn_target"; note "nonce rewound: $_rn_name $_rn_cur -> $_rn_target (forced)"; return 0
-  fi
-  ONBOARD_INCOMPLETE=1
-  UNRESOLVED_NONCES="$UNRESOLVED_NONCES $_rn_name@$_rn_net(chain=$_rn_chain:fwd=$_rn_cur>chain_truth=$_rn_target)"
-  warn "left $_rn_name at $_rn_cur (no rewind) — resolve before using this wallet"
-}
+# (chain-truth nonce reconciliation removed: onboard is zero-egress and never invokes clif.
+# seed_nonce_or_defer above handles fresh wallets [→0] and defers imported wallets to the
+# operator, who reads chain truth via clif and seeds them.)
 
 # read KEY=value from an env file (first match), else default
 getval() {  # file key default
@@ -647,8 +552,8 @@ caller_ensure() {  # name policy outvar envfile envkey
 # atomically write clif's per-network env (0600; keyless)
 env_write() {  # net claim_tok sign_tok submit_tok
   _ew_net="$1"; _ew_ct="$2"; _ew_st="$3"; _ew_sub="$4"
-  _ew_dst="$CLIF_SRC/.env.$_ew_net"
-  _ew_tmp="$(mktemp "$CLIF_SRC/.env.$_ew_net.XXXXXX")" || die "mktemp failed in $CLIF_SRC"
+  _ew_dst="$CLIF_ENV_DIR/.env.$_ew_net"
+  _ew_tmp="$(mktemp "$CLIF_ENV_DIR/.env.$_ew_net.XXXXXX")" || die "mktemp failed in $CLIF_ENV_DIR"
   {
     printf 'NETWORK=%s\n' "$_ew_net"
     printf 'FWD_ENDPOINT=%s\n' "$(getval "$_ew_dst" FWD_ENDPOINT http://fwd:8080)"
@@ -694,10 +599,7 @@ if [ "$HAS_FSP" -eq 1 ]; then
     # Signing key: always imported (registered protocol key — never generated fresh)
     _expected_sp="${SIGNING_POLICY_HINT:-}"
     if [ -z "$_expected_sp" ]; then
-      eval "_expected_sp=\"\${_PREFLIGHT_SPA_${net}:-}\""
-    fi
-    if [ -z "$_expected_sp" ]; then
-      _pf_env="$CLIF_SRC/.env.$net"
+      _pf_env="$CLIF_ENV_DIR/.env.$net"
       [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
         "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
     fi
@@ -712,10 +614,10 @@ if [ "$HAS_FSP" -eq 1 ]; then
     else
       wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
-    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_SRC/.env.$net" FSP_SIGN_CALLER_TOKEN
-    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_SRC/.env.$net" FSP_SUBMIT_CALLER_TOKEN
+    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_ENV_DIR/.env.$net" FSP_SIGN_CALLER_TOKEN
+    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_ENV_DIR/.env.$net" FSP_SUBMIT_CALLER_TOKEN
     eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
-    if wallet_exists "$_sender"; then reconcile_nonce "$_sender" "$cid" "$net" "$(wallet_addr "$_sender")"
+    if wallet_exists "$_sender"; then seed_nonce_or_defer "$_sender" "$cid"
     else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
   done
 fi
@@ -727,38 +629,26 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     if [ "$IMPORT_EXISTING" -eq 1 ]; then
       _expected_claimer=""
-      eval "_expected_claimer=\"\${_PREFLIGHT_EXE_${net}:-}\""
-      if [ -z "$_expected_claimer" ] && [ "$CLIF_OK" -eq 1 ] && [ -n "$IDENTITY" ]; then
-        _pf_j="$(FWD_DIR="$FWD_DIR" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" \
-          "$FWD_DIR/install/clif" preflight --identity "$IDENTITY" --network "$net" --json 2>/dev/null || true)"
-        _expected_claimer="$(printf '%s' "$_pf_j" | python3 -c \
-          'import sys,json; d=json.load(sys.stdin); a=d.get("executors",[]); print(a[0] if a else "")' \
-          2>/dev/null || true)"
-      fi
       import_pasted "claimer-$net" "wc/claimer-$net" \
         "the wallet that claims rewards for your identity and pays your recipient" \
         "$_expected_claimer"
     else
       wallet_create "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     fi
-    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_SRC/.env.$net" FWD_CALLER_TOKEN
+    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_ENV_DIR/.env.$net" FWD_CALLER_TOKEN
     eval "TOK_CLAIM_$net=\$_t_claim"
-    if wallet_exists "claimer-$net"; then reconcile_nonce "claimer-$net" "$cid" "$net" "$(wallet_addr "claimer-$net")"
+    if wallet_exists "claimer-$net"; then seed_nonce_or_defer "claimer-$net" "$cid"
     else warn "claimer-$net not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet claimer-$net --chain $cid --starting-nonce <n>"; fi
   done
 fi
 
 # ====================== clif runtime config (.env.<net>) ======================
-if [ "$CLIF_OK" -eq 1 ]; then
-  printf '\n\033[1;35m═══════════════ clif runtime config ═══════════════\033[0m\n'
-  printf '   Writing per-network clif env files. They contain wallet names and caller tokens only; no private keys. Mode 0600.\n'
-  for net in $NETLIST; do
-    eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
-    env_write "$net" "$_w_ct" "$_w_st" "$_w_sub"
-  done
-else
-  warn "no clif layer present — skipped writing clif .env files (install with --with-clif to enable)"
-fi
+printf '\n\033[1;35m═══════════════ clif runtime config ═══════════════\033[0m\n'
+printf '   Writing per-network clif env to %s. Wallet names + caller tokens only; no private keys. Mode 0600.\n' "$CLIF_ENV_DIR"
+for net in $NETLIST; do
+  eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
+  env_write "$net" "$_w_ct" "$_w_st" "$_w_sub"
+done
 
 # Post-provisioning consistency gate
 set +e; _pv_rc=0; clifwd policy validate >/dev/null 2>&1 || _pv_rc=$?; set -e
@@ -779,11 +669,11 @@ for net in $NETLIST; do
     wallet_exists "$(sender_name "$net")" || _sm_w=defer
     wallet_exists "fsp-signing-$net" || _sm_w=defer
   fi
-  case " $UNRESOLVED_NONCES " in
-    *"@$net("*) _sm_n=drift ;;
+  case " ${UNSEEDED_NONCES:-} " in
+    *"$net("*) _sm_n=unseeded ;;
     *) if [ "$_sm_w" = ok ]; then _sm_n=ok; else _sm_n=defer; fi ;;
   esac
-  if [ "$CLIF_OK" -eq 1 ]; then _sm_ce=written; else _sm_ce='-'; fi
+  _sm_ce=written
   printf '%-10s %-7s %-8s %-8s %-7s %s\n' "$net" "$POLICY_ST" "$_sm_w" ok "$_sm_n" "$_sm_ce"
 done
 
@@ -824,20 +714,24 @@ else
     [ "$HAS_FSP" -eq 1 ]   && printf '    fund gas wallet: %s (%s) — pays tx gas\n' "$(sender_name "$net")" "$(wallet_addr "$(sender_name "$net")")"
   done
 fi
-printf '\nRehearse with the host `clif` wrapper. Do not use raw `docker compose run`; it reads the placeholder env file:\n'
+printf '\nThe automation + manual ops live in the SEPARATE clif deployment. First verify on-chain auth:\n'
 for net in $NETLIST; do
-  [ "$HAS_CLAIM" -eq 1 ] && printf '  clif --network %s claim --type fee\n' "$net"
-  [ "$HAS_FSP" -eq 1 ]   && printf '  clif --network %s fsp uptime --epoch <N>   (and: clif --network %s fsp rewards --epoch <N>)\n' "$net" "$net"
+  printf '  clifctl run %s preflight --identity %s --recipient %s\n' "$net" "${IDENTITY:-0xYOUR_IDENTITY}" "${RECIP:-0xYOUR_RECIPIENT}"
+done
+printf 'Then rehearse via clifctl:\n'
+for net in $NETLIST; do
+  [ "$HAS_CLAIM" -eq 1 ] && printf '  clifctl run %s claim --type fee\n' "$net"
+  [ "$HAS_FSP" -eq 1 ]   && printf '  clifctl run %s fsp uptime --epoch <N>   (and: clifctl run %s fsp rewards --epoch <N>)\n' "$net" "$net"
 done
 printf '  clifwd audit verify\n'
 printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event on-chain and run 'clifwd audit verify'.\n"
-printf '\nTo enable unattended automation (AFTER you rehearse): set FSP_AUTO_ENABLED=true in %s/.env.<net>\n' "$CLIF_SRC"
-printf '   (and UPTIME_AUTO_ENABLED=true to also sign uptime), then: sudo fwd start <net>\n'
-printf '   → one epoch-anchored daemon per network sequences sign→claim each reward epoch (clif epoch run).\n'
+printf '\nTo enable unattended automation (AFTER you rehearse): in the SEPARATE clif deployment set\n'
+printf '   FSP_AUTO_ENABLED=true (and UPTIME_AUTO_ENABLED=true to also sign uptime) in %s/.env.<net>,\n' "$CLIF_ENV_DIR"
+printf '   then: clifctl up <net>  → one epoch-anchored daemon per network sequences sign→claim (clif epoch run).\n'
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
-  [ -n "$UNRESOLVED_NONCES" ] && printf '\n\033[1;31m⚠ nonce drift\033[0m — fwd nonce AHEAD of chain for:%s\n   Investigate in-flight txs; rewind via clifwd nonce init --force ONLY if safe.\n' "$UNRESOLVED_NONCES"
+  [ -n "${UNSEEDED_NONCES:-}" ] && printf '\n\033[1;33m⚠ nonces not seeded\033[0m (imported wallets):%s\n   Seed each from chain truth: clifctl run <net> chain nonce --address <addr>  then  clifwd nonce init --wallet <name> --chain <id> --starting-nonce <count>.\n' "$UNSEEDED_NONCES"
   printf '\n\033[1;31m⚠ onboard INCOMPLETE\033[0m — one or more wallets were deferred or failed; re-run to import:\n'
   printf '   fwd onboard rewards fsp --import-existing [--networks <net>]  (existing wallets are skipped)\n'
   exit 1

@@ -11,11 +11,11 @@ egress network and report the result back to `fwd`.
 
 ## Install
 
-For a full FTSO reward-provider stack, install `fwd` with the optional `clif`
-claim/FSP layer:
+`fwd` is the zero-egress **signer only**. Install it (the clif consumer is a
+separate deployment — see [Start Automation](#start-automation-separate-clif-deployment)):
 
 ```sh
-curl -sfL https://get.proofs.africa/fwd | sudo sh -s -- --with-clif
+curl -sfL https://get.proofs.africa/fwd | sudo sh -
 ```
 
 Until `get.proofs.africa` hosting is live, run the public source installer
@@ -23,12 +23,12 @@ directly:
 
 ```sh
 git clone https://github.com/africanproofs/fwd.git
-sudo sh fwd/install/install.sh --with-clif
+sudo sh fwd/install/install.sh
 ```
 
 The installer builds from source, creates `/opt/fwd`, starts only `fwd` and
 `litestream`, and leaves the stack inert: empty default-deny policy, zero
-wallets, no signable custody.
+wallets, no signable custody. **It never clones, builds, or launches clif.**
 
 ## Onboard Rewards
 
@@ -43,19 +43,24 @@ sudo fwd onboard rewards \
 ```
 
 The wizard creates or imports the reward wallets, writes the policy, mints caller
-tokens into `clif` env files, reads sender nonces from chain truth through
-keyless `clif`, and prints the on-chain authorizations you must perform from the
-offline identity key. It is compact by default; add `--guided` for the full
+tokens into clif's per-network env files at `/opt/clif` (`--clif-env-dir`), seeds
+fresh wallets' nonces to 0, and prints the on-chain authorizations you perform from
+the offline identity key. It **never invokes clif** — on-chain preflight and seeding
+an *imported* wallet's nonce from chain truth are operator steps via the separate clif
+(`clifctl run <net> preflight` / `chain nonce`). Compact by default; `--guided` for the
 walk-through.
 
 Migrating an existing provider uses the same wizard with `--import-existing`.
 Stop the old claimer/submitter before `fwd` takes over those keys, or the two
 systems will collide on nonces.
 
-## Start Automation
+## Start Automation (separate clif deployment)
 
-After onboarding, on-chain authorization, funding, and a manual Songbird
-rehearsal are complete, enable automation in `/opt/fwd/clif/.env.songbird`:
+The automation is a **separate clif deployment** — its own compose project with
+egress, joining fwd's internal callers network as an external network. fwd never
+launches it. Clone clif and use its `clifctl`. After onboarding + on-chain
+authorization + funding + a manual Songbird rehearsal, enable automation in
+`/opt/clif/.env.songbird`:
 
 ```sh
 FSP_AUTO_ENABLED=true
@@ -63,15 +68,13 @@ FSP_AUTO_ENABLED=true
 # UPTIME_AUTO_ENABLED=true
 ```
 
-Then start the one epoch-anchored sign-and-claim daemon for that network:
+Then bring up that network's one epoch-anchored sign-and-claim daemon from the clif
+deployment:
 
 ```sh
-sudo fwd start songbird
-sudo fwd status
+clifctl up songbird
+clifctl status songbird
 ```
-
-`sudo fwd start songbird fsp` is accepted as a legacy form, but FSP signing and
-claiming now run through the same `clif-epoch-songbird` daemon.
 
 ## Daily Commands
 
@@ -80,31 +83,32 @@ sudo fwd status
 sudo fwd logs
 clifwd health
 clifwd audit verify
-clif --network songbird claim --type fee
-clif --network songbird fsp rewards --epoch <N>
+clifctl run songbird claim --type fee      # via the separate clif deployment
+clifctl run songbird fsp rewards --epoch <N>
 ```
 
-`clifwd` is the operator CLI wrapper. It runs inside the `fwd` container because
-the daemon is on an internal Docker network with no host port.
+`clifwd` is the fwd operator CLI wrapper (runs inside the `fwd` container — the
+daemon is on an internal network with no host port). `clifctl` is clif's own
+lifecycle/one-shot tool in the separate clif deployment.
 
 ## What Gets Deployed
 
-Base install:
+The fwd install is **fwd-only** (compose project `fwd`):
 
-- `fwd`: FastAPI signing daemon on the internal `fwd-callers` network.
+- `fwd`: FastAPI signing daemon on the internal `fwd-callers` network (`internal: true`).
 - `litestream`: local SQLite replication to the `backup` volume.
 
-With `--with-clif`:
-
-- `clif` one-shot wrapper for manual reward operations.
-- `clif-epoch-<network>` daemons, started only when you run `sudo fwd start <net>`.
+No clif and no egress network live in the fwd project. The clif consumer is a
+**separate deployment** (project `clif`): the `clif-epoch-<network>` daemon(s) + a
+one-shot for manual ops, on their own egress bridge plus fwd's callers network as an
+external network — managed by clif's `clifctl`.
 
 The key files are operator-owned and gitignored:
 
 - `/opt/fwd/src/config/master.key`
 - `/opt/fwd/src/config/policy.yaml`
 - `/opt/fwd/src/.env`
-- `/opt/fwd/clif/.env.<network>`
+- `/opt/clif/.env.<network>` (clif's per-network env, written by onboarding)
 
 Back up `master.key`, `policy.yaml`, `.env`, the clif env files, and the
 Litestream `backup` volume out of band. Without the matching `master.key`, sealed

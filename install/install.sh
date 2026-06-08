@@ -2,8 +2,13 @@
 # fwd installer — build-from-source, single-host FTSO provider signing stack.
 #
 #   curl -sfL https://get.proofs.africa/fwd | sh -                                              # install INERT (signs nothing)
-#   curl -sfL https://get.proofs.africa/fwd | sh -s -- --with-clif                              # + clif claim/FSP layer (still inert)
 #   curl -sfL https://get.proofs.africa/fwd | sh -s -- --onboard-rewards --identity 0x.. --recipient 0x..  # install + guided onboarding
+#
+# fwd installs ONLY the zero-egress signer (fwd + litestream) — one compose project, one
+# internal `fwd-callers` network, NO egress. The clif consumer (reward claiming + FSP signing)
+# is a SEPARATE deployment with its own compose project + egress that merely connects to fwd
+# over the callers network; fwd never launches, builds, or co-hosts clif. See clif's `clifctl`.
+# Onboarding's only clif touch-point is writing clif's per-network env into --clif-env-dir.
 #
 # Builds the image from pinned source locally (no registry, no prebuilt-binary
 # trust), brings the stack up inert (empty default-deny policy, signs nothing), then
@@ -21,11 +26,11 @@
 #   FWD_REF=main               git ref to build    (--ref; a release pins a tag)
 #   FWD_SHA=                    if set, the cloned HEAD must equal it (integrity pin)
 #   FWD_IMAGE_TAG=local         built image tag
-#   CLIF_REPO / CLIF_REF        (--with-clif; clif must be public)
+#   CLIF_ENV_DIR=/opt/clif      where onboarding writes clif's .env.<net>  (--clif-env-dir)
 #   onboarding (opt-in): --onboard-rewards  --identity 0xOWNER  --recipient 0xADDR  --networks LIST(=songbird)  --import-existing
 #   (--inert is accepted as a deprecated no-op — inert is now the default)
 #   output: compact by default; --guided (or FWD_OUTPUT=guided) for the explanatory walk-through
-#   flags: --with-clif --no-start --no-build --production --dir DIR --ref REF --guided --reset-state --help
+#   flags: --no-start --no-build --production --dir DIR --ref REF --clif-env-dir DIR --guided --reset-state --help
 #   --reset-state: wipe the fwd state volume (+ backup) before starting — for a CLEAN
 #     reinstall. A fresh `rm -rf /opt/fwd` regenerates the master, so the OLD volume's
 #     wallets become undecryptable; the installer refuses to start on that mismatch and
@@ -45,9 +50,9 @@ FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
 # wrapper (which inherited the stale value): the wrapper then targeted a non-existent container →
 # silent restart no-op / hard force-recreate name-conflict. Tying project = container kills the class.)
 export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
-CLIF_REPO="${CLIF_REPO:-https://github.com/africanproofs/clif.git}"
-CLIF_REF="${CLIF_REF:-main}"
-WITH_CLIF=0
+# Where onboarding writes clif's per-network env files. clif is a SEPARATE deployment; the
+# installer never clones/builds/launches it — it only hands clif its generated config here.
+CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
 START=1
 BUILD=1
 MODE=dev
@@ -66,13 +71,14 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --with-clif)   WITH_CLIF=1 ;;
+    --with-clif)   log "--with-clif is removed — clif is now a separate deployment (clone clif + run its clifctl); accepted as a no-op" ;;
     --no-start)    START=0 ;;
     --no-build)    BUILD=0 ;;
     --production)  MODE=production ;;
     --dev)         MODE=dev ;;
     --dir)         shift; FWD_DIR="${1:?--dir needs a value}" ;;
     --ref)         shift; FWD_REF="${1:?--ref needs a value}" ;;
+    --clif-env-dir) shift; CLIF_ENV_DIR="${1:?--clif-env-dir needs a value}" ;;
     --onboard-rewards) ONBOARD_REWARDS=1 ;;
     --inert)           log "--inert is now the default (install ends inert); onboarding is opt-in via --onboard-rewards — accepted as a no-op" ;;
     --identity)        shift; IDENTITY="${1:?--identity needs a value}" ;;
@@ -117,22 +123,6 @@ if [ -n "$FWD_SHA" ]; then
   log "integrity pin ok ($FWD_SHA)"
 fi
 
-if [ "$WITH_CLIF" -eq 1 ]; then
-  CLIF_SRC="$FWD_DIR/clif"
-  if [ -d "$CLIF_SRC/.git" ]; then
-    git -C "$CLIF_SRC" fetch --depth 1 origin "$CLIF_REF" >/dev/null 2>&1 && git -C "$CLIF_SRC" checkout -q FETCH_HEAD || true
-  else
-    log "cloning clif $CLIF_REPO @ $CLIF_REF -> $CLIF_SRC"
-    git clone --depth 1 --branch "$CLIF_REF" "$CLIF_REPO" "$CLIF_SRC" 2>/dev/null \
-      || die "git clone failed: $CLIF_REPO (clif must be public for --with-clif)"
-  fi
-  # clif's compose service defs reference an env_file; compose validates it even
-  # for the (stopped) clif daemons. Seed a placeholder from .env.example so the
-  # merged compose parses — the operator fills in real values (NETWORK, the fwd
-  # caller tokens, wallet names) during onboarding before starting the daemons.
-  [ -f "$CLIF_SRC/.env" ] || { [ -f "$CLIF_SRC/.env.example" ] && cp "$CLIF_SRC/.env.example" "$CLIF_SRC/.env" && log "seeded placeholder $CLIF_SRC/.env (fill in during onboarding)"; }
-fi
-
 # --- 3. config: .env (admin key) + inert default-deny policy --------------
 # Co-located in the compose dir ($SRC), where docker-compose.yml resolves
 # `env_file: .env` and the `./config/*` mounts (gitignored — preserved across
@@ -170,29 +160,21 @@ fi
 # `docker compose` as the operator (uid 1000 on a single-user host). A root (sudo) install
 # leaves the whole tree root-owned, which breaks BOTH: the uid-1000 container can't write
 # (step 5: `docker run … master generate`) or read (runtime, ro) config/master.key +
-# policy.yaml, AND a no-sudo wrapper can't read $SRC/.env (FWD_ADMIN_KEY) or write
-# clif/.env.<net> during onboarding (→ `docker compose` fails with "no such service: fwd").
-# Hand the runtime files to uid 1000 so the stack is fully operable without re-sudoing each
-# wrapper; master.key stays 0600 (Core invariants #1/#17). No-op for a non-root install
-# (already owned). A multi-user host whose operator is not uid 1000 should operate a root
-# install via `sudo fwd …`, or install into a user-owned dir — see docs/one-command-install.md.
+# policy.yaml, AND a no-sudo wrapper can't read $SRC/.env (FWD_ADMIN_KEY). Hand the runtime
+# files to uid 1000 so the stack is fully operable without re-sudoing each wrapper; master.key
+# stays 0600 (Core invariants #1/#17). No-op for a non-root install (already owned). A
+# multi-user host whose operator is not uid 1000 should operate a root install via
+# `sudo fwd …`, or install into a user-owned dir — see docs/one-command-install.md.
 if [ "$(id -u)" = 0 ]; then
   chown -R 1000:1000 "$SRC/config" "$SRC/.env" 2>/dev/null || true
-  [ -d "$FWD_DIR/clif" ] && chown -R 1000:1000 "$FWD_DIR/clif" 2>/dev/null || true
 fi
 
-# --- 4. build the image from source --------------------------------------
+# --- 4. build the fwd image from source ----------------------------------
 COMPOSE="-f $SRC/docker-compose.yml"
-[ "$WITH_CLIF" -eq 1 ] && COMPOSE="$COMPOSE -f $SRC/docker-compose.clif.yml"
-export FWD_IMAGE_TAG FWD_CONTAINER CLIF_SRC="${FWD_DIR}/clif" CLIF_ENV="${FWD_DIR}/clif/.env"
+export FWD_IMAGE_TAG FWD_CONTAINER
 if [ "$BUILD" -eq 1 ]; then
-  log "building image(s) from source (this is the slow first step)"
-  # Every clif service is profile-gated (cli / per-network), so a bare `compose build`
-  # (no active profile) builds ONLY fwd. Add `--profile cli` under --with-clif so the
-  # shared clif image (clif:dev) is built too — the per-network daemons reuse it.
-  _build_prof=""
-  [ "$WITH_CLIF" -eq 1 ] && _build_prof="--profile cli"
-  ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE $_build_prof build ) || die "docker compose build failed"
+  log "building the fwd image from source (this is the slow first step)"
+  ( cd "$SRC" && env FWD_IMAGE_TAG="$FWD_IMAGE_TAG" docker compose $COMPOSE build ) || die "docker compose build failed"
 else
   log "--no-build: skipping image build"
 fi
@@ -220,25 +202,21 @@ fi
 if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   install -m 0755 "$SRC/install/fwd" "$FWD_BIN_DIR/fwd"
   install -m 0755 "$SRC/install/clifwd" "$FWD_BIN_DIR/clifwd"
-  install -m 0755 "$SRC/install/clif" "$FWD_BIN_DIR/clif"
   # Bake the compose-bundle dir ($SRC) into the wrappers' FWD_DIR default
   # (`fwd` for compose ops; `clifwd`/`fwd` for `onboard` routing -> $SRC/install/onboard).
-  for _w in fwd clifwd clif; do
+  for _w in fwd clifwd; do
     sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
-  # clif's source + per-network .env live at the install ROOT ($FWD_DIR/clif),
-  # a SIBLING of the compose dir ($SRC) — bake the absolute path so the wrappers
-  # resolve clif's build context + env_file correctly (they run compose from $SRC).
-  for _w in fwd clifwd clif; do
-    sed -i "s#\${CLIF_SRC:-/opt/fwd/clif}#\${CLIF_SRC:-$FWD_DIR/clif}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
-  done
-  # Bake the install-time container name so a custom-FWD_CONTAINER install's wrappers
-  # target the right container (clifwd `docker exec`, `fwd onboard`). Default `fwd`
-  # bakes `${FWD_CONTAINER:-fwd}` -> identical (no-op); a custom value persists.
-  for _w in fwd clifwd clif; do
+  # Bake the install-time container name so a custom-FWD_CONTAINER install's wrappers target
+  # the right container (clifwd `docker exec`, `fwd onboard`). Default `fwd` is a no-op.
+  for _w in fwd clifwd; do
     sed -i "s#\${FWD_CONTAINER:-fwd}#\${FWD_CONTAINER:-$FWD_CONTAINER}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
-  log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd,clif}"
+  # Bake the clif-env-dir so a custom --clif-env-dir persists into `fwd onboard`'s clif env writes.
+  for _w in fwd clifwd; do
+    sed -i "s#\${CLIF_ENV_DIR:-/opt/clif}#\${CLIF_ENV_DIR:-$CLIF_ENV_DIR}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
+  done
+  log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd}"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
 fi
@@ -299,7 +277,7 @@ if [ "$ONBOARD" -eq 1 ]; then
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
   [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
   [ "$OUTPUT" = guided ] && set -- "$@" --guided
-  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" CLIF_SRC="$CLIF_SRC" CLIF_ENV="$CLIF_ENV" "$SRC/install/onboard" "$@"; then
+  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" CLIF_ENV_DIR="$CLIF_ENV_DIR" "$SRC/install/onboard" "$@"; then
     :
   else
     log "onboarding did not finish — re-run: sudo fwd onboard rewards --identity 0xOWNER --recipient 0xRECIP --networks $ONB_NETWORKS"
@@ -307,27 +285,25 @@ if [ "$ONBOARD" -eq 1 ]; then
 elif [ "$OUTPUT" = guided ]; then
   printf '\n\033[1;32mfwd is installed.\033[0m  Runtime: %s.\n' \
     "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
-  _clif_note=""
-  [ "$WITH_CLIF" -eq 1 ] && _clif_note="  (with --with-clif: onboarding also writes clif's per-network .env files and seeds each sender's nonce from chain truth via clif; then: sudo fwd start)"
   cat <<EOF
 
 fwd is installed and running ($( [ "$START" -eq 1 ] && echo 'inert: signs NOTHING — empty default-deny policy, zero wallets' || echo 'staged, not started' )).
-Custody is not initialized. To set up reward signing + fee claiming:
+fwd is the zero-egress SIGNER only. To set up reward signing + fee claiming:
 
   sudo fwd onboard rewards --identity 0xYOUR_IDENTITY --recipient 0xYOUR_RECIPIENT --networks $ONB_NETWORKS
-$_clif_note
-(idempotent; narrates each step; ends with the on-chain authorization you do offline.)
+
+(idempotent; narrates each step; mints clif caller tokens + writes clif's per-network env to
+$CLIF_ENV_DIR; ends with the on-chain authorization you do offline.)
 Migrating an existing provider? add --import-existing.
-FSP signing needs your key registered as a voter on the chosen network (Songbird/Flare for AP;
-coston2 only if you are a registered Coston2 voter). Full detail: docs/one-command-install.md
+
+The automation (reward claiming + FSP signing) is a SEPARATE clif deployment — clone clif,
+then run its \`clifctl up <net>\`. fwd never launches clif. FSP signing needs your key
+registered as a voter on the chosen network. Full detail: docs/one-command-install.md
 EOF
 else
-  printf '\nfwd installed\n'
+  printf '\nfwd installed (zero-egress signer only)\n'
   printf 'fwd: %s\n' "$( [ "$START" -eq 1 ] && echo healthy || echo 'staged (not started)' )"
-  if [ "$WITH_CLIF" -eq 1 ] && [ "$BUILD" -eq 1 ]; then printf 'clif: built\n'
-  elif [ "$WITH_CLIF" -eq 1 ]; then printf 'clif: fetched (not built; --no-build)\n'
-  else printf 'clif: not installed (--with-clif to add)\n'; fi
-  printf 'clif daemons: not started by installer\n'
   printf '\nnext:\n  sudo fwd onboard rewards --identity 0x… --recipient 0x… --networks %s\n' "$ONB_NETWORKS"
-  printf '  (idempotent; --import-existing to migrate; --guided for the full walk-through)\n'
+  printf '  (idempotent; --import-existing to migrate; writes clif env to %s)\n' "$CLIF_ENV_DIR"
+  printf '  then deploy clif separately: clone clif + clifctl up %s\n' "$ONB_NETWORKS"
 fi

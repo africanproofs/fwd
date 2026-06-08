@@ -909,6 +909,20 @@ the production cutover (live claim/FSP through migrated clif) remains operator-g
 
 **When to revisit.** If a future consumer needs predicate matching on a specific array/tuple element, replace the coarse `allow_unconstrained_args` opt-in with element-level predicates rather than widening the gate.
 
+## D23. Deployment-topology amendment: fwd is fwd-only; clif is a separate deployment (v1.1.0a92)
+
+**Status:** Accepted — operator-directed, 2026-06-08. A constitutional amendment to the deployment doctrine (per D17, operator-authorized) bundled with the current-state-doc reconciliation it requires (Core #18).
+
+**Context.** Through a91 the clif consumer was *bundled into fwd's deployment*: a `docker-compose.clif.yml` overlay merged clif services into the **fwd compose project**, `fwd start <net>` launched `clif-epoch-<net>`, `--with-clif` cloned/built clif under `/opt/fwd/clif`, and a bundled `clif` host wrapper ran one-shots in fwd's project. The operator observed this **defeats the architectural cleanness of fwd's zero-egress**: the `egress` network lived *in the fwd project* (`fwd_egress`) and an egress-having consumer ran *as part of* `fwd`'s compose project — intermingling the signer with the consumer the zero-egress boundary exists to separate.
+
+**Decision.** fwd's deployment is **fwd-only** — project `fwd` = `fwd` + `litestream` on the `internal: true` callers network, with **no clif service and no egress network in the project**. The clif consumer (reward claiming + FSP signing) is a **separate deployment** — its own compose project (`clif`) with its OWN `egress` bridge that joins `fwd-callers` as an `external` network to reach `fwd:8080`. fwd never clones, builds, launches, or co-hosts clif; clif is managed by its own `clifctl` (a `-ctl` control tool — up/down/status/logs/run — NOT a `-d` daemon, since it *controls* the daemon containers). The one legitimate coupling is **provisioning**: `fwd onboard` (fwd-admin) mints clif's caller tokens and writes its per-network `.env.<net>` into `--clif-env-dir` (default `/opt/clif`) — config handoff, not deployment bundling. Because fwd is zero-egress, onboard **never invokes clif**: on-chain preflight and seeding an *imported* wallet's nonce from chain truth become operator steps via the separate clif (`clifctl run <net> preflight` / `chain nonce`); onboard seeds *fresh* (generated) wallets' nonces to 0 with no chain read.
+
+**Amends.** CLAUDE.md § "What FWD Deliberately IS NOT" (new bullet — fwd's compose is fwd-only; it does not deploy consumers) + § Scope current-state line. Operator-authorized per D17.
+
+**Bounded surface.** Code (`install/` only): `install.sh` (drop `--with-clif`, add `--clif-env-dir`, fwd-only build/start/wrappers), `install/fwd` (`start` fwd-only; `<net>` → `clifctl up`), `install/onboard` (remove preflight + chain-reading `reconcile_nonce`/`read_chain_nonce`; add `seed_nonce_or_defer`; unconditional env-write → `${CLIF_ENV_DIR}/.env.<net>`), `install/clifwd` (export `CLIF_ENV_DIR`); **deleted** `docker-compose.clif.yml` + `install/clif`. Current-state docs rewritten to the new present (Core #18): `CLAUDE.md`, `README.md`, `docs/{one-command-install,production-setup,dependencies,architecture,restore-runbook}.md`. No daemon/signing-path change (`src/` untouched).
+
+**Migration (operator-gated).** The live bundled instance keeps working on its installed wrappers until the next gated redeploy: reinstall fwd fresh (fwd-only) → `fwd onboard --clif-env-dir /opt/clif` → deploy clif at `/opt/clif` (its own installer + `clifctl`) → `clifctl up <net>`.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

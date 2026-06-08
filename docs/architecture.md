@@ -46,7 +46,7 @@ sign-only signer (custody = sealed local master; clients broadcast).
    via POST /v1/transactions/{id}/broadcast-result + /receipt.
 ```
 
-The base signer is two Docker services and two named volumes. Backups go to a local `backup` volume; off-host transport is the operator's job. The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). The `litestream` sidecar is pinned **`network_mode: none`** — it replicates over the shared `fwd-state`/`backup` volumes (`type: file`) and needs no network, so the base stack is egress-free. With `--with-clif`, `docker-compose.clif.yml` adds keyless clif one-shots and per-network `clif-epoch-<net>` daemons; those clif services are dual-homed for RPC/broadcast, but `fwd` remains zero-egress.
+The base signer is two Docker services and two named volumes. Backups go to a local `backup` volume; off-host transport is the operator's job. The `fwd` daemon attaches to exactly one network — `fwd-callers` (`internal: true`). The `litestream` sidecar is pinned **`network_mode: none`** — it replicates over the shared `fwd-state`/`backup` volumes (`type: file`) and needs no network, so the stack is egress-free. **The fwd compose project is fwd-only** — no clif service and no egress network in it. The clif consumer (claiming + FSP signing) deploys as a SEPARATE compose project (project `clif`) with its OWN `egress` bridge that joins `fwd-callers` as an `external` network; fwd never launches or co-hosts it (clif's `clifctl` manages it), so the fwd project stays purely internal and zero-egress.
 
 | Service | Image | Role |
 |---|---|---|

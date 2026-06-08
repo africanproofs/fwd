@@ -12,7 +12,7 @@
 #
 # NOTE: file paths (e.g. --privkey-file) are evaluated INSIDE the container.
 #
-# Stack onboarding (fwd custody + clif chain reads + clif env config) is a
+# Stack onboarding (fwd custody provisioning + writing clif's env config) is a
 # HOST-level operation. The canonical entry point is `fwd onboard`; `clifwd onboard`
 # is a compatibility alias that routes to the same host orchestrator below. Neither
 # the in-container CLI nor a compose service can orchestrate `docker compose restart`
@@ -24,8 +24,9 @@ export FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
 # Pin project = container so onboard (routed below) operates the installer's project,
 # immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
 export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
-export CLIF_SRC="${CLIF_SRC:-/opt/fwd/clif}"
-export CLIF_ENV="${CLIF_ENV:-$CLIF_SRC/.env}"
+# onboard (routed below) writes clif's per-network env here. clif is a SEPARATE deployment;
+# clifwd/onboard never invoke clif — they provision fwd custody and hand clif its env.
+export CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
 
 if [ "${1:-}" = "onboard" ]; then
   shift
