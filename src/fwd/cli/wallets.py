@@ -12,6 +12,7 @@ import  — IN-PROCESS per D12 (file-based privkey; never traverses HTTP).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path  # noqa: TC003
 
@@ -71,7 +72,13 @@ def create(
 
 
 @app.command(name="list")
-def list_command() -> None:
+def list_command(
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the wallet rows as JSON instead of the human table.",
+    ),
+) -> None:
     """List all wallets fwd custodies (admin-only HTTP).
 
     NOTE: the caller-facing GET /v1/wallets endpoint is Phase 7+ (needs
@@ -96,6 +103,12 @@ def list_command() -> None:
     if r.status_code != 200:
         typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
         raise typer.Exit(code=1)
+
+    if json_out:
+        # WalletSummary (api/wallets.py) is public-safe — name/address/policy_path/
+        # created_at only, NEVER privkey_ciphertext or the master key. Serialize raw.
+        typer.echo(json.dumps(r.json()))
+        return
 
     body = r.json()
     if not body["wallets"]:

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fwd"
-version = "1.1.0a96"
+version = "1.1.0a97"
 description = "Flare Wallet Daemon — policy-gated signing service for AP backend keys"
 authors = ["African Proofs <khosimorafo@yahoo.com>"]
 readme = "README.md"
@@ -40,6 +40,7 @@ types-pyyaml = "^6.0"
 
 [tool.poetry.scripts]
 clifwd = "fwd.cli.main:app"
+fwdctl = "fwd.cli.main:app"
 
 [tool.ruff]
 line-length = 100

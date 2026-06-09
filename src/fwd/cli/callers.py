@@ -69,7 +69,13 @@ def create(
 
 
 @app.command(name="list")
-def list_command() -> None:
+def list_command(
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the raw /v1/admin/callers JSON instead of the human table.",
+    ),
+) -> None:
     """List all callers (active + revoked)."""
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
     try:
@@ -81,6 +87,12 @@ def list_command() -> None:
     if r.status_code != 200:
         typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
         raise typer.Exit(code=1)
+
+    if json_out:
+        # The /v1/admin/callers response is already JSON and CallerSummary
+        # (api/callers.py) carries NO api_key / api_key_hash — emit it raw.
+        typer.echo(r.text)
+        return
 
     body = r.json()
     if not body["callers"]:

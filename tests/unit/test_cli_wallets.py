@@ -13,6 +13,7 @@ Closes audit deferral F6.3 (CLI test coverage) for wallets commands.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -199,6 +200,39 @@ def test_wallets_list_unreachable_exits_2(monkeypatch: pytest.MonkeyPatch) -> No
     ):
         result = runner.invoke(app, ["wallets", "list"])
     assert result.exit_code == 2
+
+
+def test_wallets_list_json_is_parseable_and_secretless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--json serializes the wallet rows: parseable, address only, no secret.
+
+    WalletSummary is public-safe — name/address/policy_path/created_at only,
+    NEVER privkey_ciphertext, seal:, the master key, or any hash (Core #12).
+    """
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    fake = MagicMock(
+        status_code=200,
+        json=lambda: {
+            "wallets": [
+                {
+                    "name": "alice",
+                    "address": "0x" + "aa" * 20,
+                    "policy_path": "policies/alice.yaml",
+                    "created_at": "2026-05-12T00:00:00+00:00",
+                },
+            ]
+        },
+    )
+    with patch("fwd.cli.wallets.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["wallets", "list", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["wallets"][0]["name"] == "alice"
+    assert parsed["wallets"][0]["address"].startswith("0x")
+    blob = result.stdout.lower()
+    for forbidden in ("privkey", "ciphertext", "seal:", "master", "hash"):
+        assert forbidden not in blob
 
 
 # ---------------------------------------------------------------------------

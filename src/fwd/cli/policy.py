@@ -12,6 +12,7 @@ The actual checks live in app/policy_check.py (cli -> app layer boundary).
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -39,6 +40,11 @@ def validate(
             "fresh host before the daemon/DB exists."
         ),
     ),
+    json_out: bool = typer.Option(  # noqa: B008
+        False,
+        "--json",
+        help="Emit the validation result as JSON instead of human text (exit codes unchanged).",
+    ),
 ) -> None:
     """Validate a policy.yaml before deploying it.
 
@@ -57,38 +63,84 @@ def validate(
     try:
         pol = load_policy_schema(path)
     except PolicyLoadError as exc:
-        typer.echo(f"INVALID (schema): {exc}", err=True)
+        if json_out:
+            typer.echo(json.dumps({"schema_ok": False, "error": str(exc), "valid": False}))
+        else:
+            typer.echo(f"INVALID (schema): {exc}", err=True)
         raise typer.Exit(code=2) from exc
 
-    typer.echo(
-        f"schema OK — version={pol.version} callers={len(pol.callers)} "
-        f"permissions={len(pol.permissions)} "
-        f"wallet_constraints={len(pol.wallet_constraints)} "
-        f"fsp_permissions={len(pol.fsp_permissions)}"
-    )
+    summary = {
+        "schema_ok": True,
+        "version": pol.version,
+        "callers": len(pol.callers),
+        "permissions": len(pol.permissions),
+        "wallet_constraints": len(pol.wallet_constraints),
+        "fsp_permissions": len(pol.fsp_permissions),
+    }
+    if not json_out:
+        typer.echo(
+            f"schema OK — version={pol.version} callers={len(pol.callers)} "
+            f"permissions={len(pol.permissions)} "
+            f"wallet_constraints={len(pol.wallet_constraints)} "
+            f"fsp_permissions={len(pol.fsp_permissions)}"
+        )
 
     if schema_only:
-        typer.echo("VALID (schema-only)")
+        if json_out:
+            typer.echo(json.dumps({**summary, "consistency_checked": False, "valid": True}))
+        else:
+            typer.echo("VALID (schema-only)")
         raise typer.Exit(code=0)
 
     # 2. Consistency vs the live DB + ABI registry (the startup check).
     try:
         errors = asyncio.run(consistency_errors(pol, Path(s.fwd_abis_dir)))
     except Exception as exc:  # noqa: BLE001 — surface DB/registry access failures clearly
-        typer.echo(
-            f"could not run consistency check ({exc}); "
-            "use --schema-only on a host without a daemon/DB yet",
-            err=True,
-        )
+        if json_out:
+            typer.echo(
+                json.dumps(
+                    {
+                        **summary,
+                        "consistency_checked": False,
+                        "error": f"could not run consistency check: {exc}",
+                        "valid": False,
+                    }
+                )
+            )
+        else:
+            typer.echo(
+                f"could not run consistency check ({exc}); "
+                "use --schema-only on a host without a daemon/DB yet",
+                err=True,
+            )
         raise typer.Exit(code=2) from exc
 
     if errors:
-        for e in errors:
-            typer.echo(f"  - {e}", err=True)
-        typer.echo(f"INVALID — {len(errors)} consistency error(s)", err=True)
+        if json_out:
+            typer.echo(
+                json.dumps(
+                    {
+                        **summary,
+                        "consistency_checked": True,
+                        "consistency_errors": list(errors),
+                        "valid": False,
+                    }
+                )
+            )
+        else:
+            for e in errors:
+                typer.echo(f"  - {e}", err=True)
+            typer.echo(f"INVALID — {len(errors)} consistency error(s)", err=True)
         raise typer.Exit(code=2)
 
-    typer.echo("VALID (schema + consistency)")
+    if json_out:
+        typer.echo(
+            json.dumps(
+                {**summary, "consistency_checked": True, "consistency_errors": [], "valid": True}
+            )
+        )
+    else:
+        typer.echo("VALID (schema + consistency)")
 
 
 @app.command()

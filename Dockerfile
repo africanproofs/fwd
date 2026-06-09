@@ -73,10 +73,13 @@ COPY config/networks.yaml /app/config/networks.yaml
 # D16 promises `docker exec fwd clifwd audit verify` as the canonical
 # walker invocation, but `poetry install --no-root` does not install the
 # fwd package, so the pyproject `clifwd` console-script is never created.
-# Ship a thin shim so the documented command resolves on PATH.
+# Ship a thin shim so the documented command resolves on PATH. `fwdctl` is an
+# invocation alias (symlink) for the identical app — both resolve on PATH and
+# exec the same `fwd.cli.main:app`.
 RUN printf '#!/bin/sh\nexec python -c "from fwd.cli.main import app; app()" "$@"\n' \
         > /usr/local/bin/clifwd \
-    && chmod 755 /usr/local/bin/clifwd
+    && chmod 755 /usr/local/bin/clifwd \
+    && ln -s clifwd /usr/local/bin/fwdctl
 
 ENV PYTHONPATH=/app/src
 

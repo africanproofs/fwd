@@ -923,6 +923,18 @@ the production cutover (live claim/FSP through migrated clif) remains operator-g
 
 **Migration (operator-gated).** The live bundled instance keeps working on its installed wrappers until the next gated redeploy: reinstall fwd fresh (fwd-only) → `fwd onboard --clif-env-dir /opt/clif` → deploy clif at `/opt/clif` (its own installer + `clifctl`) → `clifctl up <net>`.
 
+## D24. `fwdctl` invocation alias + `--json` read forms (v1.1.0a97)
+
+**Status:** Accepted — operator-authorized 2026-06-09 (the "opportunistic" Phase-1 band of the cross-project flaresystems `docs/adr/0002-defer-fwd-bundle-grant-framework.md`). Feature ship (additive).
+
+**Context.** ADR-0002 defers the bundle/grant coordination framework AND the full `clifwd`→`fwdctl` rename (~250 occurrences) until consumer #2 forces them. Two small, additive, behaviour-preserving conveniences do not need to wait: a working `fwdctl` invocation name, and a machine-scrapable `--json` form on the existing read-only list/show commands (mirrors clif's `--json` surface).
+
+**Decision.** Add `fwdctl` as an **invocation alias** for the admin CLI, leaving `clifwd` and every existing reference byte-unchanged: a second `[tool.poetry.scripts]` console-script (`fwdctl = "fwd.cli.main:app"`, `clifwd` kept), a Dockerfile in-container symlink (`ln -s clifwd /usr/local/bin/fwdctl` — resolves independently of the console-script, which only enables `poetry run fwdctl`), and a byte-faithful `install/fwdctl` host wrapper (copy of `install/clifwd`; only the header lead + the final `docker exec … fwdctl` delegation token differ; the FWD_DIR/FWD_CONTAINER/COMPOSE_PROJECT_NAME/CLIF_ENV_DIR exports + the `onboard` routing block are verbatim) installed alongside `clifwd` by `install.sh`. The Typer program name stays `clifwd` by design (flipping it is the deferred full-rename ship). Separately, add `--json` to the existing **read-only** commands `callers list` (raw `/v1/admin/callers` body — `CallerSummary` excludes the key/hash), `wallets list` (`WalletSummary` rows — public-safe, no privkey/ciphertext/master), and `policy validate` (structured result — schema_ok/version/counts/consistency_errors/valid; exit codes unchanged). No new endpoint, no `capability_id`/coordinator surface, no `--json` on any mutating command, no secret field in any `--json` output (Core #12).
+
+**Bounded surface.** Implementer (accepted, no corrections): `Dockerfile` (symlink), `install/install.sh` (install + bake `fwdctl`), `install/fwdctl` (new), `src/fwd/cli/{callers,wallets,policy}.py` (`--json`), four `tests/unit/` files (alias wiring + per-command `--json` parseable-and-secretless). Reviewer: `pyproject.toml` (`fwdctl` console-script + version bump), `src/fwd/version.py`, this D-record, `docs/history/1.1.0a97-*.md` + README index line, one CLAUDE.md § Scope clause noting the alias. No daemon/signing-path change.
+
+**Deferred (unchanged by this ship, ADR-0002).** The full `clifwd`→`fwdctl` rename (existing docs/refs/Typer name) and the bundle/grant framework (`provider` coordinator, `consumer-contract-v1`, deploy manifest) remain deferred until consumer #2.
+
 ## Decisions explicitly deferred
 
 These were considered during v0.1.0 design but are intentionally not decided yet — choices are made when the relevant phase lands.

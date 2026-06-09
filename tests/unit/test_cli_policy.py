@@ -10,6 +10,7 @@ plumbing (schema gate, asyncio/session wiring, exit codes).
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -118,6 +119,52 @@ def test_validate_schema_invalid_missing_chains(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# --json forms (parseable JSON, no secret field, exit codes unchanged)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_schema_only_json_ok(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "policy",
+            "validate",
+            "--policy",
+            str(_write(tmp_path, _GOOD_POLICY)),
+            "--schema-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.stdout)
+    assert parsed["schema_ok"] is True
+    assert parsed["valid"] is True
+    assert parsed["consistency_checked"] is False
+    assert parsed["version"] == 1
+    # A validation result carries counts + verdict only — never a key or hash.
+    assert "api_key" not in result.stdout
+    assert "hash" not in result.stdout.lower()
+
+
+def test_validate_schema_invalid_json(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "policy",
+            "validate",
+            "--policy",
+            str(_write(tmp_path, _BAD_SCHEMA_POLICY)),
+            "--schema-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 2
+    parsed = json.loads(result.stdout)
+    assert parsed["schema_ok"] is False
+    assert parsed["valid"] is False
+
+
+# ---------------------------------------------------------------------------
 # full mode (schema + consistency) against a tmp DB
 # ---------------------------------------------------------------------------
 
@@ -177,6 +224,32 @@ def test_validate_full_unknown_abi_fails(tmp_path: Path, monkeypatch: pytest.Mon
         assert result.exit_code == 2, result.output
         assert "no_such_abi" in result.output
         assert "consistency error" in result.output
+    finally:
+        from fwd.infra import db as db_module
+        from fwd.settings import get_settings
+
+        get_settings.cache_clear()
+        db_module.get_engine.cache_clear()
+        db_module._session_factory.cache_clear()
+
+
+def test_validate_full_consistent_json_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _make_db(tmp_path)
+    _full_mode_env(monkeypatch, db)
+    try:
+        result = runner.invoke(
+            app,
+            ["policy", "validate", "--policy", str(_write(tmp_path, _GOOD_POLICY)), "--json"],
+        )
+        assert result.exit_code == 0, result.output
+        parsed = json.loads(result.stdout)
+        assert parsed["schema_ok"] is True
+        assert parsed["consistency_checked"] is True
+        assert parsed["consistency_errors"] == []
+        assert parsed["valid"] is True
+        assert "hash" not in result.stdout.lower()
     finally:
         from fwd.infra import db as db_module
         from fwd.settings import get_settings

@@ -202,21 +202,23 @@ fi
 if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   install -m 0755 "$SRC/install/fwd" "$FWD_BIN_DIR/fwd"
   install -m 0755 "$SRC/install/clifwd" "$FWD_BIN_DIR/clifwd"
+  # fwdctl is an invocation alias of clifwd (same in-container app); install it too.
+  install -m 0755 "$SRC/install/fwdctl" "$FWD_BIN_DIR/fwdctl"
   # Bake the compose-bundle dir ($SRC) into the wrappers' FWD_DIR default
-  # (`fwd` for compose ops; `clifwd`/`fwd` for `onboard` routing -> $SRC/install/onboard).
-  for _w in fwd clifwd; do
+  # (`fwd` for compose ops; `clifwd`/`fwdctl`/`fwd` for `onboard` routing -> $SRC/install/onboard).
+  for _w in fwd clifwd fwdctl; do
     sed -i "s#\${FWD_DIR:-/opt/fwd}#\${FWD_DIR:-$SRC}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
   # Bake the install-time container name so a custom-FWD_CONTAINER install's wrappers target
-  # the right container (clifwd `docker exec`, `fwd onboard`). Default `fwd` is a no-op.
-  for _w in fwd clifwd; do
+  # the right container (clifwd/fwdctl `docker exec`, `fwd onboard`). Default `fwd` is a no-op.
+  for _w in fwd clifwd fwdctl; do
     sed -i "s#\${FWD_CONTAINER:-fwd}#\${FWD_CONTAINER:-$FWD_CONTAINER}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
   # Bake the clif-env-dir so a custom --clif-env-dir persists into `fwd onboard`'s clif env writes.
-  for _w in fwd clifwd; do
+  for _w in fwd clifwd fwdctl; do
     sed -i "s#\${CLIF_ENV_DIR:-/opt/clif}#\${CLIF_ENV_DIR:-$CLIF_ENV_DIR}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
-  log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd}"
+  log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd,fwdctl}"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
 fi

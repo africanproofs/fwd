@@ -8,6 +8,7 @@ Closes audit deferral F6.3 (CLI test coverage) for callers commands.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -145,6 +146,35 @@ def test_callers_list_missing_admin_key_exits_2(monkeypatch: pytest.MonkeyPatch)
         result = runner.invoke(app, ["callers", "list"])
     assert result.exit_code == 2
     mock_get.assert_not_called()
+
+
+def test_callers_list_json_is_parseable_and_secretless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--json emits the raw /v1/admin/callers JSON: parseable, no key/hash.
+
+    api_key_prefix is the public prefix and IS allowed; the full api_key and
+    any *hash* field are NEVER present (CallerSummary excludes them, Core #12).
+    """
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    raw = (
+        '{"callers": [{"name": "alice", "api_key_prefix": "fwd_live", '
+        '"policy_path": "policies/a.yaml", '
+        '"created_at": "2026-05-12T00:00:00+00:00", "revoked_at": null}]}'
+    )
+    fake = MagicMock(status_code=200, text=raw, json=lambda: json.loads(raw))
+    with patch("fwd.cli.callers.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["callers", "list", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["callers"][0]["name"] == "alice"
+    assert parsed["callers"][0]["api_key_prefix"] == "fwd_live"
+    # No secret: full key field absent, no hash anywhere (prefix is allowed).
+    assert '"api_key"' not in result.stdout
+    assert "hash" not in result.stdout.lower()
+    for c in parsed["callers"]:
+        assert "api_key" not in c
+        assert not any("hash" in k.lower() for k in c)
 
 
 # ---------------------------------------------------------------------------
