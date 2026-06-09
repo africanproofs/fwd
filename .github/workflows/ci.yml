@@ -1,0 +1,42 @@
+name: ci
+
+# CI for the fwd custody daemon. fwd lives on GitHub, so this is GitHub Actions —
+# the repo's .gitlab-ci.yml is inert on a github remote. Mirrors that spec: ruff
+# (check + format), mypy --strict, the full pytest suite (unit + integration; the
+# live-Coston2 test is env-gated and skips), and a docker build-from-source.
+# Custody daemon ships from main — main must stay green.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System build deps (coincurve / secp256k1)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential libffi-dev libsecp256k1-dev pkg-config
+      - name: Install Poetry
+        run: pipx install poetry==1.8.5
+      - name: Install dependencies
+        run: poetry install --with dev
+      - name: Ruff (lint)
+        run: poetry run ruff check .
+      - name: Ruff (format)
+        run: poetry run ruff format --check .
+      - name: Mypy (strict)
+        run: poetry run mypy --strict src/
+      - name: Pytest (unit + integration)
+        run: poetry run pytest -q tests/
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Docker build (verifies build-from-source)
+        run: docker build -t fwd:ci .

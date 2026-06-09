@@ -11,21 +11,36 @@ for the onboarding wizard's mechanics, see its "Reward onboarding" section.
 
 ## 1. Install fwd (the signer), inert
 
+Until `get.proofs.africa` hosting lands (Phase-1 pending), clone the public source and run the
+installer directly:
+
 ```sh
-curl -sfL https://get.proofs.africa/fwd | sudo sh -
+git clone https://github.com/africanproofs/fwd.git
+sudo sh fwd/install/install.sh
 ```
 
-Until `get.proofs.africa` hosting lands (Phase-1 pending), clone the public source and run the
-installer directly — identical effect:
+When the hosted redirect is live, the equivalent one-liner is:
 
 ```sh
-git clone https://github.com/africanproofs/fwd.git && sudo sh fwd/install/install.sh
+curl -sfL https://get.proofs.africa/fwd | sudo sh -
 ```
 
 This builds `fwd`, installs the host wrappers (`fwd`, `clifwd`), starts **only `fwd` +
 `litestream`**, and leaves custody **inert** (empty default-deny policy, zero wallets, signs
 nothing). It is **fwd-only** — the clif consumer is a separate deployment (§6). Output is a
 compact cockpit by default; add `--guided` (or `FWD_OUTPUT=guided`) for the first-timer walk-through.
+
+**Pin a reproducible build (recommended for production).** The installer builds `FWD_REF`,
+which defaults to `main`. `main` is CI-gated (GitHub Actions: ruff + mypy --strict + the full
+test suite + docker build on every push), but for a reproducible, auditable production install
+pin a tagged release instead:
+
+```sh
+sudo FWD_REF=v1.1.0a96 sh fwd/install/install.sh
+```
+
+Tags are cut on a verified-green `main` (latest: `v1.1.0a96`). `main` is the rolling dev target;
+a pinned tag is what a production host should build.
 
 ## 2. Run reward onboarding — canary first
 

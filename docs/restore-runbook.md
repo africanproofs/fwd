@@ -241,3 +241,39 @@ On a throwaway host, execute the "If The Master Key Is Lost" path end to end (re
 on-chain re-auth from the offline identity → fund → Songbird rehearsal) and confirm a
 rehearsal claim succeeds with the regenerated wallets. This proves the unrecoverable-key
 path is survivable, not just documented.
+
+## FSP signing-policy key — compromise / rotation
+
+The FSP signing-policy key (`fsp-signing-<net>`) is the registered voter key. It signs
+detached FSP votes; a compromise lets an attacker produce valid FSP signatures **until
+detected and the key is rotated + re-registered** (Core #17 — there is no on-chain spend
+to gate it, so the audit log is the detection surface). Have this procedure ready; the
+detection-to-rotation window is the exposure.
+
+**Detect.** Watch the hash-chained audit log for FSP signatures you did not initiate:
+`clifwd audit tail -n 200` / `clifwd audit verify` (tamper-evidence). A `fsp-sign-message`
+row for an epoch/messageHash your own daemon did not drive, or a `RewardsSigned` /
+`UptimeVoteSigned` on-chain event from your signing-policy address at a time your daemon
+was idle, is the signal.
+
+**Contain (immediately).**
+1. **Revoke the clif FSP caller token** so the daemon path can no longer reach the key:
+   `clifwd callers revoke <fsp-sign-caller>` (and the submit caller). A new token is minted
+   on resume.
+2. Stop the clif FSP daemon: `clifctl down <net>` (the separate clif deployment).
+
+**Rotate.**
+3. Generate a new FSP signing key in fwd: `clifwd wallets create fsp-signing-<net>-new`
+   (note its address) — or import a fresh externally-generated key with
+   `clifwd wallets import … --expected-address … --shred-source`.
+4. **Re-register on-chain** from the offline identity: update the signing-policy / voter
+   registration so the FSM recognizes the NEW address as your voter (the same registration
+   that made the original key an accepted voter — see the EntityManager/voter registration
+   used at onboarding; `clif preflight` shows the registered identity + signing-policy
+   address). Acceptance is proven the same way as a96: a `RewardsSigned` event from the new
+   address that finalizes.
+5. Re-mint the clif caller token(s), rewrite `/opt/clif/.env.<net>` (or re-run
+   `fwd onboard … --import-existing`), reconcile nonces, then `clifctl up <net>`.
+
+**Verify.** `clifwd audit verify` green; a Songbird rehearsal FSP sign + a finalized
+`RewardsSigned` from the NEW address before resuming Flare.
