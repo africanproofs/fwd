@@ -128,9 +128,10 @@ clifctl run <net> <args…>     # one-shot manual ops: claim / fsp / preflight /
 ```
 `clifctl up <net>` brings up that network's single **epoch sign-and-claim** daemon
 (`clif-epoch-<net>`): optional uptime signing, reward-publication polling, reward signing,
-finalization polling, and the epoch claim in one state machine. It signs, so
-`FSP_AUTO_ENABLED=true` must be set in that network's `/opt/clif/.env.<net>`;
-`UPTIME_AUTO_ENABLED=true` additionally signs uptime votes. Each network reads its own
+finalization polling, and the epoch claim in one state machine. It signs;
+`fwd onboard` writes `FSP_AUTO_ENABLED=true` into that network's `/opt/clif/.env.<net>`
+**by default** (set it `false` to keep the daemon idle — the `clifctl up <net>` bring-up
+is the real gate); `UPTIME_AUTO_ENABLED=true` additionally signs uptime votes. Each network reads its own
 `.env.<net>`. The clif project joins fwd's `fwd-callers` network (external) to reach
 `fwd:8080` and has its own `egress` bridge — fwd never co-hosts it.
 

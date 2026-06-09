@@ -58,11 +58,15 @@ systems will collide on nonces.
 
 The automation is a **separate clif deployment** — its own compose project with
 egress, joining fwd's internal callers network as an external network. fwd never
-launches it. Clone clif and use its `clifctl`. After onboarding + on-chain
-authorization + funding + a manual Songbird rehearsal, enable automation in
-`/opt/clif/.env.songbird`:
+launches it. Clone clif and use its `clifctl`. `fwd onboard` writes
+`FSP_AUTO_ENABLED=true` into `/opt/clif/.env.<net>` **by default** — the onboard
+(and the `clifctl up <net>` bring-up) is the gate, not a flag you set by hand. So
+after onboarding + on-chain authorization + funding + a manual Songbird rehearsal,
+you just bring the daemon up. To keep a network idle (e.g. before you rehearse),
+set `FSP_AUTO_ENABLED=false` in `/opt/clif/.env.<net>`:
 
 ```sh
+# written =true by default by `fwd onboard`; set =false to keep the daemon idle
 FSP_AUTO_ENABLED=true
 # optional:
 # UPTIME_AUTO_ENABLED=true

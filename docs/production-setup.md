@@ -90,11 +90,14 @@ The automation is a **separate clif deployment** (its own compose project + egre
 fwd's callers network). Clone clif and use its `clifctl` — fwd never launches it. One
 **epoch-anchored daemon per network** sequences the whole lifecycle per reward epoch (optional
 uptime sign → wait → reward-publication poll → reward sign → finalization poll → claim that
-epoch → idle). It SIGNS, so it is hard-off by default. Set this in `/opt/clif/.env.songbird`
-(clif `epoch run` refuses + exits when it is false):
+epoch → idle). It SIGNS — but the GATE is the bring-up (`clifctl up <net>`), not this
+flag: `fwd onboard` writes `FSP_AUTO_ENABLED=true` into `/opt/clif/.env.<net>` **by
+default**. Rehearse first, THEN `clifctl up`. To keep a network idle if you bring it up
+before rehearsing, set `FSP_AUTO_ENABLED=false` (clif `epoch run` then idles, logging a
+disabled heartbeat):
 
 ```
-FSP_AUTO_ENABLED=true
+FSP_AUTO_ENABLED=true   # written =true by default by `fwd onboard`; =false keeps it idle
 # optional — also sign uptime votes (off by default):
 # UPTIME_AUTO_ENABLED=true
 # optional cadence tuning (defaults shown):

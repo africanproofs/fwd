@@ -9,6 +9,42 @@ Without the exact `master.key` that sealed the wallets in `state.db`, `fwd`
 cannot decrypt them. If that key is lost, regenerate wallets and redo the
 on-chain authorizations instead of trying to recover the old state.
 
+## 0. Backup (create the bundle — regularly AND after every custody change)
+
+The restore below only works if you have a current off-host bundle. **Take a fresh
+bundle whenever custody changes** (a `wallets create`/`import`, a `master generate`/
+re-seal, a `policy.yaml` change) — a bundle that predates your current wallet set
+cannot restore it. Automate it (cron) so it is never just-in-time.
+
+```sh
+# 0a. Consistent SQLite snapshot (online-safe — do NOT cp a live state.db; the WAL
+#     would be torn). Uses sqlite3 .backup against the state volume.
+STATE_VOL=fwd_fwd-state                     # = <COMPOSE_PROJECT>_fwd-state
+sudo mkdir -p /tmp/fwd-backup
+sudo docker run --rm -v "$STATE_VOL":/data:ro -v /tmp/fwd-backup:/out alpine \
+  sh -c 'apk add --no-cache sqlite >/dev/null && sqlite3 /data/state.db ".backup /out/state.db"'
+
+# 0b. Gather the custody bundle (the four Required Inputs below + clif envs).
+sudo cp /opt/fwd/src/config/master.key /opt/fwd/src/config/policy.yaml /opt/fwd/src/.env /tmp/fwd-backup/
+sudo cp /opt/clif/.env.songbird /opt/clif/.env.flare /tmp/fwd-backup/ 2>/dev/null || true
+
+# 0c. Encrypt — NEVER write master.key off-host in the clear. Fail closed if you have
+#     no recipient. age (preferred) or gpg:
+TS=$(date +%Y%m%d-%H%M%S)
+sudo tar -C /tmp/fwd-backup -czf - . | age -r <AGE_RECIPIENT_PUBKEY> -o "fwd-backup-$TS.tar.gz.age"
+#   ...or: sudo tar -C /tmp/fwd-backup -czf - . | gpg -e -r <GPG_RECIPIENT> -o "fwd-backup-$TS.tar.gz.gpg"
+
+# 0d. Shred the staging dir (it held the plaintext master.key), then copy the
+#     ENCRYPTED bundle OFF-HOST (another machine / object storage) and verify it decrypts.
+sudo shred -u /tmp/fwd-backup/master.key 2>/dev/null; sudo rm -rf /tmp/fwd-backup
+```
+
+Schedule it (e.g. daily) via root cron, writing to a path you replicate off-host:
+
+```cron
+17 3 * * *  /usr/local/sbin/fwd-backup.sh   # wrap 0a–0d; alert if it exits non-zero
+```
+
 ## Required Inputs
 
 Have these from your off-host backup before starting:
@@ -174,3 +210,34 @@ Old sealed wallets are unrecoverable. The recovery path is:
    identity key.
 4. Fund gas-paying wallets.
 5. Rehearse on Songbird before Flare.
+
+## Disaster-recovery drills (Coston2 — rehearse before you need them)
+
+Both recovery paths above are documented but cost-free to drill on Coston2. Run them
+**once on Coston2** so the first real execution is not a first-time, under-pressure one.
+
+### A. Claim-executor re-authorization (after a claimer-wallet regen)
+
+If a claimer (executor) wallet is regenerated — master lost, or a deliberate rotation —
+the on-chain executor authorization must be redone or claims silently fail. The mechanic
+is `ClaimSetupManager.setClaimExecutors` (re-authorize the NEW executor; the owner stays
+the identity address — this is NOT recipient rotation).
+
+1. Coston2: regenerate a claimer wallet — `clifwd wallets create claimer-coston2-drill`
+   (note its address).
+2. From the identity owner, authorize the new executor on-chain:
+   `ClaimSetupManager.setClaimExecutors([<new executor address>])`.
+3. Verify authorization: `clifctl run coston2 preflight --identity 0x… --recipient 0x…`
+   shows the executor authorized.
+4. On a claimable Coston2 epoch: `clifctl run coston2 claim` — confirm it mints to the
+   recipient using the regenerated executor.
+
+**Acceptance:** the claim succeeds end to end with the regenerated executor. Once this
+passes, lift the `[Flag — DR mechanic unverified]` on Core invariant #17 (`CLAUDE.md`).
+
+### B. Master-key-lost full restore
+
+On a throwaway host, execute the "If The Master Key Is Lost" path end to end (regenerate →
+on-chain re-auth from the offline identity → fund → Songbird rehearsal) and confirm a
+rehearsal claim succeeds with the regenerated wallets. This proves the unrecoverable-key
+path is survivable, not just documented.
