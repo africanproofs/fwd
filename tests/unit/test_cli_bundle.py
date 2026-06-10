@@ -17,18 +17,36 @@ def _line(cid: str, env: str, token: str, wallet: str) -> str:
     return "\t".join([cid, env, token, wallet])
 
 
-def test_bundle_compose_emits_v1_json() -> None:
+def test_bundle_compose_emits_v2_json() -> None:
     stdin = (
         _line("clif/songbird/claim", "FWD_CALLER_TOKEN", _TOKEN, "claimer-songbird") + "\n"
     )
     result = runner.invoke(app, ["bundle", "compose", "--network", "songbird"], input=stdin)
     assert result.exit_code == 0, result.output
     bundle = json.loads(result.stdout)
-    assert bundle["version"] == 1
+    assert bundle["version"] == 2
     assert bundle["consumer"] == "clif"
     assert bundle["network"] == "songbird"
+    assert bundle["config"] == {}  # no CONFIG lines → empty config
     assert bundle["capabilities"][0]["capability_id"] == "clif/songbird/claim"
     assert bundle["capabilities"][0]["caller_token"] == _TOKEN
+
+
+def test_bundle_compose_parses_config_lines() -> None:
+    stdin = (
+        "CONFIG\tFWD_ENDPOINT\thttp://fwd:8080\n"
+        "CONFIG\tWRAP_REWARDS\tfalse\n"
+        + _line("clif/songbird/claim", "FWD_CALLER_TOKEN", _TOKEN, "claimer-songbird")
+        + "\n"
+    )
+    result = runner.invoke(app, ["bundle", "compose", "--network", "songbird"], input=stdin)
+    assert result.exit_code == 0, result.output
+    bundle = json.loads(result.stdout)
+    assert bundle["version"] == 2
+    assert bundle["config"] == {"FWD_ENDPOINT": "http://fwd:8080", "WRAP_REWARDS": "false"}
+    assert bundle["capabilities"][0]["caller_token"] == _TOKEN
+    # config carries no token.
+    assert "fwd_live_" not in json.dumps(bundle["config"])
 
 
 def test_bundle_compose_empty_wallet_becomes_null() -> None:

@@ -1,9 +1,11 @@
 """App-layer one-shot credential-bundle emission (ADR-0001 — the handoff bundle).
 
-fwd composes a pinned **v1 bundle** carrying the bearer caller-token VALUES it
-just minted, to a local mode-0600 host file. A keyless consumer (clif, the
-reference) imports it (`import-credentials`), writes each token into its
-per-network `.env.<network>`, then consumes (deletes) the bundle.
+fwd composes a pinned **v2 bundle** — the COMPLETE handoff: a `config` section
+(non-secret network config) PLUS the bearer caller-token VALUES it just minted —
+to a local mode-0600 host file. A keyless consumer (clif, the reference) imports
+it (`import-credentials`), writes the config + each token into its per-network
+`.env.<network>`, then consumes (deletes) the bundle. fwd never touches that
+`.env` — the bundle is the sole handoff (Invariant #5).
 
 This is the ONLY artifact outside fwd's DB that ever carries plaintext
 caller-token values. **Core #7 is load-bearing: the bundle holds BEARER tokens,
@@ -40,7 +42,7 @@ __all__ = [
     "write_bundle",
 ]
 
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
 
 
 class BundleEmitError(Exception):
@@ -83,34 +85,60 @@ def _reject_if_unclean_token(cap: BundleCapability) -> None:
         )
 
 
+def _reject_unsafe_config(config: dict[str, str]) -> None:
+    """The v2 `config` is NON-SECRET network config (Core #7) — never a token or a
+    signing key. Refuse any key/value that looks like a `*PRIVATE_KEY*` (the
+    `env_write` refuse-guard, extended to config), and reject a value clif's
+    importer would reject (control chars / newlines → `.env` injection)."""
+    for key, value in config.items():
+        if "PRIVATE_KEY" in key.upper() or "PRIVATE_KEY" in value.upper():
+            raise BundleEmitError(
+                f"refusing to emit: config entry {key!r} looks like a *PRIVATE_KEY* — the bundle "
+                "config is non-secret network config, never a key (Core #7)"
+            )
+        if value != value.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+            raise BundleEmitError(
+                f"config value for {key!r} contains illegal characters (control/whitespace) — "
+                "refusing to emit an un-importable bundle"
+            )
+
+
 def compose_bundle(
     *,
     consumer: str,
     network: str,
     ttl_seconds: int,
     capabilities: list[BundleCapability],
+    config: dict[str, str] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Build the pinned v1 bundle dict (consumer-contract-v1 §4).
+    """Build the pinned v2 bundle dict (consumer-contract-v1 §4).
 
-    `issued_at` = now (fwd's local clock); `expires_at` = now + ttl_seconds.
-    Raises BundleEmitError on a `*PRIVATE_KEY*` env/value (Core #7) or an unclean
-    token. Never logs a token value.
+    v2 = the COMPLETE handoff: a `config` section (non-secret network config the
+    consumer writes into its own `.env`) PLUS the per-capability tokens. `config`
+    defaults to `{}` (a tokens-only v2 bundle, e.g. a rotation). `issued_at` = now
+    (fwd's local clock); `expires_at` = now + ttl_seconds.
+
+    Raises BundleEmitError on a `*PRIVATE_KEY*` env/value (Core #7, tokens AND
+    config) or an unclean token/config value. Never logs a token value.
     """
     if not capabilities:
         raise BundleEmitError("refusing to emit a bundle with no capabilities")
     if ttl_seconds <= 0:
         raise BundleEmitError(f"ttl_seconds must be positive, got {ttl_seconds}")
+    cfg = config if config is not None else {}
     moment = now if now is not None else datetime.now(UTC)
     for cap in capabilities:
         _reject_if_private_key(cap)
         _reject_if_unclean_token(cap)
+    _reject_unsafe_config(cfg)
     return {
         "version": BUNDLE_VERSION,
         "consumer": consumer,
         "network": network,
         "issued_at": moment.isoformat(),
         "expires_at": (moment + timedelta(seconds=ttl_seconds)).isoformat(),
+        "config": cfg,
         "capabilities": [
             {
                 "capability_id": c.capability_id,

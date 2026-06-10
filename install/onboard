@@ -18,9 +18,10 @@
 # registered for you). Nonces are read from chain truth via the keyless clif
 # one-shot (egress stays in clif; fwd has no egress) — no hand-typing required.
 #
-# clif runtime config: onboard writes clif's per-network .env.<net> files as a
-# first-class step, capturing caller tokens and wallet names. The FSP gas-paying
-# sender defaults to per-network (fsp-sender-<net>).
+# clif handoff: onboard emits the complete v2 bundle (config + caller tokens +
+# wallet names) into CLIF_ENV_DIR; fwd never reads or writes clif's .env
+# (Invariant #5 closed) — clif imports it. The FSP gas-paying sender defaults to
+# per-network (fsp-sender-<net>).
 #
 # Single terminal: all prompts read from /dev/tty (so it works even under
 # `curl|sh`). Importing a key: you PASTE it (hidden); fwd pipes it straight into
@@ -503,106 +504,58 @@ confirm() {  # prompt -> 0 if yes (default no; non-tty = no)
 # operator, who reads chain truth via clif and seeds them.)
 
 # read KEY=value from an env file (first match), else default
-getval() {  # file key default
-  if [ -f "$1" ]; then
-    _gv="$(sed -n "s/^$2=//p" "$1" | head -n1)"
-    [ -n "$_gv" ] && { printf '%s' "$_gv"; return 0; }
-  fi
-  printf '%s' "$3"
-}
-
 token_ok() {  # token -> 0 iff a well-formed fwd live token (safe to eval-assign)
   printf '%s' "$1" | grep -qE '^fwd_live_[A-Za-z0-9_-]{43}$'
 }
 
-# mint or recover a caller token; sets the named outvar to the FINAL token to write
-caller_ensure() {  # name policy outvar envfile envkey [capability_id]
+# mint (or, if the caller exists, ROTATE) a caller token; sets the named outvar
+# to the fresh token. fwd retains no token plaintext (Core #1/#16) and no longer
+# reads clif's .env to recover one (Invariant #5 closed) — so a re-onboard of an
+# existing caller rotates (revoke + re-mint). The token goes ONLY into the bundle.
+caller_ensure() {  # name policy outvar [capability_id]
   # Optional <consumer>/<network>/<role> capability id (ADR-0001 §3). Unquoted
   # expansion below splits "--capability-id <id>" into 2 args; ids carry no spaces.
-  _ce_cap=""; [ -n "${6:-}" ] && _ce_cap="--capability-id $6"
+  _ce_cap=""; [ -n "${4:-}" ] && _ce_cap="--capability-id $4"
   set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" $_ce_cap 2>/dev/null)"; _ce_rc=$?; set -e
   case "$_ce_rc" in
     0) token_ok "$_ce_k" || die "minted token for $1 has unexpected format (not fwd_live_<43>) — aborting before eval"
        eval "$3=\$_ce_k"
        if [ "$SHOW_SECRETS" -eq 1 ]; then note "caller $1: token = $_ce_k"
-       else note "caller $1: token minted -> clif env (prefix $(printf '%s' "$_ce_k" | cut -c1-12)…)"; fi ;;
-    3) _ce_have="$(getval "$4" "$5" "")"
-       if [ -n "$_ce_have" ]; then
-         token_ok "$_ce_have" || die "token for $1 in $(basename "$4") is malformed/tampered (not fwd_live_<43>) — refusing to use it; fix or remove that line"
-         # fwd's api_key_prefix (shown by `callers list`) is the first 8 chars of the
-         # RANDOM portion — chars 10-17 of the token; the constant "fwd_live_" (9 chars)
-         # is NOT part of it. Match that exact slice, else the grep can never hit.
-         _ce_prefix="$(printf '%s' "$_ce_have" | cut -c10-17)"
-         if ! clifwd callers list 2>/dev/null | grep -qF -- "$_ce_prefix"; then
-           warn "CM-02: token for $1 in $(basename "$4") (prefix ${_ce_prefix}…) not found in fwd -- may be revoked; re-run with --rotate-missing-callers if claims fail"
-         fi
-         eval "$3=\$_ce_have"; note "caller $1 exists; preserving the token already in $(basename "$4")"
-       elif [ "$ROTATE_MISSING" -eq 1 ]; then
-         note "caller $1 exists but its one-time token is lost and $(basename "$4") has none — rotating"
-         clifwd callers revoke --name "$1" >/dev/null 2>&1 || die "revoke $1 failed"
-         set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" $_ce_cap --replace 2>/dev/null)"; _ce_rc=$?; set -e
-         [ "$_ce_rc" -eq 0 ] || die "re-mint $1 failed (exit $_ce_rc)"
-         token_ok "$_ce_k" || die "re-minted token for $1 has unexpected format — aborting before eval"
-         eval "$3=\$_ce_k"; note "caller $1 re-minted -> clif env"
-       else
-         die "caller $1 exists but its one-time token is lost and $(basename "$4") has no token; re-run with --rotate-missing-callers to revoke+re-mint, or restore the token to $(basename "$4")"
-       fi ;;
+       else note "caller $1: token minted -> bundle (prefix $(printf '%s' "$_ce_k" | cut -c1-12)…)"; fi ;;
+    3) # Caller exists. Recovery from clif's .env is gone (Invariant #5) and fwd
+       # holds no plaintext (Core #1/#16) — so ROTATE: revoke + re-mint. The fresh
+       # token goes into the bundle; clif re-imports it idempotently.
+       note "caller $1 exists — rotating (revoke + re-mint; the fresh token goes to the bundle)"
+       clifwd callers revoke --name "$1" >/dev/null 2>&1 || die "revoke $1 failed"
+       set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" $_ce_cap --replace 2>/dev/null)"; _ce_rc=$?; set -e
+       [ "$_ce_rc" -eq 0 ] || die "re-mint $1 failed (exit $_ce_rc)"
+       token_ok "$_ce_k" || die "re-minted token for $1 has unexpected format — aborting before eval"
+       eval "$3=\$_ce_k"; note "caller $1 re-minted -> bundle" ;;
     *) die "callers create $1 failed (exit $_ce_rc)" ;;
   esac
   unset _ce_k
 }
 
-# atomically write clif's per-network env (0600; keyless)
-env_write() {  # net claim_tok sign_tok submit_tok
-  _ew_net="$1"; _ew_ct="$2"; _ew_st="$3"; _ew_sub="$4"
-  _ew_dst="$CLIF_ENV_DIR/.env.$_ew_net"
-  _ew_tmp="$(mktemp "$CLIF_ENV_DIR/.env.$_ew_net.XXXXXX")" || die "mktemp failed in $CLIF_ENV_DIR"
-  {
-    printf 'NETWORK=%s\n' "$_ew_net"
-    printf 'FWD_ENDPOINT=%s\n' "$(getval "$_ew_dst" FWD_ENDPOINT http://fwd:8080)"
-    if [ "$HAS_CLAIM" -eq 1 ]; then
-      printf 'IDENTITY_ADDRESS=%s\n' "$(getval "$_ew_dst" IDENTITY_ADDRESS "$IDENTITY")"
-      printf 'CLAIM_RECIPIENT_ADDRESS=%s\n' "$(getval "$_ew_dst" CLAIM_RECIPIENT_ADDRESS "$RECIP")"
-      printf 'FWD_WALLET_NAME=%s\n' "claimer-$_ew_net"
-      printf 'FWD_CALLER_TOKEN=%s\n' "$_ew_ct"
-    fi
-    printf 'WRAP_REWARDS=%s\n' "$(getval "$_ew_dst" WRAP_REWARDS false)"
-    if [ "$HAS_FSP" -eq 1 ]; then
-      printf 'FSP_SIGN_CALLER_TOKEN=%s\n' "$_ew_st"
-      printf 'FSP_SUBMIT_CALLER_TOKEN=%s\n' "$_ew_sub"
-      printf 'FSP_SIGNING_WALLET_NAME=%s\n' "fsp-signing-$_ew_net"
-      printf 'FSP_SENDER_WALLET_NAME=%s\n' "$(sender_name "$_ew_net")"
-      printf 'UPTIME_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" UPTIME_AUTO_ENABLED false)"
-    fi
-    printf 'CLIF_STATE_DIR=.clif-state/%s\n' "$_ew_net"
-    printf 'FSP_AUTO_ENABLED=%s\n' "$(getval "$_ew_dst" FSP_AUTO_ENABLED true)"
-    # epoch sign→claim daemon cadence (preserved across re-runs if the operator tuned them)
-    printf 'EPOCH_REWARD_INITIAL_DELAY_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_REWARD_INITIAL_DELAY_SEC 3600)"
-    printf 'EPOCH_POLL_INTERVAL_SEC=%s\n' "$(getval "$_ew_dst" EPOCH_POLL_INTERVAL_SEC 1800)"
-    for _ew_rv in FLARE_RPC SONGBIRD_RPC COSTON2_RPC; do
-      _ew_ov="$(getval "$_ew_dst" "$_ew_rv" "")"; [ -n "$_ew_ov" ] && printf '%s=%s\n' "$_ew_rv" "$_ew_ov"
-    done
-  } > "$_ew_tmp"
-  if grep -qi 'PRIVATE_KEY' "$_ew_tmp"; then rm -f "$_ew_tmp"; die "refusing to write $_ew_dst — it contains a *PRIVATE_KEY* name"; fi
-  chmod 0600 "$_ew_tmp" || die "chmod failed: $_ew_tmp"; mv -f "$_ew_tmp" "$_ew_dst" || die "mv failed: $_ew_tmp -> $_ew_dst"
-  # onboard runs as root (sudo fwd onboard), but the `clif` host wrapper runs as the
-  # non-root operator and does a host-side `docker compose` env_file read of this file.
-  # Match install.sh's clif-dir chown (1000:1000 — the clif/fwd container user) so the
-  # root-written env stays operator-readable; else `clif … claim` fails "permission denied".
-  chown 1000:1000 "$_ew_dst" 2>/dev/null || true
-  note "clif env written: $_ew_dst (0600, keyless, uid 1000)"
-}
-
-# compose + write clif's one-shot handoff BUNDLE (0600, host-side; ADR-0001 / Unit 4a).
-# ADDITIVE to env_write (the transitional fallback stays — phased cutover). The
-# Python composer runs IN the fwd container (the §4 shape + Core-#7 PRIVATE_KEY
-# refuse-guard live there); onboard runs on the HOST and writes the file next to
-# clif's .env (CLIF_ENV_DIR is host-only — not mounted into fwd, by de-intermingle).
-# Token VALUES travel the stdin/stdout capture PIPE (never argv); a failure here is
-# a non-fatal warn (env_write already succeeded, so onboarding is functional).
+# compose + write clif's one-shot handoff BUNDLE (0600, host-side; ADR-0001 §5).
+# This is onboarding's SOLE clif touch-point — fwd never reads or writes clif's
+# .env (Invariant #5 CLOSED, Unit 4b); the bundle is the only handoff. The Python
+# composer runs IN the fwd container (the §4 shape + Core-#7 PRIVATE_KEY refuse-
+# guard live there); onboard runs on the HOST and writes the file next to clif's
+# .env (CLIF_ENV_DIR is host-only — not mounted into fwd, by de-intermingle). Token
+# VALUES travel the stdin/stdout capture PIPE (never argv); a failure is a non-fatal
+# warn (the bundle is re-emittable — a re-onboard rotates).
 bundle_emit() {  # net claim_tok sign_tok submit_tok
   _be_net="$1"; _be_ct="$2"; _be_st="$3"; _be_sub="$4"
   _be_out="$CLIF_ENV_DIR/.fwd-bundle.$_be_net.json"
+  # v2 config (consumer-contract-v1 §4) — the NON-SECRET network config that was
+  # previously written into clif's .env, now relocated INTO the bundle. Composed
+  # from flags + the SAME literal defaults; NO .env read (Invariant #5 stays closed).
+  _be_cfg="$(printf 'CONFIG\tFWD_ENDPOINT\thttp://fwd:8080\nCONFIG\tWRAP_REWARDS\tfalse\nCONFIG\tFSP_AUTO_ENABLED\ttrue\nCONFIG\tUPTIME_AUTO_ENABLED\tfalse\nCONFIG\tEPOCH_REWARD_INITIAL_DELAY_SEC\t3600\nCONFIG\tEPOCH_POLL_INTERVAL_SEC\t1800\nCONFIG\tCLIF_STATE_DIR\t.clif-state/%s' "$_be_net")
+"
+  if [ "$HAS_CLAIM" -eq 1 ]; then
+    _be_cfg="$_be_cfg$(printf 'CONFIG\tIDENTITY_ADDRESS\t%s\nCONFIG\tCLAIM_RECIPIENT_ADDRESS\t%s' "$IDENTITY" "$RECIP")
+"
+  fi
   _be_tuples=""
   if [ "$HAS_CLAIM" -eq 1 ] && [ -n "$_be_ct" ]; then
     _be_tuples="$_be_tuples$(printf 'clif/%s/claim\tFWD_CALLER_TOKEN\t%s\tclaimer-%s' "$_be_net" "$_be_ct" "$_be_net")
@@ -617,8 +570,8 @@ bundle_emit() {  # net claim_tok sign_tok submit_tok
 "
   fi
   [ -n "$_be_tuples" ] || { warn "bundle: no minted tokens for $_be_net — skipping bundle"; return 0; }
-  _be_json="$(printf '%s' "$_be_tuples" | clifwd bundle compose --network "$_be_net" 2>/dev/null)" || {
-    warn "bundle: compose failed for $_be_net (env-write fallback intact) — continuing"; ONBOARD_INCOMPLETE=1; return 0; }
+  _be_json="$(printf '%s' "$_be_cfg$_be_tuples" | clifwd bundle compose --network "$_be_net" 2>/dev/null)" || {
+    warn "bundle: compose failed for $_be_net — re-run onboard to retry (a re-onboard rotates)"; ONBOARD_INCOMPLETE=1; return 0; }
   _be_tmp="$(mktemp "$CLIF_ENV_DIR/.fwd-bundle.$_be_net.XXXXXX")" || {
     warn "bundle: mktemp failed in $CLIF_ENV_DIR for $_be_net"; ONBOARD_INCOMPLETE=1; return 0; }
   printf '%s\n' "$_be_json" > "$_be_tmp"
@@ -635,12 +588,10 @@ if [ "$HAS_FSP" -eq 1 ]; then
     cid="$(chain_of "$net")" || die "could not resolve chain id for '$net'"
     _sender="$(sender_name "$net")"
     # Signing key: always imported (registered protocol key — never generated fresh)
+    # Invariant #5 (closed): fwd never reads clif's .env. The optional FSP
+    # signing-policy address assertion comes ONLY from the operator's
+    # SIGNING_POLICY_HINT (empty → no assertion, same as the claim path).
     _expected_sp="${SIGNING_POLICY_HINT:-}"
-    if [ -z "$_expected_sp" ]; then
-      _pf_env="$CLIF_ENV_DIR/.env.$net"
-      [ -f "$_pf_env" ] && _expected_sp="$(grep -E '^SIGNING_POLICY_ADDRESS=' \
-        "$_pf_env" 2>/dev/null | cut -d= -f2- || true)"
-    fi
     import_pasted "fsp-signing-$net" "wc/fsp-$net" \
       "your registered FSP signing key; Flare checks this signature" \
       "$_expected_sp"
@@ -652,8 +603,8 @@ if [ "$HAS_FSP" -eq 1 ]; then
     else
       wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
-    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_ENV_DIR/.env.$net" FSP_SIGN_CALLER_TOKEN   "clif/$net/fsp-sign"
-    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_ENV_DIR/.env.$net" FSP_SUBMIT_CALLER_TOKEN "clif/$net/fsp-submit"
+    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "clif/$net/fsp-sign"
+    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "clif/$net/fsp-submit"
     eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
     if wallet_exists "$_sender"; then seed_nonce_or_defer "$_sender" "$cid"
     else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
@@ -673,19 +624,19 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
     else
       wallet_create "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     fi
-    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_ENV_DIR/.env.$net" FWD_CALLER_TOKEN "clif/$net/claim"
+    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "clif/$net/claim"
     eval "TOK_CLAIM_$net=\$_t_claim"
     if wallet_exists "claimer-$net"; then seed_nonce_or_defer "claimer-$net" "$cid"
     else warn "claimer-$net not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet claimer-$net --chain $cid --starting-nonce <n>"; fi
   done
 fi
 
-# ====================== clif runtime config (.env.<net>) ======================
-printf '\n\033[1;35m═══════════════ clif runtime config ═══════════════\033[0m\n'
-printf '   Writing per-network clif env to %s. Wallet names + caller tokens only; no private keys. Mode 0600.\n' "$CLIF_ENV_DIR"
+# ====================== clif handoff bundle (.fwd-bundle.<net>.json) ======================
+printf '\n\033[1;35m═══════════════ clif handoff bundle ═══════════════\033[0m\n'
+printf '   Emitting the one-shot handoff bundle to %s (caller tokens + wallet names; 0600, TTL ~10min).\n' "$CLIF_ENV_DIR"
+printf '   fwd never reads or writes clif'"'"'s .env (Invariant #5) — clif imports the bundle itself: clifctl import-credentials.\n'
 for net in $NETLIST; do
   eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
-  env_write "$net" "$_w_ct" "$_w_st" "$_w_sub"
   bundle_emit "$net" "$_w_ct" "$_w_st" "$_w_sub"
 done
 

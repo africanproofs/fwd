@@ -1,19 +1,19 @@
-"""Unit tests for app/bundle_emit.py — compose + write + Core #7 guard + the
-clif `validate_bundle` golden oracle.
+"""Unit tests for app/bundle_emit.py — compose + write + Core #7 guard +
+`consumer-contract-v1` §4 (v2) conformance.
 
-The golden test runs fwd's composed bundle through clif's REAL
-`credentials.py::validate_bundle` (the frozen acceptance oracle) — never a
-hand-copied fixture (which silently drifts). It imports clif from the co-located
-sibling repo and SKIPS if clif is not present (e.g. CI without the umbrella).
+fwd is the custody daemon; the membrane runs ONE way — consumers depend on fwd's
+contract, NEVER the reverse. So these tests are **self-contained**: they pin the
+`consumer-contract-v1` §4 v2 bundle shape directly (a small canonical fixture),
+and do NOT import clif (no sibling-repo reach). Interop with a consumer's real
+importer is proven by the live **canary**, never a unit-test code dependency.
 """
 
 from __future__ import annotations
 
 import json
 import stat
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 
 import pytest
 
@@ -23,9 +23,6 @@ from fwd.app.bundle_emit import (
     compose_bundle,
     write_bundle,
 )
-
-_FWD_ROOT = Path(__file__).resolve().parents[2]
-_CLIF_ROOT = _FWD_ROOT.parent / "clif"
 
 _TOKEN = "fwd_live_" + "a" * 43
 _SONGBIRD_CAPS = [
@@ -47,11 +44,12 @@ def test_compose_shape_and_keys() -> None:
     bundle = compose_bundle(
         consumer="clif", network="songbird", ttl_seconds=600, capabilities=_SONGBIRD_CAPS, now=now
     )
-    assert bundle["version"] == 1
+    assert bundle["version"] == 2  # v2 = complete handoff (config + capabilities)
     assert bundle["consumer"] == "clif"
     assert bundle["network"] == "songbird"
     assert bundle["issued_at"] == "2026-01-01T00:00:00+00:00"
     assert bundle["expires_at"] == "2026-01-01T00:10:00+00:00"
+    assert bundle["config"] == {}  # no config passed → empty (a tokens-only v2 bundle)
     assert [c["capability_id"] for c in bundle["capabilities"]] == [
         "clif/songbird/claim",
         "clif/songbird/fsp-sign",
@@ -60,6 +58,50 @@ def test_compose_shape_and_keys() -> None:
     # Each entry has EXACTLY the 4 pinned keys.
     for entry in bundle["capabilities"]:
         assert set(entry) == {"capability_id", "caller_token_env", "caller_token", "wallet_name"}
+
+
+def test_compose_emits_config_section() -> None:
+    cfg = {
+        "FWD_ENDPOINT": "http://fwd:8080",
+        "WRAP_REWARDS": "false",
+        "IDENTITY_ADDRESS": "0xabc",
+    }
+    bundle = compose_bundle(
+        consumer="clif",
+        network="songbird",
+        ttl_seconds=600,
+        capabilities=_SONGBIRD_CAPS,
+        config=cfg,
+    )
+    assert bundle["version"] == 2
+    assert bundle["config"] == cfg
+    # config carries no token value.
+    assert all("fwd_live_" not in v for v in bundle["config"].values())
+
+
+def test_compose_refuses_private_key_in_config() -> None:
+    for bad in ({"FWD_PRIVATE_KEY": "x"}, {"K": "this is a PRIVATE_KEY"}):
+        with pytest.raises(BundleEmitError, match="PRIVATE_KEY"):
+            compose_bundle(
+                consumer="clif",
+                network="songbird",
+                ttl_seconds=600,
+                capabilities=_SONGBIRD_CAPS,
+                config=bad,
+            )
+
+
+def test_compose_refuses_unclean_config_value_no_leak() -> None:
+    secret = "0xabc\nINJECTED=evil"
+    with pytest.raises(BundleEmitError) as exc_info:
+        compose_bundle(
+            consumer="clif",
+            network="songbird",
+            ttl_seconds=600,
+            capabilities=_SONGBIRD_CAPS,
+            config={"IDENTITY_ADDRESS": secret},
+        )
+    assert secret not in str(exc_info.value)
 
 
 def test_compose_empty_capabilities_refused() -> None:
@@ -115,36 +157,79 @@ def test_write_bundle_is_0600_and_round_trips(tmp_path: Path) -> None:
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-# --- GOLDEN: clif's REAL validate_bundle is the acceptance oracle ------------
+# --- consumer-contract-v1 §4 (v2) conformance (self-contained — no clif import) --
+
+# The pinned §4 v2 shape (fwd⊥clif: the daemon never imports a consumer; this is
+# the contract, not clif's code). Live interop is proven by the canary.
+_CONTRACT_V2_TOP_KEYS = {
+    "version",
+    "consumer",
+    "network",
+    "issued_at",
+    "expires_at",
+    "config",
+    "capabilities",
+}
+_CONTRACT_V2_CAP_KEYS = {"capability_id", "caller_token_env", "caller_token", "wallet_name"}
 
 
-def _clif_oracle():  # type: ignore[no-untyped-def]
-    if not (_CLIF_ROOT / "clif" / "credentials.py").is_file():
-        pytest.skip(f"clif not co-located at {_CLIF_ROOT} — golden oracle unavailable")
-    if str(_CLIF_ROOT) not in sys.path:
-        sys.path.insert(0, str(_CLIF_ROOT))
-    try:
-        from clif.config import Settings
-        from clif.credentials import BundleError, validate_bundle
-    except Exception as exc:  # noqa: BLE001 — any import failure → skip, not fail
-        pytest.skip(f"clif import failed ({exc}) — golden oracle unavailable")
-    return validate_bundle, Settings, BundleError
-
-
-def test_golden_compose_accepted_by_clif_validate_bundle() -> None:
-    validate_bundle, settings_cls, _ = _clif_oracle()
+def test_contract_v2_structural_conformance() -> None:
     bundle = compose_bundle(
-        consumer="clif", network="songbird", ttl_seconds=600, capabilities=_SONGBIRD_CAPS
+        consumer="clif",
+        network="songbird",
+        ttl_seconds=600,
+        capabilities=_SONGBIRD_CAPS,
+        config={"FWD_ENDPOINT": "http://fwd:8080", "WRAP_REWARDS": "false"},
+        now=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    assert validate_bundle(bundle, settings_cls(network="songbird")) == "songbird"
+    # Top-level shape is EXACTLY the §4 v2 keys.
+    assert set(bundle) == _CONTRACT_V2_TOP_KEYS
+    assert bundle["version"] == 2
+    # config is a flat {str: str} map.
+    assert isinstance(bundle["config"], dict)
+    assert all(
+        isinstance(k, str) and isinstance(v, str) for k, v in bundle["config"].items()
+    )
+    # Each capability entry has EXACTLY the 4 pinned keys (no token leaks into config).
+    for entry in bundle["capabilities"]:
+        assert set(entry) == _CONTRACT_V2_CAP_KEYS
 
 
-def test_golden_ungoverned_capability_rejected_by_oracle() -> None:
-    """Sanity that the oracle is real (not a no-op): an ungoverned id is rejected."""
-    validate_bundle, settings_cls, bundle_error = _clif_oracle()
-    caps = [BundleCapability("clif/songbird/bogus", "FWD_CALLER_TOKEN", _TOKEN, "w")]
+def test_contract_v2_matches_pinned_fixture() -> None:
+    """Pin the canonical §4 v2 JSON byte-for-byte (timestamps + token normalized)."""
     bundle = compose_bundle(
-        consumer="clif", network="songbird", ttl_seconds=600, capabilities=caps
+        consumer="clif",
+        network="songbird",
+        ttl_seconds=600,
+        capabilities=[
+            BundleCapability(
+                "clif/songbird/claim", "FWD_CALLER_TOKEN", _TOKEN, "claimer-songbird"
+            )
+        ],
+        config={
+            "FWD_ENDPOINT": "http://fwd:8080",
+            "IDENTITY_ADDRESS": "0xID",
+            "CLAIM_RECIPIENT_ADDRESS": "0xRECIP",
+        },
+        now=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    with pytest.raises(bundle_error):
-        validate_bundle(bundle, settings_cls(network="songbird"))
+    assert bundle == {
+        "version": 2,
+        "consumer": "clif",
+        "network": "songbird",
+        "issued_at": "2026-01-01T00:00:00+00:00",
+        "expires_at": "2026-01-01T00:10:00+00:00",
+        "config": {
+            "FWD_ENDPOINT": "http://fwd:8080",
+            "IDENTITY_ADDRESS": "0xID",
+            "CLAIM_RECIPIENT_ADDRESS": "0xRECIP",
+        },
+        "capabilities": [
+            {
+                "capability_id": "clif/songbird/claim",
+                "caller_token_env": "FWD_CALLER_TOKEN",
+                "caller_token": _TOKEN,
+                "wallet_name": "claimer-songbird",
+            }
+        ],
+    }
