@@ -1,9 +1,12 @@
-"""CLI tests for `clifwd capability grant`.
+"""CLI tests for `clifwd capability {grant,list}`.
 
-Render path needs no daemon; the --approve mint path mocks httpx.post at the
-cli.capability module. Verifies default-deny (no mint without --approve), the
+`grant`: render path needs no daemon; the --approve mint path mocks httpx.post at
+the cli.capability module. Verifies default-deny (no mint without --approve), the
 re-rendered custody diff, capability_id threaded into each mint, and no token
 value leaking anywhere except the documented return-once stdout line.
+
+`list`: the read-only doctor 'fwd=granted' leg (admin-gated GET
+/v1/admin/capabilities; --json scrape; no token value).
 """
 
 from __future__ import annotations
@@ -151,3 +154,71 @@ def test_grant_emit_bundle_partial_failure_writes_no_bundle(
         )
     assert result.exit_code == 1
     assert not out.exists()
+
+
+# --- capability list (the doctor fwd=granted leg) ---------------------------
+
+_CAPS_BODY = {
+    "capabilities": [
+        {
+            "capability_id": "clif/songbird/claim",
+            "caller_name": "claim-songbird",
+            "policy_path": "perm/claim-songbird",
+            "status": "active",
+            "granted_at": "2026-01-01T00:00:00+00:00",
+            "revoked_at": None,
+        }
+    ]
+}
+
+
+def test_capability_list_human_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    fake = MagicMock(status_code=200, json=lambda: _CAPS_BODY)
+    with patch("fwd.cli.capability.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["capability", "list"])
+    assert result.exit_code == 0
+    assert "clif/songbird/claim" in result.stdout
+    assert "active" in result.stdout
+
+
+def test_capability_list_json_parseable_and_secretless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    raw = json.dumps(_CAPS_BODY)
+    fake = MagicMock(status_code=200, text=raw, json=lambda: _CAPS_BODY)
+    with patch("fwd.cli.capability.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["capability", "list", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert parsed["capabilities"][0]["capability_id"] == "clif/songbird/claim"
+    assert "hash" not in result.stdout.lower()
+    assert "api_key" not in result.stdout
+    assert "fwd_live_" not in result.stdout
+
+
+def test_capability_list_missing_admin_key_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FWD_ADMIN_KEY", raising=False)
+    with patch("fwd.cli.capability.httpx.get") as mock_get:
+        result = runner.invoke(app, ["capability", "list"])
+    assert result.exit_code == 2
+    mock_get.assert_not_called()
+
+
+def test_capability_list_http_error_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    fake = MagicMock(status_code=500, text='{"error":"internal"}')
+    with patch("fwd.cli.capability.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["capability", "list"])
+    assert result.exit_code == 1
+
+
+def test_capability_list_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    fake = MagicMock(status_code=200, json=lambda: {"capabilities": []})
+    with patch("fwd.cli.capability.httpx.get", return_value=fake):
+        result = runner.invoke(app, ["capability", "list"])
+    assert result.exit_code == 0
+    combined = (result.stdout or "") + (result.stderr or "")
+    assert "(no granted capabilities)" in combined

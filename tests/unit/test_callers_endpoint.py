@@ -19,6 +19,7 @@ from fwd.api.callers import router
 from fwd.app.caller_create import CallerCreateResult, CallerNameTaken
 from fwd.app.caller_revoke import CallerAlreadyRevoked, CallerNotFound
 from fwd.app.dependencies import AdminScope, get_admin_scope, get_caller_repo
+from fwd.domain.policy import Policy
 from fwd.infra.caller_repo import Caller
 
 
@@ -340,3 +341,91 @@ def test_list_callers_200(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(body["callers"]) == 2
     for item in body["callers"]:
         assert "api_key_hash" not in item
+
+
+def _policy_with_caps() -> Policy:
+    return Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {
+                "fsp-sign-songbird": {
+                    "policy_path": "fsp/songbird",
+                    "capability_id": "clif/songbird/fsp-sign",
+                },
+                "claim-songbird": {
+                    "policy_path": "perm/claim-songbird",
+                    "capability_id": "clif/songbird/claim",
+                },
+            },
+        }
+    )
+
+
+def test_list_callers_populates_capability_id_from_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    callers = [_caller_summary("claim-songbird")]
+    callers[0] = Caller(
+        name="claim-songbird",
+        api_key_hash="h",
+        api_key_prefix="abcd1234",
+        policy_path="perm/claim-songbird",
+        created_at=datetime.now(UTC),
+        revoked_at=None,
+    )
+    with patch("fwd.api.callers.list_callers", new=AsyncMock(return_value=callers)):
+        client = _make_client(monkeypatch, list_return=callers)
+        client.app.state.policy = _policy_with_caps()
+        r = client.get("/v1/admin/callers", headers=_ADMIN_HDR)
+    assert r.status_code == 200
+    assert r.json()["callers"][0]["capability_id"] == "clif/songbird/claim"
+
+
+# --- GET /v1/admin/capabilities (the doctor fwd=granted leg) -----------------
+
+
+def test_get_capabilities_401_no_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _make_client(monkeypatch)
+    r = client.get("/v1/admin/capabilities")
+    assert r.status_code == 401
+
+
+def test_get_capabilities_returns_sorted_join_no_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callers = [
+        Caller(
+            name="fsp-sign-songbird",
+            api_key_hash="h",
+            api_key_prefix="abcd1234",
+            policy_path="fsp/songbird",
+            created_at=datetime.now(UTC),
+            revoked_at=None,
+        ),
+        Caller(
+            name="claim-songbird",
+            api_key_hash="h",
+            api_key_prefix="abcd1234",
+            policy_path="perm/claim-songbird",
+            created_at=datetime.now(UTC),
+            revoked_at=None,
+        ),
+    ]
+    client = _make_client(monkeypatch, list_return=callers)
+    client.app.state.policy = _policy_with_caps()
+    r = client.get("/v1/admin/capabilities", headers=_ADMIN_HDR)
+    assert r.status_code == 200
+    caps = r.json()["capabilities"]
+    # Sorted by capability_id.
+    assert [c["capability_id"] for c in caps] == [
+        "clif/songbird/claim",
+        "clif/songbird/fsp-sign",
+    ]
+    assert all(c["status"] == "active" for c in caps)
+    # No token value / hash anywhere.
+    blob = r.text.lower()
+    assert "hash" not in blob
+    assert "api_key" not in blob
+    assert "fwd_live_" not in blob

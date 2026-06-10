@@ -27,6 +27,7 @@ from fwd.app.caller_revoke import (
     CallerNotFound,
     revoke_caller,
 )
+from fwd.app.capability_list import list_capabilities
 from fwd.app.dependencies import (
     AdminScopeCM,
     CallerRepoCM,
@@ -65,10 +66,29 @@ class CallerSummary(BaseModel):
     policy_path: str
     created_at: str
     revoked_at: str | None
+    # The <consumer>/<network>/<role> join key from the live policy binding
+    # (ADR-0001 §3), or null for a name-only grant. Convenience join for doctor.
+    capability_id: str | None = None
 
 
 class ListCallersResponse(BaseModel):
     callers: list[CallerSummary]
+
+
+class GrantedCapabilitySummary(BaseModel):
+    """One granted capability_id joined with its caller's status (the doctor
+    fwd=granted leg). NEVER a token value or hash."""
+
+    capability_id: str
+    caller_name: str
+    policy_path: str
+    status: str
+    granted_at: str | None
+    revoked_at: str | None
+
+
+class ListCapabilitiesResponse(BaseModel):
+    capabilities: list[GrantedCapabilitySummary]
 
 
 @router.post(
@@ -184,8 +204,17 @@ async def delete_caller(
     dependencies=[admin_required],
 )
 async def list_callers_endpoint(
+    http_request: Request,
     caller_repo_cm: Annotated[CallerRepoCM, Depends(get_caller_repo)],
 ) -> ListCallersResponse:
+    # Convenience join: surface each caller's capability_id from the live policy
+    # binding (read-only; null when no policy is loaded or for a name-only grant).
+    policy = getattr(http_request.app.state, "policy", None)
+    name_to_capability = (
+        {name: b.capability_id for name, b in policy.callers.items()}
+        if policy is not None
+        else {}
+    )
     async with caller_repo_cm as repo:
         items = await list_callers(repo, include_revoked=True)
     return ListCallersResponse(
@@ -196,7 +225,38 @@ async def list_callers_endpoint(
                 policy_path=c.policy_path,
                 created_at=c.created_at.isoformat(),
                 revoked_at=c.revoked_at.isoformat() if c.revoked_at else None,
+                capability_id=name_to_capability.get(c.name),
             )
             for c in items
+        ]
+    )
+
+
+@router.get(
+    "/v1/admin/capabilities",
+    response_model=ListCapabilitiesResponse,
+    dependencies=[admin_required],
+)
+async def list_capabilities_endpoint(
+    http_request: Request,
+    caller_repo_cm: Annotated[CallerRepoCM, Depends(get_caller_repo)],
+) -> ListCapabilitiesResponse:
+    """The doctor 'fwd=granted' leg: the capability_ids the LIVE POLICY governs,
+    joined with each caller's status. Read-only, admin-gated (D11). Sorted by
+    capability_id (R6). NEVER a token value or hash."""
+    policy = getattr(http_request.app.state, "policy", None)
+    async with caller_repo_cm as repo:
+        granted = await list_capabilities(policy, repo)
+    return ListCapabilitiesResponse(
+        capabilities=[
+            GrantedCapabilitySummary(
+                capability_id=g.capability_id,
+                caller_name=g.caller_name,
+                policy_path=g.policy_path,
+                status=g.status,
+                granted_at=g.granted_at,
+                revoked_at=g.revoked_at,
+            )
+            for g in granted
         ]
     )

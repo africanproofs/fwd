@@ -1,4 +1,4 @@
-"""clifwd capability — capability-grant tooling (ADR-0001 §3/§4).
+"""clifwd capability — capability grant + read tooling (ADR-0001 §3/§4/§6).
 
 `grant` ingests a consumer's `<consumer> spec --json` (the reference consumer is
 clif) from stdin or --spec-file, **re-renders the custody diff itself** (D3), and
@@ -11,6 +11,10 @@ canonical clif/onboard convention) because the spec carries the wallet NAME but
 not the fwd caller name / policy_path. fwd does NOT write policy.yaml and does
 NOT emit a bundle (Unit 4) — the minted token is return-once, as `callers
 create` is today. Requires FWD_ADMIN_KEY in env (like `callers create`).
+
+`list` is the read-only doctor 'fwd=granted' leg: the capability_ids the LIVE
+POLICY governs, joined with each caller's status (admin-gated GET
+/v1/admin/capabilities; `--json` for the coordinator scrape). NEVER a token/hash.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from fwd.app.capability_grant import (
     render_custody_diff,
 )
 
-app = typer.Typer(name="capability", help="Capability-grant tooling (ADR-0001 §3/§4).")
+app = typer.Typer(name="capability", help="Capability grant + read tooling (ADR-0001 §3/§4/§6).")
 
 
 def _admin_headers() -> dict[str, str]:
@@ -231,3 +235,49 @@ def grant(
     if failures:
         typer.echo(f"{failures} capability(ies) not minted — see above", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command(name="list")
+def list_command(
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the raw /v1/admin/capabilities JSON instead of the human table.",
+    ),
+) -> None:
+    """List the capability_ids the live policy governs, joined with caller status.
+
+    The read-only doctor 'fwd=granted' leg — derived from the LIVE POLICY (so a
+    hand-edited ungoverned grant is detectable), sorted by capability_id,
+    admin-gated. NEVER a token value or hash. Exit: 0 ok; 1 http error; 2 no
+    admin key / unreachable.
+    """
+    url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
+    try:
+        r = httpx.get(f"{url}/v1/admin/capabilities", headers=_admin_headers(), timeout=10.0)
+    except (httpx.HTTPError, OSError) as exc:
+        typer.echo(f"unreachable: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    if r.status_code != 200:
+        typer.echo(f"http {r.status_code}: {r.text[:200]}", err=True)
+        raise typer.Exit(code=1)
+
+    if json_out:
+        # The /v1/admin/capabilities response is already JSON and carries NO
+        # token/hash (GrantedCapabilitySummary) — emit it raw.
+        typer.echo(r.text)
+        return
+
+    body = r.json()
+    if not body["capabilities"]:
+        typer.echo("(no granted capabilities)", err=True)
+        return
+
+    typer.echo(f"{'capability_id':<32}  {'caller':<24}  {'policy_path':<24}  status")
+    typer.echo(f"{'-' * 32}  {'-' * 24}  {'-' * 24}  ------")
+    for c in body["capabilities"]:
+        typer.echo(
+            f"{c['capability_id']:<32}  {c['caller_name']:<24}  "
+            f"{c['policy_path']:<24}  {c['status']}"
+        )
