@@ -38,13 +38,23 @@ def create(
         "--replace",
         help="Re-mint a REVOKED caller of the same name (rotation). Fails on an active caller.",
     ),
+    capability_id: str | None = typer.Option(
+        None,
+        "--capability-id",
+        help="Optional <consumer>/<network>/<role> capability id (ADR-0001 §3).",
+    ),
 ) -> None:
     """Create a fresh caller. Returns the API key ONCE — capture it."""
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
     try:
         r = httpx.post(
             f"{url}/v1/admin/callers",
-            json={"name": name, "policy_path": policy, "replace": replace},
+            json={
+                "name": name,
+                "policy_path": policy,
+                "replace": replace,
+                "capability_id": capability_id,
+            },
             headers={**_admin_headers(), "Content-Type": "application/json"},
             timeout=30.0,
         )
@@ -56,6 +66,8 @@ def create(
         body = r.json()
         print("created caller:", body["name"], file=sys.stderr)
         print("policy_path:   ", body["policy_path"], file=sys.stderr)
+        if body.get("capability_id"):
+            print("capability_id: ", body["capability_id"], file=sys.stderr)
         print("api_key_prefix:", body["api_key_prefix"], file=sys.stderr)
         print("API KEY (returned ONCE — capture now):", file=sys.stderr)
         # The actual key goes to stdout for shell capture.

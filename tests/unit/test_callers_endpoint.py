@@ -118,6 +118,80 @@ def test_post_callers_201(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "api_key_prefix" in body
 
 
+def test_post_callers_201_with_capability_id_echoes_and_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    result = CallerCreateResult(
+        name="clif-claim",
+        api_key="fwd_live_" + "a" * 43,
+        api_key_prefix="aaaaaaaa",
+        policy_path="perm/claim-songbird",
+        capability_id="clif/songbird/claim",
+    )
+    with patch(
+        "fwd.api.callers.create_caller", new=AsyncMock(return_value=result)
+    ) as mock_create:
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={
+                "name": "clif-claim",
+                "policy_path": "perm/claim-songbird",
+                "capability_id": "clif/songbird/claim",
+            },
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 201
+    assert r.json()["capability_id"] == "clif/songbird/claim"
+    # The handler threaded capability_id into the CallerCreateRequest.
+    sent_request = mock_create.call_args.args[0]
+    assert sent_request.capability_id == "clif/songbird/claim"
+
+
+def test_post_callers_400_invalid_capability_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    # Validation fires before create_caller — assert the use case is never called.
+    with patch("fwd.api.callers.create_caller", new=AsyncMock()) as mock_create:
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={
+                "name": "x",
+                "policy_path": "policies/x.yaml",
+                "capability_id": "NOT/a valid/id",
+            },
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 400
+    assert r.json()["detail"]["error"] == "invalid_capability_id"
+    mock_create.assert_not_called()
+
+
+def test_post_callers_201_capability_id_null_back_compat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import patch
+
+    result = CallerCreateResult(
+        name="legacy",
+        api_key="fwd_live_" + "b" * 43,
+        api_key_prefix="bbbbbbbb",
+        policy_path="policies/legacy.yaml",
+    )
+    with patch("fwd.api.callers.create_caller", new=AsyncMock(return_value=result)):
+        client = _make_client(monkeypatch)
+        r = client.post(
+            "/v1/admin/callers",
+            json={"name": "legacy", "policy_path": "policies/legacy.yaml"},
+            headers=_ADMIN_HDR,
+        )
+    assert r.status_code == 201
+    assert r.json()["capability_id"] is None
+
+
 def test_post_callers_400_bad_name(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _make_client(monkeypatch)
     r = client.post(

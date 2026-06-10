@@ -516,8 +516,11 @@ token_ok() {  # token -> 0 iff a well-formed fwd live token (safe to eval-assign
 }
 
 # mint or recover a caller token; sets the named outvar to the FINAL token to write
-caller_ensure() {  # name policy outvar envfile envkey
-  set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" 2>/dev/null)"; _ce_rc=$?; set -e
+caller_ensure() {  # name policy outvar envfile envkey [capability_id]
+  # Optional <consumer>/<network>/<role> capability id (ADR-0001 §3). Unquoted
+  # expansion below splits "--capability-id <id>" into 2 args; ids carry no spaces.
+  _ce_cap=""; [ -n "${6:-}" ] && _ce_cap="--capability-id $6"
+  set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" $_ce_cap 2>/dev/null)"; _ce_rc=$?; set -e
   case "$_ce_rc" in
     0) token_ok "$_ce_k" || die "minted token for $1 has unexpected format (not fwd_live_<43>) — aborting before eval"
        eval "$3=\$_ce_k"
@@ -537,7 +540,7 @@ caller_ensure() {  # name policy outvar envfile envkey
        elif [ "$ROTATE_MISSING" -eq 1 ]; then
          note "caller $1 exists but its one-time token is lost and $(basename "$4") has none — rotating"
          clifwd callers revoke --name "$1" >/dev/null 2>&1 || die "revoke $1 failed"
-         set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" --replace 2>/dev/null)"; _ce_rc=$?; set -e
+         set +e; _ce_k="$(clifwd callers create --name "$1" --policy "$2" $_ce_cap --replace 2>/dev/null)"; _ce_rc=$?; set -e
          [ "$_ce_rc" -eq 0 ] || die "re-mint $1 failed (exit $_ce_rc)"
          token_ok "$_ce_k" || die "re-minted token for $1 has unexpected format — aborting before eval"
          eval "$3=\$_ce_k"; note "caller $1 re-minted -> clif env"
@@ -614,8 +617,8 @@ if [ "$HAS_FSP" -eq 1 ]; then
     else
       wallet_create "$_sender" "$(sender_wc "$net")" "the wallet that pays gas and submits FSP messages"
     fi
-    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_ENV_DIR/.env.$net" FSP_SIGN_CALLER_TOKEN
-    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_ENV_DIR/.env.$net" FSP_SUBMIT_CALLER_TOKEN
+    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "$CLIF_ENV_DIR/.env.$net" FSP_SIGN_CALLER_TOKEN   "clif/$net/fsp-sign"
+    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "$CLIF_ENV_DIR/.env.$net" FSP_SUBMIT_CALLER_TOKEN "clif/$net/fsp-submit"
     eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
     if wallet_exists "$_sender"; then seed_nonce_or_defer "$_sender" "$cid"
     else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
@@ -635,7 +638,7 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
     else
       wallet_create "claimer-$net" "wc/claimer-$net" "the wallet that claims rewards for your identity and pays your recipient"
     fi
-    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_ENV_DIR/.env.$net" FWD_CALLER_TOKEN
+    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "$CLIF_ENV_DIR/.env.$net" FWD_CALLER_TOKEN "clif/$net/claim"
     eval "TOK_CLAIM_$net=\$_t_claim"
     if wallet_exists "claimer-$net"; then seed_nonce_or_defer "claimer-$net" "$cid"
     else warn "claimer-$net not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet claimer-$net --chain $cid --starting-nonce <n>"; fi

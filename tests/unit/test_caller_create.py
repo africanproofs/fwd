@@ -122,3 +122,83 @@ async def test_create_caller_threads_replace_true_to_repo() -> None:
     request_json = json.loads(audit_call_kwargs["request_json"])
     assert "replace" in request_json
     assert request_json["replace"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_caller_threads_capability_id_into_request_json_and_result() -> None:
+    """capability_id is threaded into repo-call-free audit request_json + the result."""
+    import json
+
+    repo = MagicMock()
+    repo.create = AsyncMock(return_value=_mock_caller("clif-claim"))
+    audit = _mock_audit_repo()
+
+    result = await create_caller(
+        CallerCreateRequest(
+            name="clif-claim",
+            policy_path="perm/claim-songbird",
+            capability_id="clif/songbird/claim",
+        ),
+        repo,
+        audit_repo=audit,
+    )
+
+    # capability_id is NOT a repo.create kwarg (no custody-DB column / Alembic).
+    assert "capability_id" not in repo.create.call_args.kwargs
+    # It IS in the audit request_json and echoed on the result.
+    request_json = json.loads(audit.append.call_args.kwargs["request_json"])
+    assert request_json["capability_id"] == "clif/songbird/claim"
+    assert result.capability_id == "clif/songbird/claim"
+    # NEVER the key/hash in any audit field.
+    assert "api_key" not in request_json
+    assert result.api_key not in audit.append.call_args.kwargs["request_json"]
+
+
+@pytest.mark.asyncio
+async def test_create_caller_capability_id_defaults_none() -> None:
+    """Back-compat: a name-only grant carries capability_id=None (request_json null)."""
+    import json
+
+    repo = MagicMock()
+    repo.create = AsyncMock(return_value=_mock_caller("legacy"))
+    audit = _mock_audit_repo()
+
+    result = await create_caller(
+        CallerCreateRequest(name="legacy", policy_path="policies/legacy.yaml"),
+        repo,
+        audit_repo=audit,
+    )
+
+    assert result.capability_id is None
+    request_json = json.loads(audit.append.call_args.kwargs["request_json"])
+    assert request_json["capability_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_caller_rejected_forensic_row_carries_capability_id() -> None:
+    """Core #19: the CallerExistsError forensic row carries capability_id and is
+    committed BEFORE the raise (commit-before-raise on the shared session)."""
+    import json
+
+    repo = MagicMock()
+    repo.create = AsyncMock(side_effect=CallerExistsError("dup"))
+    audit = _mock_audit_repo()
+
+    with pytest.raises(CallerNameTaken):
+        await create_caller(
+            CallerCreateRequest(
+                name="dup",
+                policy_path="perm/claim-songbird",
+                capability_id="clif/songbird/claim",
+            ),
+            repo,
+            audit_repo=audit,
+        )
+
+    # The forensic (error) row was appended with the capability_id ...
+    err_kwargs = audit.append.call_args.kwargs
+    assert err_kwargs["decision"] == "error"
+    request_json = json.loads(err_kwargs["request_json"])
+    assert request_json["capability_id"] == "clif/songbird/claim"
+    # ... and committed before the raise (Core #19 — survives the rollback).
+    audit.commit.assert_awaited()

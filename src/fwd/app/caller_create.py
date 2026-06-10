@@ -31,6 +31,10 @@ class CallerCreateRequest:
     name: str
     policy_path: str
     replace: bool = False
+    # Optional <consumer>/<network>/<role> join key (ADR-0001 §3). Threaded into
+    # the audit row only — NOT a custody-DB column (Unit-3 narrowing: no Alembic
+    # migration; capability_id persists in the policy schema, not the callers table).
+    capability_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,7 @@ class CallerCreateResult:
     api_key: str  # plaintext, shown once
     api_key_prefix: str
     policy_path: str
+    capability_id: str | None = None
 
 
 class CallerNameTaken(Exception):  # noqa: N818
@@ -58,10 +63,15 @@ async def create_caller(
     """Mint a fresh caller key and persist its hash.
 
     D16: one audit row per call. caller=None (admin action). request_json
-    carries name + policy_path only — NEVER api_key or key_hash.
+    carries name + policy_path + capability_id only — NEVER api_key or key_hash.
     """
     _request_json = _canonical_json(
-        {"name": request.name, "policy_path": request.policy_path, "replace": request.replace}
+        {
+            "name": request.name,
+            "policy_path": request.policy_path,
+            "replace": request.replace,
+            "capability_id": request.capability_id,
+        }
     )
     generated = generate_api_key()
     try:
@@ -97,6 +107,7 @@ async def create_caller(
         name=caller.name,
         api_key_prefix=caller.api_key_prefix,
         policy_path=caller.policy_path,
+        capability_id=request.capability_id,
     )
 
     return CallerCreateResult(
@@ -104,4 +115,5 @@ async def create_caller(
         api_key=generated.key,  # plaintext — return-once contract
         api_key_prefix=caller.api_key_prefix,
         policy_path=caller.policy_path,
+        capability_id=request.capability_id,
     )

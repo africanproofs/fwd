@@ -86,11 +86,24 @@ class FspPermissionBlock(BaseModel):
 
 
 class CallerBinding(BaseModel):
-    """Binds a caller name to a policy_path (→ PermissionBlock key)."""
+    """Binds a caller name to a policy_path (→ PermissionBlock key).
+
+    `capability_id` (optional) is the consumer-namespaced
+    `<consumer>/<network>/<role>` join key (ADR-0001 §3) — the immutable spine
+    across spec → grant → import → reconcile. Optional for back-compat: a
+    name-only grant carries none. When present it MUST be unique across all
+    CallerBindings (the join's integrity — enforced in
+    policy_loader.check_consistency).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     policy_path: str
+    capability_id: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9_-]*/[a-z0-9-]+/[a-z0-9-]+$",  # <consumer>/<network>/<role>
+    )
 
 
 class WalletBinding(BaseModel):

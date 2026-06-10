@@ -50,12 +50,19 @@ version: 1
 # Three callers — one per leg (fwd forbids one policy_path in both permissions
 # and fsp_permissions, so Leg-1 sign and Leg-2 submit use distinct callers):
 callers:
+  # `capability_id` (optional, ADR-0001 §3) is the <consumer>/<network>/<role>
+  # join key. `clifwd capability grant` / `fwd onboard` attach it when minting;
+  # `policy init` does NOT emit it (add it here when binding a capability grant).
+  # It must be unique across callers (enforced by `clifwd policy validate`).
   claim-songbird:        # FTSO reward claimer
     policy_path: perm/claim-songbird
+    capability_id: clif/songbird/claim
   fsp-sign-songbird:     # FSP Leg-1 — POST /v1/sign-fsp-message
     policy_path: fsp/songbird
+    capability_id: clif/songbird/fsp-sign
   fsp-submit-songbird:   # FSP Leg-2 — POST /v1/sign-transaction (FlareSystemsManager)
     policy_path: perm/fsp-submit-songbird
+    capability_id: clif/songbird/fsp-submit
 
 # Wallet -> wallet_constraints indirection (per-wallet aggregate/rate cap).
 wallets:

@@ -158,6 +158,61 @@ def test_load_policy_extra_key_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# capability_id on CallerBinding (ADR-0001 §3) — schema + uniqueness
+# ---------------------------------------------------------------------------
+
+
+def test_load_policy_valid_capability_id(tmp_path: Path) -> None:
+    raw = {
+        "version": 1,
+        "callers": {"c": {"policy_path": "perm/x", "capability_id": "clif/songbird/claim"}},
+    }
+    policy = load_policy(_write_yaml(tmp_path, raw))
+    assert policy.callers["c"].capability_id == "clif/songbird/claim"
+
+
+def test_load_policy_bad_capability_id_pattern_raises(tmp_path: Path) -> None:
+    raw = {
+        "version": 1,
+        "callers": {"c": {"policy_path": "perm/x", "capability_id": "NOT A VALID ID"}},
+    }
+    with pytest.raises(PolicyLoadError, match="schema error"):
+        load_policy(_write_yaml(tmp_path, raw))
+
+
+def test_check_consistency_duplicate_capability_id_is_error() -> None:
+    registry = AbiRegistry.load(ABIS_DIR)
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {
+                "a": {"policy_path": "perm/x", "capability_id": "clif/songbird/claim"},
+                "b": {"policy_path": "perm/y", "capability_id": "clif/songbird/claim"},
+            },
+        }
+    )
+    errors = check_consistency(policy, [], [], registry)
+    assert any(
+        "capability_id 'clif/songbird/claim'" in e and "must be unique" in e for e in errors
+    )
+
+
+def test_check_consistency_distinct_capability_ids_no_uniqueness_error() -> None:
+    registry = AbiRegistry.load(ABIS_DIR)
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {
+                "a": {"policy_path": "perm/x", "capability_id": "clif/songbird/claim"},
+                "b": {"policy_path": "perm/y", "capability_id": "clif/songbird/fsp-sign"},
+            },
+        }
+    )
+    errors = check_consistency(policy, [], [], registry)
+    assert not any("must be unique" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
 # check_consistency — clean policy → empty list
 # ---------------------------------------------------------------------------
 

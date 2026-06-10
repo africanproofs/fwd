@@ -38,12 +38,15 @@ from fwd.app.dependencies import (
 router = APIRouter()
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_CAPABILITY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*/[a-z0-9-]+/[a-z0-9-]+$")
 
 
 class CreateCallerBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
     policy_path: str = Field(..., min_length=1, max_length=128)
     replace: bool = Field(False)
+    # Optional <consumer>/<network>/<role> join key (ADR-0001 §3).
+    capability_id: str | None = Field(default=None, max_length=128)
 
 
 class CreateCallerResponse(BaseModel):
@@ -51,6 +54,7 @@ class CreateCallerResponse(BaseModel):
     api_key: str  # plaintext, returned ONCE
     api_key_prefix: str
     policy_path: str
+    capability_id: str | None = None
 
 
 class CallerSummary(BaseModel):
@@ -87,6 +91,18 @@ async def post_callers(
             },
         )
 
+    if body.capability_id is not None and not _CAPABILITY_ID_RE.match(body.capability_id):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_capability_id",
+                "message": (
+                    "capability_id must match <consumer>/<network>/<role> "
+                    "(^[a-z0-9][a-z0-9_-]*/[a-z0-9-]+/[a-z0-9-]+$)"
+                ),
+            },
+        )
+
     # policy_path validation: skip when no policy is loaded (bootstrap order).
     policy = getattr(http_request.app.state, "policy", None)
     if policy is not None and not policy_path_exists(policy, body.policy_path, "caller"):
@@ -105,7 +121,10 @@ async def post_callers(
         async with admin_scope_cm as scope:
             result = await create_caller(
                 CallerCreateRequest(
-                    name=body.name, policy_path=body.policy_path, replace=body.replace
+                    name=body.name,
+                    policy_path=body.policy_path,
+                    replace=body.replace,
+                    capability_id=body.capability_id,
                 ),
                 scope.caller_repo,
                 audit_repo=scope.audit_repo,
@@ -124,6 +143,7 @@ async def post_callers(
         api_key=result.api_key,
         api_key_prefix=result.api_key_prefix,
         policy_path=result.policy_path,
+        capability_id=result.capability_id,
     )
 
 

@@ -127,6 +127,24 @@ def check_consistency(
                 f"'{binding.policy_path}' not in permissions or fsp_permissions"
             )
 
+    # Check 1d: capability_id uniqueness across CallerBindings. The
+    # capability_id is the immutable <consumer>/<network>/<role> join key
+    # (ADR-0001 §3); two bindings sharing one breaks the join's integrity.
+    # Pure-policy check (no DB/registry needed); name-only bindings (None) skip.
+    _seen_capability_id: dict[str, str] = {}
+    for cname, cbinding in policy.callers.items():
+        cid = cbinding.capability_id
+        if cid is None:
+            continue
+        prior = _seen_capability_id.get(cid)
+        if prior is not None:
+            errors.append(
+                f"capability_id '{cid}' is bound to BOTH caller '{prior}' "
+                f"and caller '{cname}' (capability_id must be unique)"
+            )
+        else:
+            _seen_capability_id[cid] = cname
+
     # Checks 2, 3 (partial), 4: walk all permissions blocks.
     for perm_path, perm in policy.permissions.items():
         for addr, crule in perm.contracts.items():

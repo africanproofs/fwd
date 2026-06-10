@@ -246,6 +246,61 @@ def test_callers_create_replace_sends_replace_true(monkeypatch: pytest.MonkeyPat
     assert sent_json["replace"] is True
 
 
+def test_callers_create_capability_id_sent_in_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """create --capability-id sends capability_id in the POST body (default None when omitted)."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    api_key = "fwd_live_" + "e" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {
+            "name": "clif-claim",
+            "policy_path": "perm/claim-songbird",
+            "api_key_prefix": "eeeeeeee",
+            "api_key": api_key,
+            "capability_id": "clif/songbird/claim",
+        },
+    )
+    with patch("fwd.cli.callers.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app,
+            [
+                "callers",
+                "create",
+                "--name",
+                "clif-claim",
+                "--policy",
+                "perm/claim-songbird",
+                "--capability-id",
+                "clif/songbird/claim",
+            ],
+        )
+    assert result.exit_code == 0
+    assert mock_post.call_args.kwargs["json"]["capability_id"] == "clif/songbird/claim"
+
+
+def test_callers_create_no_capability_id_sends_null(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Omitting --capability-id sends capability_id=None (back-compat)."""
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    api_key = "fwd_live_" + "f" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {
+            "name": "legacy",
+            "policy_path": "policies/legacy.yaml",
+            "api_key_prefix": "ffffffff",
+            "api_key": api_key,
+            "capability_id": None,
+        },
+    )
+    with patch("fwd.cli.callers.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app,
+            ["callers", "create", "--name", "legacy", "--policy", "policies/legacy.yaml"],
+        )
+    assert result.exit_code == 0
+    assert mock_post.call_args.kwargs["json"]["capability_id"] is None
+
+
 def test_callers_create_no_replace_flag_sends_replace_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
