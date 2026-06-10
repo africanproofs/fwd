@@ -104,3 +104,50 @@ def test_grant_approve_missing_admin_key_exits_2(monkeypatch: pytest.MonkeyPatch
         result = runner.invoke(app, ["capability", "grant", "--approve"], input=_SPEC)
     assert result.exit_code == 2
     mock_post.assert_not_called()
+
+
+def test_grant_emit_bundle_writes_0600_no_stdout_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """--approve --emit-bundle: token -> 0600 bundle, NEVER stdout; --replace threaded."""
+    import stat
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    token = "fwd_live_" + "a" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {"name": "claim-songbird", "api_key_prefix": "aaaaaaaa", "api_key": token},
+    )
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post", return_value=fake) as mock_post:
+        result = runner.invoke(
+            app,
+            ["capability", "grant", "--approve", "--replace", "--emit-bundle", str(out)],
+            input=_SPEC,
+        )
+    assert result.exit_code == 0, result.output
+    assert token not in (result.stdout or "")  # NEVER on stdout
+    assert out.is_file()
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    bundle = json.loads(out.read_text())
+    assert bundle["capabilities"][0]["caller_token"] == token
+    assert bundle["network"] == "songbird"
+    assert mock_post.call_args.kwargs["json"]["replace"] is True
+
+
+def test_grant_emit_bundle_partial_failure_writes_no_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """Fail-closed: a 409 on any capability ⇒ no (partial) bundle, exit 1."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    fake = MagicMock(status_code=409, text='{"error":"caller_exists"}')
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post", return_value=fake):
+        result = runner.invoke(
+            app, ["capability", "grant", "--approve", "--emit-bundle", str(out)], input=_SPEC
+        )
+    assert result.exit_code == 1
+    assert not out.exists()

@@ -11,6 +11,7 @@ import httpx
 import typer
 
 from fwd.cli.audit import app as audit_app
+from fwd.cli.bundle import app as bundle_app
 from fwd.cli.callers import app as callers_app
 from fwd.cli.capability import app as capability_app
 from fwd.cli.fsp import app as fsp_app
@@ -34,6 +35,7 @@ app.add_typer(fsp_app, name="fsp")
 app.add_typer(nonce_app, name="nonce")
 app.add_typer(policy_app, name="policy")
 app.add_typer(capability_app, name="capability")
+app.add_typer(bundle_app, name="bundle")
 
 
 @app.command()

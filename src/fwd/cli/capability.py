@@ -23,6 +23,12 @@ from typing import Optional
 import httpx
 import typer
 
+from fwd.app.bundle_emit import (
+    BundleCapability,
+    BundleEmitError,
+    compose_bundle,
+    write_bundle,
+)
 from fwd.app.capability_grant import (
     CapabilitySpecError,
     parse_spec,
@@ -53,11 +59,29 @@ def grant(
         "--approve",
         help="Explicit operator approval of the custody diff (Core #15). Without it: render only.",
     ),
+    replace: bool = typer.Option(
+        False,
+        "--replace",
+        help="Re-mint a REVOKED caller of the same name (rotation). Pairs with --emit-bundle.",
+    ),
+    emit_bundle: Optional[Path] = typer.Option(  # noqa: B008,UP007
+        None,
+        "--emit-bundle",
+        help=(
+            "Write the minted tokens into a 0600 v1 bundle at this path instead of stdout. "
+            "NOTE: this CLI runs in-container, so the path is container-relative — point it at a "
+            "host-visible mount, or use `fwd onboard` for the host-side bundle next to clif's .env."
+        ),
+    ),
+    ttl_seconds: int = typer.Option(
+        600, "--ttl-seconds", help="Bundle TTL in seconds (only with --emit-bundle)."
+    ),
 ) -> None:
     """Ingest a consumer spec, re-render the custody diff, and (with --approve) mint by capability_id.
 
     Default-deny: without --approve nothing is minted — the diff + provisioning
-    plan are rendered for operator judgment only.
+    plan are rendered for operator judgment only. With --emit-bundle, minted token
+    VALUES go to a 0600 bundle file (never stdout); fail-closed (no partial bundle).
 
     Exit: 0 = rendered (no --approve) or all capabilities minted; 1 = one or more
     capabilities failed/were skipped; 2 = bad input / unreachable / no admin key.
@@ -112,6 +136,7 @@ def grant(
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
     headers = {**_admin_headers(), "Content-Type": "application/json"}
     failures = 0
+    minted: list[BundleCapability] = []
     for g in plan:
         if g.caller_name is None or g.policy_path is None:
             typer.echo(
@@ -127,7 +152,7 @@ def grant(
                 json={
                     "name": g.caller_name,
                     "policy_path": g.policy_path,
-                    "replace": False,
+                    "replace": replace,
                     "capability_id": g.capability_id,
                 },
                 headers=headers,
@@ -139,18 +164,35 @@ def grant(
 
         if r.status_code == 201:
             body = r.json()
-            typer.echo(
-                f"granted {g.capability_id}: caller '{g.caller_name}' "
-                f"(prefix {body['api_key_prefix']}). Token (return-once) -> env {g.caller_token_env}:",
-                err=True,
-            )
-            # The token plaintext goes to stdout as <env>=<token> for capture
-            # (return-once, as `callers create` today). fwd does not persist it.
-            typer.echo(f"{g.caller_token_env}={body['api_key']}")
+            if emit_bundle is not None:
+                # Token VALUE goes to the 0600 bundle, NEVER stdout.
+                minted.append(
+                    BundleCapability(
+                        capability_id=g.capability_id,
+                        caller_token_env=g.caller_token_env,
+                        caller_token=body["api_key"],
+                        wallet_name=g.wallet_name,
+                    )
+                )
+                typer.echo(
+                    f"granted {g.capability_id}: caller '{g.caller_name}' "
+                    f"(prefix {body['api_key_prefix']}) -> bundle (env {g.caller_token_env})",
+                    err=True,
+                )
+            else:
+                typer.echo(
+                    f"granted {g.capability_id}: caller '{g.caller_name}' "
+                    f"(prefix {body['api_key_prefix']}). Token (return-once) -> env "
+                    f"{g.caller_token_env}:",
+                    err=True,
+                )
+                # The token plaintext goes to stdout as <env>=<token> for capture
+                # (return-once, as `callers create` today). fwd does not persist it.
+                typer.echo(f"{g.caller_token_env}={body['api_key']}")
         elif r.status_code == 409:
             typer.echo(
                 f"exists {g.capability_id}: caller '{g.caller_name}' already active "
-                "(its token was shown once; revoke+re-grant to rotate)",
+                "(its token was shown once; revoke+re-grant, or --replace to rotate)",
                 err=True,
             )
             failures += 1
@@ -160,6 +202,31 @@ def grant(
                 err=True,
             )
             failures += 1
+
+    # --emit-bundle: fail-closed — only write a COMPLETE bundle (every planned
+    # capability minted), never a partial one that would leave clif short a token.
+    if emit_bundle is not None and not failures:
+        try:
+            bundle = compose_bundle(
+                consumer=spec.consumer,
+                network=spec.network,
+                ttl_seconds=ttl_seconds,
+                capabilities=minted,
+            )
+            write_bundle(bundle, emit_bundle)
+        except (BundleEmitError, OSError) as exc:
+            typer.echo(f"bundle emit failed: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        typer.echo(
+            f"bundle written 0600 to {emit_bundle} "
+            f"({len(minted)} capabilities: {', '.join(c.capability_id for c in minted)})",
+            err=True,
+        )
+    elif emit_bundle is not None and failures:
+        typer.echo(
+            "bundle NOT written: not every capability minted (fail-closed — no partial bundle)",
+            err=True,
+        )
 
     if failures:
         typer.echo(f"{failures} capability(ies) not minted — see above", err=True)
