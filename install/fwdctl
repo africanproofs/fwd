@@ -33,4 +33,4 @@ if [ "${1:-}" = "onboard" ]; then
   exec "$FWD_DIR/install/onboard" "$@"
 fi
 
-exec docker exec "${FWD_CONTAINER:-fwd}" fwdctl "$@"
+exec docker exec -i "${FWD_CONTAINER:-fwd}" fwdctl "$@"
