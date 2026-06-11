@@ -24,9 +24,6 @@ export FWD_CONTAINER="${FWD_CONTAINER:-fwd}"
 # Pin project = container so onboard (routed below) operates the installer's project,
 # immune to a stale COMPOSE_PROJECT_NAME in the operator's shell.
 export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
-# onboard (routed below) writes clif's per-network env here. clif is a SEPARATE deployment;
-# clifwd/onboard never invoke clif — they provision fwd custody and hand clif its env.
-export CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
 
 if [ "${1:-}" = "onboard" ]; then
   shift

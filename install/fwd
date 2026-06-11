@@ -19,8 +19,6 @@
 set -eu
 
 FWD_DIR="${FWD_DIR:-/opt/fwd}"
-# Where onboarding writes clif's per-network env (clif is a separate deployment).
-CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
 cd "$FWD_DIR"
 
 COMPOSE="-f docker-compose.yml"
@@ -53,20 +51,12 @@ case "$cmd" in
     # status so a monitor/script sees a Docker/daemon failure.
     printf 'fwd daemon (zero-egress signer):\n'
     set +e; docker compose $COMPOSE ps "$@"; _rc=$?; set -e
-    if [ -d "$CLIF_ENV_DIR" ]; then
-      printf '\nclif env files (%s):\n' "$CLIF_ENV_DIR"
-      _any=0
-      for _n in flare songbird coston2; do
-        if [ -f "$CLIF_ENV_DIR/.env.$_n" ]; then printf '  %-9s present\n' "$_n"; _any=1; fi
-      done
-      [ "$_any" -eq 0 ] && printf '  (none yet — run: sudo fwd onboard rewards …)\n'
-    fi
     printf '\nnext: sudo fwd onboard rewards …  then deploy clif separately and: clifctl up <net>\n'
     [ "$_rc" -ne 0 ] && printf 'fwd status: docker compose ps exited %s\n' "$_rc" >&2
     exit "$_rc"
     ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
-  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" CLIF_ENV_DIR="$CLIF_ENV_DIR" "$FWD_DIR/install/onboard" "$@" ;;
+  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" "$FWD_DIR/install/onboard" "$@" ;;
   upgrade|backup)
     echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
     exit 2
@@ -75,7 +65,7 @@ case "$cmd" in
     echo "usage: fwd {start|stop|restart|status|logs|onboard} [args...]" >&2
     echo "       fwd start  → fwd + litestream (the zero-egress signer; never launches clif)" >&2
     echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
-    echo "       (provisions fwd custody + writes clif's env to $CLIF_ENV_DIR; --guided for the walk-through)" >&2
+    echo "       (provisions fwd custody + publishes the handoff bundle to fwd's outbox; --guided for the walk-through)" >&2
     echo "       automation: deploy clif separately, then clifctl up <net>  (NOT 'fwd start <net>')" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0

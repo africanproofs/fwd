@@ -18,10 +18,10 @@
 # registered for you). Nonces are read from chain truth via the keyless clif
 # one-shot (egress stays in clif; fwd has no egress) — no hand-typing required.
 #
-# clif handoff: onboard emits the complete v2 bundle (config + caller tokens +
-# wallet names) into CLIF_ENV_DIR; fwd never reads or writes clif's .env
-# (Invariant #5 closed) — clif imports it. The FSP gas-paying sender defaults to
-# per-network (fsp-sender-<net>).
+# handoff: onboard emits the complete v2 bundle (config + caller tokens + wallet
+# names) to fwd's OWN outbox; fwd never reads or writes a consumer's .env or dir
+# (Invariant #5 + membrane) — the consumer pulls it. The FSP gas-paying sender
+# defaults to per-network (fsp-sender-<net>).
 #
 # Single terminal: all prompts read from /dev/tty (so it works even under
 # `curl|sh`). Importing a key: you PASTE it (hidden); fwd pipes it straight into
@@ -202,11 +202,16 @@ chain_of() {
 }
 
 # clif is a SEPARATE deployment (its own compose project + egress). onboard NEVER invokes
-# clif: it provisions fwd custody and hands clif its generated env in CLIF_ENV_DIR. On-chain
-# preflight + nonce-seed-from-chain are the operator's job via clif (clifctl run <net>
-# preflight / chain nonce) — surfaced in the final checklist. fwd is zero-egress.
-CLIF_ENV_DIR="${CLIF_ENV_DIR:-/opt/clif}"
-mkdir -p "$CLIF_ENV_DIR" 2>/dev/null || true
+# clif: it provisions fwd custody and publishes the handoff bundle to fwd's OWN outbox; the
+# consumer pulls it. fwd never knows or writes a consumer's directory (membrane: one way).
+# On-chain preflight + nonce-seed-from-chain are the operator's job via clif (clifctl run
+# <net> preflight / chain nonce) — surfaced in the final checklist. fwd is zero-egress.
+CONSUMER="${CONSUMER:-clif}"
+FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-$FWD_DIR/handoff}"
+mkdir -p "$FWD_HANDOFF_DIR" 2>/dev/null || true
+chown 1000:1000 "$FWD_HANDOFF_DIR" 2>/dev/null || true
+chmod 0700 "$FWD_HANDOFF_DIR" 2>/dev/null || true
+find "$FWD_HANDOFF_DIR" -maxdepth 1 -type f -name '*.json' -mmin +10 -delete 2>/dev/null || true
 
 printf '\033[1;36m=== fwd reward onboarding (%s) ===\033[0m\n' "$CLASS"
 guided 'Preparing %s function(s) on %s:\n' "$NFUNC" "$NETS"
@@ -540,13 +545,13 @@ caller_ensure() {  # name policy outvar [capability_id]
 # This is onboarding's SOLE clif touch-point — fwd never reads or writes clif's
 # .env (Invariant #5 CLOSED, Unit 4b); the bundle is the only handoff. The Python
 # composer runs IN the fwd container (the §4 shape + Core-#7 PRIVATE_KEY refuse-
-# guard live there); onboard runs on the HOST and writes the file next to clif's
-# .env (CLIF_ENV_DIR is host-only — not mounted into fwd, by de-intermingle). Token
+# guard live there); onboard runs on the HOST and writes the bundle to fwd's OWN
+# outbox (FWD_HANDOFF_DIR is host-only — not mounted into fwd; the consumer pulls). Token
 # VALUES travel the stdin/stdout capture PIPE (never argv); a failure is a non-fatal
 # warn (the bundle is re-emittable — a re-onboard rotates).
 bundle_emit() {  # net claim_tok sign_tok submit_tok
   _be_net="$1"; _be_ct="$2"; _be_st="$3"; _be_sub="$4"
-  _be_out="$CLIF_ENV_DIR/.fwd-bundle.$_be_net.json"
+  _be_out="$FWD_HANDOFF_DIR/$CONSUMER-$_be_net.json"
   # v2 config (consumer-contract-v1 §4) — the NON-SECRET network config that was
   # previously written into clif's .env, now relocated INTO the bundle. Composed
   # from flags + the SAME literal defaults; NO .env read (Invariant #5 stays closed).
@@ -572,13 +577,13 @@ bundle_emit() {  # net claim_tok sign_tok submit_tok
   [ -n "$_be_tuples" ] || { warn "bundle: no minted tokens for $_be_net — skipping bundle"; return 0; }
   _be_json="$(printf '%s' "$_be_cfg$_be_tuples" | clifwd bundle compose --network "$_be_net" 2>/dev/null)" || {
     warn "bundle: compose failed for $_be_net — re-run onboard to retry (a re-onboard rotates)"; ONBOARD_INCOMPLETE=1; return 0; }
-  _be_tmp="$(mktemp "$CLIF_ENV_DIR/.fwd-bundle.$_be_net.XXXXXX")" || {
-    warn "bundle: mktemp failed in $CLIF_ENV_DIR for $_be_net"; ONBOARD_INCOMPLETE=1; return 0; }
+  _be_tmp="$(mktemp "$FWD_HANDOFF_DIR/$CONSUMER-$_be_net.XXXXXX")" || {
+    warn "bundle: mktemp failed in $FWD_HANDOFF_DIR for $_be_net"; ONBOARD_INCOMPLETE=1; return 0; }
   printf '%s\n' "$_be_json" > "$_be_tmp"
   if grep -qi 'PRIVATE_KEY' "$_be_tmp"; then rm -f "$_be_tmp"; die "refusing to write $_be_out — it contains a *PRIVATE_KEY* name"; fi
   chmod 0600 "$_be_tmp" || die "chmod failed: $_be_tmp"; mv -f "$_be_tmp" "$_be_out" || die "mv failed: $_be_tmp -> $_be_out"
   chown 1000:1000 "$_be_out" 2>/dev/null || true
-  note "clif bundle written: $_be_out (0600, one-shot, TTL ~10min; import: clifctl import-credentials)"
+  note "handoff bundle published: $_be_out (0600, one-shot, TTL ~10min; import on the consumer: clifctl import-credentials $_be_net $_be_out)"
 }
 
 # ====================== Function: FSP REWARD SIGNING ======================
@@ -631,10 +636,10 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
   done
 fi
 
-# ====================== clif handoff bundle (.fwd-bundle.<net>.json) ======================
-printf '\n\033[1;35m═══════════════ clif handoff bundle ═══════════════\033[0m\n'
-printf '   Emitting the one-shot handoff bundle to %s (caller tokens + wallet names; 0600, TTL ~10min).\n' "$CLIF_ENV_DIR"
-printf '   fwd never reads or writes clif'"'"'s .env (Invariant #5) — clif imports the bundle itself: clifctl import-credentials.\n'
+# ====================== handoff bundle ($CONSUMER-<net>.json in fwd's outbox) ======================
+printf '\n\033[1;35m═══════════════ handoff bundle ═══════════════\033[0m\n'
+printf '   Publishing the one-shot handoff bundle to fwd'"'"'s outbox %s (caller tokens + wallet names; 0600, TTL ~10min).\n' "$FWD_HANDOFF_DIR"
+printf '   fwd never reads or writes a consumer'"'"'s .env or directory (Invariant #5 + membrane) — the consumer pulls: clifctl import-credentials.\n'
 for net in $NETLIST; do
   eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
   bundle_emit "$net" "$_w_ct" "$_w_st" "$_w_sub"
@@ -717,7 +722,7 @@ printf '  clifwd audit verify\n'
 printf "Before Flare, use Songbird as the canary: verify the RewardClaimed event on-chain and run 'clifwd audit verify'.\n"
 printf '\nFSP_AUTO_ENABLED=true is written by default — the onboard is the gate.\n'
 printf '   clifctl up <net>  → starts the epoch-anchored sign→claim daemon immediately.\n'
-printf '   Set UPTIME_AUTO_ENABLED=true in %s/.env.<net> to also sign uptime votes.\n' "$CLIF_ENV_DIR"
+printf '   Set UPTIME_AUTO_ENABLED=true in the consumer'"'"'s .env.<net> to also sign uptime votes.\n'
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
