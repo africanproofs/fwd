@@ -56,16 +56,18 @@ case "$cmd" in
     exit "$_rc"
     ;;
   logs)    exec docker compose $COMPOSE logs "$@" ;;
-  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" "$FWD_DIR/install/onboard" "$@" ;;
+  onboard) exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-/opt/fwd/handoff}" "$FWD_DIR/install/onboard" "$@" ;;
+  reissue) net="${1:?usage: fwd reissue <net>}"; exec env FWD_DIR="$FWD_DIR" FWD_CONTAINER="${FWD_CONTAINER:-fwd}" FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-/opt/fwd/handoff}" "$FWD_DIR/install/onboard" reissue "$net" ;;
   upgrade|backup)
     echo "fwd $cmd: finalized with install.sh in Phase 1 — see docs/one-command-install.md" >&2
     exit 2
     ;;
   ""|help|-h|--help)
-    echo "usage: fwd {start|stop|restart|status|logs|onboard} [args...]" >&2
+    echo "usage: fwd {start|stop|restart|status|logs|onboard|reissue} [args...]" >&2
     echo "       fwd start  → fwd + litestream (the zero-egress signer; never launches clif)" >&2
     echo "       reward onboarding: fwd onboard rewards --identity 0x.. --recipient 0x.. --networks songbird" >&2
     echo "       (provisions fwd custody + publishes the handoff bundle to fwd's outbox; --guided for the walk-through)" >&2
+    echo "       fwd reissue <net>  → flagless, manifest-driven: rotate callers + re-emit the handoff bundle (no wallet/key/nonce work)" >&2
     echo "       automation: deploy clif separately, then clifctl up <net>  (NOT 'fwd start <net>')" >&2
     echo "       (upgrade|backup: Phase 1 — see docs/one-command-install.md)" >&2
     [ "$cmd" = "" ] && exit 2 || exit 0

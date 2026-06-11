@@ -209,6 +209,12 @@ if [ -d "$FWD_BIN_DIR" ] && [ -w "$FWD_BIN_DIR" ]; then
   for _w in fwd clifwd fwdctl; do
     sed -i "s#\${FWD_CONTAINER:-fwd}#\${FWD_CONTAINER:-$FWD_CONTAINER}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
   done
+  # Bake the handoff outbox into the wrappers. Here $FWD_DIR is the INSTALL ROOT (/opt/fwd),
+  # NOT $SRC — the outbox must live OUTSIDE the git source clone (the wrapper bakes
+  # FWD_DIR=$SRC for onboard, so $FWD_DIR/handoff inside onboard would land in the clone).
+  for _w in fwd clifwd fwdctl; do
+    sed -i "s#\${FWD_HANDOFF_DIR:-/opt/fwd/handoff}#\${FWD_HANDOFF_DIR:-$FWD_DIR/handoff}#" "$FWD_BIN_DIR/$_w" 2>/dev/null || true
+  done
   log "installed host wrappers: $FWD_BIN_DIR/{fwd,clifwd,fwdctl}"
 else
   log "NOTE: $FWD_BIN_DIR not writable — skipping host wrappers (use: docker exec $FWD_CONTAINER clifwd ...)"
@@ -270,7 +276,7 @@ if [ "$ONBOARD" -eq 1 ]; then
   [ -n "$RECIPIENT" ] && set -- "$@" --recipient "$RECIPIENT"
   [ "$IMPORT_EXISTING" -eq 1 ] && set -- "$@" --import-existing
   [ "$OUTPUT" = guided ] && set -- "$@" --guided
-  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" "$SRC/install/onboard" "$@"; then
+  if FWD_DIR="$SRC" FWD_CONTAINER="$FWD_CONTAINER" FWD_HANDOFF_DIR="$FWD_DIR/handoff" "$SRC/install/onboard" "$@"; then
     :
   else
     log "onboarding did not finish — re-run: sudo fwd onboard rewards --identity 0xOWNER --recipient 0xRECIP --networks $ONB_NETWORKS"
