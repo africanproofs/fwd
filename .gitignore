@@ -46,6 +46,7 @@ config/master.key
 config/*.key
 config/callers.yaml
 config/onboard-manifest
+config/onboard-manifest-*
 # Phase 7 policy file — operator-controlled per D14; whatever path the
 # operator mounts via FWD_POLICY_PATH (default /etc/fwd/policy.yaml).
 # These patterns catch the common in-repo dev placements.
