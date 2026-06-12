@@ -508,8 +508,12 @@ seed_nonce_or_defer() {  # name chain
   if [ "$IMPORT_EXISTING" -eq 0 ]; then
     nonce_init_exact "$1" "$2" 0; note "nonce seeded: $1 @ chain $2 = 0 (fresh wallet)"
   else
-    UNSEEDED_NONCES="${UNSEEDED_NONCES:-} $1(chain=$2)"; ONBOARD_INCOMPLETE=1
-    warn "nonce NOT seeded for imported $1 — seed from chain truth: clifctl run <net> chain nonce --address $(wallet_addr "$1")  then  clifwd nonce init --wallet $1 --chain $2 --starting-nonce <count>"
+    # Imported wallet → on-chain history → its nonce is read from chain truth and seeded by the
+    # CONSUMER when it imports the bundle (clifctl import-credentials auto-seeds; or clifctl
+    # nonce-sync). fwd is zero-egress, so the consumer does the chain read. This is the NORMAL
+    # next step — NOT onboard incompleteness, so we do NOT set ONBOARD_INCOMPLETE here.
+    UNSEEDED_NONCES="${UNSEEDED_NONCES:-} $1(chain=$2)"
+    note "nonce for imported $1 seeds on import (clif reads chain truth — fwd is zero-egress)"
   fi
 }
 
@@ -770,11 +774,13 @@ printf '   clifctl up <net>  → starts the epoch-anchored sign→claim daemon i
 printf '   Set UPTIME_AUTO_ENABLED=true in the consumer'"'"'s .env.<net> to also sign uptime votes.\n'
 guided 'Full detail: docs/one-command-install.md\n'
 guided '=============================================================================\n'
+# Imported-wallet nonces are an EXPECTED next step (clif reads chain truth + seeds on import),
+# NOT incompleteness — surfaced as info, never a failure or a "re-run the onboard" prompt.
+[ -n "${UNSEEDED_NONCES:-}" ] && printf '\n\033[1;36mℹ nonces seed on import\033[0m — imported wallets'"'"' nonces are read from chain truth and seeded by the consumer when it imports the bundle (clifctl import-credentials auto-seeds; or run: clifctl nonce-sync <net>). fwd is zero-egress, so the consumer does the chain read.\n'
 if [ "$ONBOARD_INCOMPLETE" -eq 1 ]; then
-  [ -n "${UNSEEDED_NONCES:-}" ] && printf '\n\033[1;33m⚠ nonces not seeded\033[0m (imported wallets):%s\n   Seed each from chain truth: clifctl run <net> chain nonce --address <addr>  then  clifwd nonce init --wallet <name> --chain <id> --starting-nonce <count>.\n' "$UNSEEDED_NONCES"
   printf '\n\033[1;31m⚠ onboard INCOMPLETE\033[0m — one or more wallets were deferred or failed; re-run to import:\n'
   printf '   fwd onboard rewards fsp --import-existing [--networks <net>]  (existing wallets are skipped)\n'
   exit 1
 else
-  printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets/callers/nonces ready. The on-chain step above is yours.\n'
+  printf '\n\033[1;32m✓ onboard complete\033[0m — policy loaded; wallets + callers ready; the bundle is published. Imported-wallet nonces seed when clif imports the bundle. The on-chain step above is yours.\n'
 fi
