@@ -244,7 +244,7 @@ chain_of() {
 # On-chain preflight + nonce-seed-from-chain are the operator's job via clif (clifctl run
 # <net> preflight / chain nonce) — surfaced in the final checklist. fwd is zero-egress.
 CONSUMER="${CONSUMER:-clif}"
-FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-$(dirname "$FWD_DIR")/handoff}"
+FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-/opt/fwd/handoff}"
 mkdir -p "$FWD_HANDOFF_DIR" 2>/dev/null || true
 chown 1000:1000 "$FWD_HANDOFF_DIR" 2>/dev/null || true
 chmod 0700 "$FWD_HANDOFF_DIR" 2>/dev/null || true

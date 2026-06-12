@@ -6,9 +6,10 @@ script as text and assert the breach `fwd` existed to close is closed:
 
   - `env_write` (the `.env` WRITE) is gone;
   - `getval` (the `.env` READ helper) is gone;
-  - no `$CLIF_ENV_DIR/.env.<net>` path is read or written anywhere — the only
-    file onboard touches under the clif dir is the `.fwd-bundle.<net>.json` it
-    emits (the sanctioned handoff, consumer-contract-v1 §5);
+  - no consumer path is read or written anywhere — since a102 the handoff is
+    published to fwd's OWN outbox (`FWD_HANDOFF_DIR`, default /opt/fwd/handoff),
+    so `CLIF_ENV_DIR` no longer exists in any form (the sanctioned handoff,
+    consumer-contract-v1 §5);
   - the per-network handoff loop calls `bundle_emit` (the sole handoff);
   - a re-onboard of an existing caller ROTATES (revoke + `--replace`) — recovery
     from clif's `.env` is no longer possible (fwd holds no plaintext, Core #1/#16).
@@ -37,16 +38,18 @@ def test_getval_env_reader_is_gone() -> None:
 
 
 def test_no_clif_env_path_read_or_written() -> None:
-    """The load-bearing assertion: onboard constructs NO $CLIF_ENV_DIR/.env path.
+    """The load-bearing assertion: onboard touches NO consumer path at all.
 
-    The only file it touches under the clif dir is the .fwd-bundle.<net>.json.
+    Since a102 the handoff is published to fwd's OWN outbox
+    (FWD_HANDOFF_DIR); CLIF_ENV_DIR must not exist in any form.
     """
     text = _text()
-    assert "CLIF_ENV_DIR/.env" not in text, (
-        "onboard must not read or write any $CLIF_ENV_DIR/.env path (Invariant #5 closed)"
+    assert "CLIF_ENV_DIR" not in text, (
+        "onboard must not reference a consumer env dir in any form "
+        "(Invariant #5 + the a102 membrane fix: fwd publishes to its own outbox)"
     )
-    # The sanctioned handoff IS present.
-    assert "CLIF_ENV_DIR/.fwd-bundle." in text
+    # The sanctioned handoff IS present: fwd's own outbox.
+    assert "FWD_HANDOFF_DIR" in text
 
 
 def test_handoff_loop_emits_bundle_only() -> None:

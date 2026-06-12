@@ -27,7 +27,8 @@ _INSTALL_SH = _REPO / "install" / "install.sh"
 _ONBOARD_BLOCK = (
     'if [ "${1:-}" = "onboard" ]; then\n'
     "  shift\n"
-    '  exec "$FWD_DIR/install/onboard" "$@"\n'
+    '  exec env FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-/opt/fwd/handoff}" \\\n'
+    '    "$FWD_DIR/install/onboard" "$@"\n'
     "fi\n"
 )
 

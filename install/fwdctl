@@ -27,7 +27,8 @@ export COMPOSE_PROJECT_NAME="${FWD_CONTAINER:-fwd}"
 
 if [ "${1:-}" = "onboard" ]; then
   shift
-  exec "$FWD_DIR/install/onboard" "$@"
+  exec env FWD_HANDOFF_DIR="${FWD_HANDOFF_DIR:-/opt/fwd/handoff}" \
+    "$FWD_DIR/install/onboard" "$@"
 fi
 
 exec docker exec -i "${FWD_CONTAINER:-fwd}" fwdctl "$@"
