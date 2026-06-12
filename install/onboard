@@ -594,7 +594,11 @@ bundle_emit() {  # net claim_tok sign_tok submit_tok
   # v2 config (consumer-contract-v1 §4) — the NON-SECRET network config that was
   # previously written into clif's .env, now relocated INTO the bundle. Composed
   # from flags + the SAME literal defaults; NO .env read (Invariant #5 stays closed).
-  _be_cfg="$(printf 'CONFIG\tFWD_ENDPOINT\thttp://fwd:8080\nCONFIG\tWRAP_REWARDS\tfalse\nCONFIG\tFSP_AUTO_ENABLED\ttrue\nCONFIG\tUPTIME_AUTO_ENABLED\tfalse\nCONFIG\tEPOCH_REWARD_INITIAL_DELAY_SEC\t3600\nCONFIG\tEPOCH_POLL_INTERVAL_SEC\t1800\nCONFIG\tCLIF_STATE_DIR\t.clif-state/%s' "$_be_net")
+  # NETWORK is load-bearing and MUST be first: clif's ONLY network selector is the
+  # NETWORK env (cli.py:715 — `net = network or os.environ.get("NETWORK") or "flare"`),
+  # so without it clif (preflight AND the epoch-run daemon) silently defaults to flare.
+  # Allowlisted (derived from clif's Settings.network field), so the bundle may carry it.
+  _be_cfg="$(printf 'CONFIG\tNETWORK\t%s\nCONFIG\tFWD_ENDPOINT\thttp://fwd:8080\nCONFIG\tWRAP_REWARDS\tfalse\nCONFIG\tFSP_AUTO_ENABLED\ttrue\nCONFIG\tUPTIME_AUTO_ENABLED\tfalse\nCONFIG\tEPOCH_REWARD_INITIAL_DELAY_SEC\t3600\nCONFIG\tEPOCH_POLL_INTERVAL_SEC\t1800\nCONFIG\tCLIF_STATE_DIR\t.clif-state/%s' "$_be_net" "$_be_net")
 "
   if [ "$HAS_CLAIM" -eq 1 ]; then
     _be_cfg="$_be_cfg$(printf 'CONFIG\tIDENTITY_ADDRESS\t%s\nCONFIG\tCLAIM_RECIPIENT_ADDRESS\t%s' "$IDENTITY" "$RECIP")
