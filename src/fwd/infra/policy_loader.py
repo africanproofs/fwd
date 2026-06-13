@@ -40,6 +40,24 @@ _FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
     }
 )
 
+# Bounded map of exempt (abi_name → allowed_method_sigs) shapes for the
+# fsp_self_submit carve-out. A wallet in fsp_self_submit passes iff EVERY EVM
+# permissions block allowlisting it has: abi present in this map AND every
+# method in that block is in the abi's allowed-method set AND max_value_wei=="0".
+# Extending this map (adding a new abi or a new method to an existing abi) is the
+# ONLY way to admit a new cross-domain wallet shape — the negative test enforces
+# the bound. v1.1.0a7.
+_FSP_SELF_SUBMIT_SHAPES: dict[str, frozenset[str]] = {
+    "flare_systems_manager": _FSP_SELF_SUBMIT_METHODS,
+    # FastUpdater.submitUpdates: the only method the fast-update seats may submit
+    # on the EVM side (the full canonical tuple sig from the registry).
+    "fast_updater": frozenset(
+        {
+            "submitUpdates((uint256,(uint256,(uint256,uint256),uint256,uint256),bytes,(uint8,bytes32,bytes32)))",
+        }
+    ),
+}
+
 
 class PolicyLoadError(Exception):
     """Raised when policy.yaml cannot be loaded or fails schema validation."""
@@ -237,8 +255,11 @@ def check_consistency(
                 f"fsp_permissions allowlist (meaningless carve-out)"
             )
             continue
-        # Every permissions block that allowlists this wallet MUST be the
-        # constrained FSM self-submit shape, or the carve-out is refused.
+        # Every permissions block that allowlists this wallet MUST match one of
+        # the bounded exempt shapes in _FSP_SELF_SUBMIT_SHAPES, or the carve-out
+        # is refused. A block matches iff: (a) its abi is in the shapes map,
+        # (b) every method sig in the block is in that abi's allowed-method set,
+        # and (c) every method rule has max_value_wei == "0".
         ok = True
         appeared = False
         for _pp, perm in policy.permissions.items():
@@ -246,11 +267,19 @@ def check_consistency(
                 continue
             appeared = True
             for _caddr, crule in perm.contracts.items():
-                if crule.abi != "flare_systems_manager":
+                allowed_methods = _FSP_SELF_SUBMIT_SHAPES.get(crule.abi)
+                if allowed_methods is None:
+                    # ABI not in the exempt map — not an allowed cross-domain shape.
                     ok = False
+                    continue
                 for msig, mrule in crule.methods.items():
-                    if msig not in _FSP_SELF_SUBMIT_METHODS:
-                        ok = False
+                    # Method name match: support both full-sig keys and bare name keys
+                    # by checking the full sig first, then the name prefix.
+                    if msig not in allowed_methods:
+                        # Try bare-name match (e.g. "submitUpdates" against full sig).
+                        bare = msig.split("(", 1)[0]
+                        if not any(s.split("(", 1)[0] == bare for s in allowed_methods):
+                            ok = False
                     if str(mrule.max_value_wei) != "0":
                         ok = False
         if not appeared:

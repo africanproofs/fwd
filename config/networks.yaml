@@ -15,11 +15,15 @@ flare:
   chain_id: 14
   reward_manager: "0xC8f55c5aA2C752eE285Bd872855C749f4ee6239B"
   flare_systems_manager: "0x89e50DC0380e597ecE79c8494bAAFD84537AD0D4"
+  submission: "0x2cA6571Daa15ce734Bbd0Bf27D5C9D16787fc33f"
+  fast_updater: "0xdbf71d7840934eb82fa10173103d4e9fd4054dd1"
 
 songbird:
   chain_id: 19
   reward_manager: "0xE26AD68b17224951b5740F33926Cc438764eB9a7"
   flare_systems_manager: "0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"
+  submission: "0x2cA6571Daa15ce734Bbd0Bf27D5C9D16787fc33f"
+  fast_updater: "0x7d9f73fd9bc4607dacb618ff895585f98bfdd06b"
 
 coston2:
   chain_id: 114

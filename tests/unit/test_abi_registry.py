@@ -51,7 +51,14 @@ def test_load_real_abis_succeeds_with_correct_names() -> None:
     """Test 1: AbiRegistry.load succeeds; abi_names matches the registry."""
     registry = AbiRegistry.load(_ABIS_DIR)
     assert registry.abi_names() == frozenset(
-        {"reward_manager", "participant_register", "erc20", "flare_systems_manager"}
+        {
+            "reward_manager",
+            "participant_register",
+            "erc20",
+            "flare_systems_manager",
+            "submission",
+            "fast_updater",
+        }
     )
 
 

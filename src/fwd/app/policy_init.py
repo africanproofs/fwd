@@ -148,6 +148,12 @@ def generate_policy(
     rewards_sig = (
         _sig_for(registry, "flare_systems_manager", "signRewards") if FSP in caps else None
     )
+    # FSP_VOTER submit-tx method sigs (resolved from registry, not hand-written).
+    submit1_sig = _sig_for(registry, "submission", "submit1") if FSP_VOTER in caps else None
+    submit2_sig = _sig_for(registry, "submission", "submit2") if FSP_VOTER in caps else None
+    submit3_sig = _sig_for(registry, "submission", "submit3") if FSP_VOTER in caps else None
+    submitsig_sig = _sig_for(registry, "submission", "submitSignatures") if FSP_VOTER in caps else None
+    submit_updates_sig = _sig_for(registry, "fast_updater", "submitUpdates") if FSP_VOTER in caps else None
 
     callers: dict[str, Any] = {}
     wallets: dict[str, Any] = {}
@@ -270,11 +276,27 @@ def generate_policy(
             }
 
         if FSP_VOTER in caps:
-            # fsp-voter adds four sign-only fsp_permissions blocks (one per new message
-            # type: SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, FAST_UPDATE).
-            # The signing wallet is shared with FSP when both are requested (idempotent/
-            # byte-identical emit). The fastupdate wallet is separate and sign-only —
-            # it is NEVER added to fsp_self_submit or EVM permissions.
+            # fsp-voter adds:
+            #   - three SIGN blocks (SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD)
+            #     on the shared signing wallet;
+            #   - THREE fast-update seats (i=1,2,3), each with a SIGN (FAST_UPDATE) block
+            #     + a SUBMIT (FastUpdater.submitUpdates) block + carve-out opt-in;
+            #   - ftso-price-submit (Submission.submit1/2/3) on the dedicated submit wallet;
+            #   - ftso-signature-submit (Submission.submitSignatures) on the sig-submit wallet.
+            # Verify the required network keys exist before emitting anything.
+            if "submission" not in spec:
+                raise PolicyInitError(
+                    f"network '{net}' has no 'submission' address in networks.yaml "
+                    f"(required for fsp-voter submit roles)"
+                )
+            if "fast_updater" not in spec:
+                raise PolicyInitError(
+                    f"network '{net}' has no 'fast_updater' address in networks.yaml "
+                    f"(required for fsp-voter submit roles)"
+                )
+            submission_addr = spec["submission"]
+            fast_updater_addr = spec["fast_updater"]
+
             signing_wallet = f"fsp-signing-{net}"
             wc_signing = f"wc/fsp-{net}"
             # Defensively ensure the signing wallet (idempotent if FSP also present).
@@ -298,21 +320,114 @@ def generate_policy(
                     "chain_ids": [chain_id],
                 }
 
-            # Fast-update wallet (sign-only; never in EVM permissions or fsp_self_submit).
-            fastupdate_wallet = f"fastupdate-{net}"
-            wc_fastupdate = f"wc/fastupdate-{net}"
-            wallets[fastupdate_wallet] = {"policy_path": wc_fastupdate}
-            wallet_constraints[wc_fastupdate] = {
+            # Three fast-update seats (i=1,2,3): each seat has one FAST_UPDATE SIGN block
+            # + one FastUpdater.submitUpdates SUBMIT block. The same key signs and submits,
+            # so each seat wallet is added to fsp_self_submit (carve-out).
+            for i in (1, 2, 3):
+                fu_wallet = f"fastupdate-{i}-{net}"
+                wc_fu = f"wc/fastupdate-{i}-{net}"
+                wallets[fu_wallet] = {"policy_path": wc_fu}
+                wallet_constraints[wc_fu] = {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": _rate(fsp_rate),
+                }
+
+                # SIGN leg (Leg-1, /v1/sign-fsp-message FAST_UPDATE)
+                fu_sign_pp = f"fsp/fastupdate-sign-{i}-{net}"
+                callers[f"fastupdate-sign-{i}-{net}"] = {"policy_path": fu_sign_pp}
+                fsp_permissions[fu_sign_pp] = {
+                    "message_types": ["FAST_UPDATE"],
+                    "wallet_allowlist": [fu_wallet],
+                    "rate": _rate(fsp_rate),
+                    "chain_ids": [chain_id],
+                }
+
+                # SUBMIT leg (Leg-2, /v1/sign-transaction → FastUpdater.submitUpdates)
+                fu_submit_pp = f"perm/fastupdate-submit-{i}-{net}"
+                callers[f"fastupdate-submit-{i}-{net}"] = {"policy_path": fu_submit_pp}
+                permissions[fu_submit_pp] = {
+                    "contracts": {
+                        fast_updater_addr: {
+                            "abi": "fast_updater",
+                            "chains": [chain_id],
+                            "methods": {
+                                submit_updates_sig: {
+                                    "max_value_wei": "0",
+                                    # submitUpdates takes a struct (non-scalar).
+                                    "allow_unconstrained_args": True,
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": [fu_wallet],
+                    "rate": _rate(fsp_rate),
+                }
+
+                # Cross-domain carve-out: this wallet signs FAST_UPDATE AND submits EVM txns.
+                fsp_self_submit.append(fu_wallet)
+
+            # ftso-price-submit: dedicated submit wallet for Submission.submit1/2/3.
+            # EVM-only — NOT in fsp_self_submit.
+            price_submit_wallet = f"fsp-submit-{net}"
+            wc_price_submit = f"wc/fsp-submit-{net}"
+            wallets[price_submit_wallet] = {"policy_path": wc_price_submit}
+            wallet_constraints[wc_price_submit] = {
                 "max_aggregate_value_wei_per_day": "0",
                 "rate": _rate(fsp_rate),
             }
-            _fu_pp = f"fsp/fastupdate-sign-{net}"
-            callers[f"fastupdate-sign-{net}"] = {"policy_path": _fu_pp}
-            fsp_permissions[_fu_pp] = {
-                "message_types": ["FAST_UPDATE"],
-                "wallet_allowlist": [fastupdate_wallet],
+            price_submit_pp = f"perm/ftso-price-submit-{net}"
+            callers[f"ftso-price-submit-{net}"] = {"policy_path": price_submit_pp}
+            permissions[price_submit_pp] = {
+                "contracts": {
+                    submission_addr: {
+                        "abi": "submission",
+                        "chains": [chain_id],
+                        "methods": {
+                            submit1_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                            submit2_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                            submit3_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                        },
+                    }
+                },
+                "wallet_allowlist": [price_submit_wallet],
                 "rate": _rate(fsp_rate),
-                "chain_ids": [chain_id],
+            }
+
+            # ftso-signature-submit: dedicated submit wallet for Submission.submitSignatures.
+            # EVM-only — NOT in fsp_self_submit.
+            sig_submit_wallet = f"fsp-sig-submit-{net}"
+            wc_sig_submit = f"wc/fsp-sig-submit-{net}"
+            wallets[sig_submit_wallet] = {"policy_path": wc_sig_submit}
+            wallet_constraints[wc_sig_submit] = {
+                "max_aggregate_value_wei_per_day": "0",
+                "rate": _rate(fsp_rate),
+            }
+            sig_submit_pp = f"perm/ftso-signature-submit-{net}"
+            callers[f"ftso-signature-submit-{net}"] = {"policy_path": sig_submit_pp}
+            permissions[sig_submit_pp] = {
+                "contracts": {
+                    submission_addr: {
+                        "abi": "submission",
+                        "chains": [chain_id],
+                        "methods": {
+                            submitsig_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                        },
+                    }
+                },
+                "wallet_allowlist": [sig_submit_wallet],
+                "rate": _rate(fsp_rate),
             }
 
     policy: dict[str, Any] = {

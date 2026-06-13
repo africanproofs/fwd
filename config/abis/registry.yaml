@@ -4,3 +4,5 @@ abis:
   participant_register: participant_register.json
   erc20: erc20.json
   flare_systems_manager: flare_systems_manager.json
+  submission: submission.json
+  fast_updater: fast_updater.json
