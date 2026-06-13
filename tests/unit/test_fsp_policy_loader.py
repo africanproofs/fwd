@@ -422,3 +422,55 @@ def test_fsp_self_submit_regression_other_wallet_still_violations(
     errors = check_consistency(policy, [], [evm_wallet, fsp_wallet], registry)
     seg_errors = [e for e in errors if "segmentation violation" in e]
     assert seg_errors, f"Expected segmentation violation for non-opted-in wallet but got: {errors}"
+
+
+# ---------------------------------------------------------------------------
+# Drift-guard: policy_loader's accepted FSP message-type set must equal domain
+# ---------------------------------------------------------------------------
+
+
+def test_policy_loader_fsp_type_set_matches_domain() -> None:
+    """The loader's accepted FSP message-type set must equal fwd.domain.fsp_message.MESSAGE_TYPES.
+
+    This test will fail if _valid_fsp_types ever drifts from the domain again —
+    the single-source-of-truth invariant enforced by Step 0.
+    """
+    from fwd.domain.fsp_message import MESSAGE_TYPES
+    from fwd.infra import policy_loader as _pl
+    import inspect
+
+    # Derive what the loader actually accepts by inspecting the source:
+    # _valid_fsp_types is derived from _FSP_MESSAGE_TYPES which == MESSAGE_TYPES.
+    # We validate this by constructing a policy with every domain message type
+    # and asserting that check_consistency emits NO "unknown message_type" errors.
+    from fwd.domain.policy import Policy
+    from fwd.infra.abi_registry import AbiRegistry
+    from pathlib import Path
+
+    abis_dir = Path(__file__).resolve().parents[2] / "config" / "abis"
+    registry = AbiRegistry.load(abis_dir)
+
+    # Build fsp_permissions with one block per domain message type.
+    fsp_perms: dict = {}
+    for mt in MESSAGE_TYPES:
+        fsp_perms[f"fsp/{mt.lower()}"] = {
+            "message_types": [mt],
+            "wallet_allowlist": [],
+        }
+
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {},
+            "fsp_permissions": fsp_perms,
+            "wallet_constraints": {},
+        }
+    )
+
+    errors = check_consistency(policy, [], [], registry)
+    type_errors = [e for e in errors if "unknown message_type" in e]
+    assert type_errors == [], (
+        f"policy_loader rejected domain-valid message types: {type_errors}\n"
+        f"Domain MESSAGE_TYPES = {MESSAGE_TYPES}"
+    )

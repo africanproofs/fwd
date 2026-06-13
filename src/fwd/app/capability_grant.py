@@ -57,6 +57,10 @@ _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
     "reward-distribution-sign": ("reward-distribution-sign-{net}", "fsp/reward-{net}"),
     "uptime-vote-submit": ("uptime-vote-submit-{net}", "perm/uptime-submit-{net}"),
     "reward-distribution-submit": ("reward-distribution-submit-{net}", "perm/reward-submit-{net}"),
+    "signing-policy-sign": ("signing-policy-sign-{net}", "fsp/signing-policy-{net}"),
+    "voter-registration-sign": ("voter-registration-sign-{net}", "fsp/voter-registration-{net}"),
+    "protocol-message-sign": ("protocol-message-sign-{net}", "fsp/protocol-message-{net}"),
+    "fastupdate-sign": ("fastupdate-sign-{net}", "fsp/fastupdate-sign-{net}"),
 }
 
 

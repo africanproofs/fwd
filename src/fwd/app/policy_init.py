@@ -27,11 +27,12 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-__all__ = ["CLAIM", "FSP", "PolicyInitError", "generate_policy"]
+__all__ = ["CLAIM", "FSP", "FSP_VOTER", "PolicyInitError", "generate_policy"]
 
 CLAIM = "claim"
 FSP = "fsp"
-_VALID_CAPS = (CLAIM, FSP)
+FSP_VOTER = "fsp-voter"
+_VALID_CAPS = (CLAIM, FSP, FSP_VOTER)
 
 
 class PolicyInitError(Exception):
@@ -266,6 +267,52 @@ def generate_policy(
             wallet_constraints[wc_sender] = {
                 "max_aggregate_value_wei_per_day": "0",
                 "rate": _rate(fsp_rate),
+            }
+
+        if FSP_VOTER in caps:
+            # fsp-voter adds four sign-only fsp_permissions blocks (one per new message
+            # type: SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, FAST_UPDATE).
+            # The signing wallet is shared with FSP when both are requested (idempotent/
+            # byte-identical emit). The fastupdate wallet is separate and sign-only —
+            # it is NEVER added to fsp_self_submit or EVM permissions.
+            signing_wallet = f"fsp-signing-{net}"
+            wc_signing = f"wc/fsp-{net}"
+            # Defensively ensure the signing wallet (idempotent if FSP also present).
+            wallets[signing_wallet] = {"policy_path": wc_signing}
+            wallet_constraints[wc_signing] = {
+                "max_aggregate_value_wei_per_day": "0",
+                "rate": _rate(fsp_rate),
+            }
+
+            # Three SIGN fsp_permissions blocks on the shared signing wallet.
+            for _pp, _mt, _caller in (
+                (f"fsp/signing-policy-{net}", "SIGNING_POLICY", f"signing-policy-sign-{net}"),
+                (f"fsp/voter-registration-{net}", "VOTER_REGISTRATION", f"voter-registration-sign-{net}"),
+                (f"fsp/protocol-message-{net}", "PROTOCOL_PAYLOAD", f"protocol-message-sign-{net}"),
+            ):
+                callers[_caller] = {"policy_path": _pp}
+                fsp_permissions[_pp] = {
+                    "message_types": [_mt],
+                    "wallet_allowlist": [signing_wallet],
+                    "rate": _rate(fsp_rate),
+                    "chain_ids": [chain_id],
+                }
+
+            # Fast-update wallet (sign-only; never in EVM permissions or fsp_self_submit).
+            fastupdate_wallet = f"fastupdate-{net}"
+            wc_fastupdate = f"wc/fastupdate-{net}"
+            wallets[fastupdate_wallet] = {"policy_path": wc_fastupdate}
+            wallet_constraints[wc_fastupdate] = {
+                "max_aggregate_value_wei_per_day": "0",
+                "rate": _rate(fsp_rate),
+            }
+            _fu_pp = f"fsp/fastupdate-sign-{net}"
+            callers[f"fastupdate-sign-{net}"] = {"policy_path": _fu_pp}
+            fsp_permissions[_fu_pp] = {
+                "message_types": ["FAST_UPDATE"],
+                "wallet_allowlist": [fastupdate_wallet],
+                "rate": _rate(fsp_rate),
+                "chain_ids": [chain_id],
             }
 
     policy: dict[str, Any] = {

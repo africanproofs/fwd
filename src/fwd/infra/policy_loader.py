@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import ValidationError
 
+from fwd.domain.fsp_message import MESSAGE_TYPES as _FSP_MESSAGE_TYPES
 from fwd.domain.policy import Policy
 from fwd.infra.abi_registry import (
     AbiRegistry,  # noqa: TC001 — used at runtime in check_consistency body
@@ -188,7 +189,8 @@ def check_consistency(
             )
 
     # FSP permission validation + address-level cross-domain segmentation.
-    _valid_fsp_types = {"UPTIME", "REWARD_DISTRIBUTION"}
+    # Derived from the domain's single source of truth — never hand-maintained.
+    _valid_fsp_types = _FSP_MESSAGE_TYPES
     name_to_addr = {w.name: w.address.lower() for w in wallets}
 
     for fperm_path, fperm in policy.fsp_permissions.items():
