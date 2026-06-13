@@ -279,8 +279,10 @@ def generate_policy(
             # fsp-voter adds:
             #   - three SIGN blocks (SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD)
             #     on the shared signing wallet;
-            #   - THREE fast-update seats (i=1,2,3), each with a SIGN (FAST_UPDATE) block
-            #     + a SUBMIT (FastUpdater.submitUpdates) block + carve-out opt-in;
+            #   - ONE FAST_UPDATE SIGN block on the SAME shared signing wallet (SIGNING_PK
+            #     is the fast-update BLS key — there are no per-seat signing keys);
+            #   - three EVM-only SUBMIT wallets (fastupdate-{1,2,3}-{net}) for
+            #     FastUpdater.submitUpdates (the 3 FAST_UPDATES_ACCOUNTS EVM seats);
             #   - ftso-price-submit (Submission.submit1/2/3) on the dedicated submit wallet;
             #   - ftso-signature-submit (Submission.submitSignatures) on the sig-submit wallet.
             # Verify the required network keys exist before emitting anything.
@@ -306,11 +308,13 @@ def generate_policy(
                 "rate": _rate(fsp_rate),
             }
 
-            # Three SIGN fsp_permissions blocks on the shared signing wallet.
+            # Four SIGN fsp_permissions blocks on the shared signing wallet:
+            # SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, FAST_UPDATE.
             for _pp, _mt, _caller in (
                 (f"fsp/signing-policy-{net}", "SIGNING_POLICY", f"signing-policy-sign-{net}"),
                 (f"fsp/voter-registration-{net}", "VOTER_REGISTRATION", f"voter-registration-sign-{net}"),
                 (f"fsp/protocol-message-{net}", "PROTOCOL_PAYLOAD", f"protocol-message-sign-{net}"),
+                (f"fsp/fastupdate-sign-{net}", "FAST_UPDATE", f"fastupdate-sign-{net}"),
             ):
                 callers[_caller] = {"policy_path": _pp}
                 fsp_permissions[_pp] = {
@@ -320,9 +324,9 @@ def generate_policy(
                     "chain_ids": [chain_id],
                 }
 
-            # Three fast-update seats (i=1,2,3): each seat has one FAST_UPDATE SIGN block
-            # + one FastUpdater.submitUpdates SUBMIT block. The same key signs and submits,
-            # so each seat wallet is added to fsp_self_submit (carve-out).
+            # Three EVM-only SUBMIT wallets for FastUpdater.submitUpdates.
+            # These are the FAST_UPDATES_ACCOUNTS (submitUpdates tx senders only);
+            # they do NOT sign FSP messages and are NOT in fsp_self_submit.
             for i in (1, 2, 3):
                 fu_wallet = f"fastupdate-{i}-{net}"
                 wc_fu = f"wc/fastupdate-{i}-{net}"
@@ -330,16 +334,6 @@ def generate_policy(
                 wallet_constraints[wc_fu] = {
                     "max_aggregate_value_wei_per_day": "0",
                     "rate": _rate(fsp_rate),
-                }
-
-                # SIGN leg (Leg-1, /v1/sign-fsp-message FAST_UPDATE)
-                fu_sign_pp = f"fsp/fastupdate-sign-{i}-{net}"
-                callers[f"fastupdate-sign-{i}-{net}"] = {"policy_path": fu_sign_pp}
-                fsp_permissions[fu_sign_pp] = {
-                    "message_types": ["FAST_UPDATE"],
-                    "wallet_allowlist": [fu_wallet],
-                    "rate": _rate(fsp_rate),
-                    "chain_ids": [chain_id],
                 }
 
                 # SUBMIT leg (Leg-2, /v1/sign-transaction → FastUpdater.submitUpdates)
@@ -362,9 +356,7 @@ def generate_policy(
                     "wallet_allowlist": [fu_wallet],
                     "rate": _rate(fsp_rate),
                 }
-
-                # Cross-domain carve-out: this wallet signs FAST_UPDATE AND submits EVM txns.
-                fsp_self_submit.append(fu_wallet)
+                # EVM-only: NOT added to fsp_self_submit.
 
             # ftso-price-submit: dedicated submit wallet for Submission.submit1/2/3.
             # EVM-only — NOT in fsp_self_submit.

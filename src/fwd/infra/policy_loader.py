@@ -49,13 +49,6 @@ _FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
 # the bound. v1.1.0a7.
 _FSP_SELF_SUBMIT_SHAPES: dict[str, frozenset[str]] = {
     "flare_systems_manager": _FSP_SELF_SUBMIT_METHODS,
-    # FastUpdater.submitUpdates: the only method the fast-update seats may submit
-    # on the EVM side (the full canonical tuple sig from the registry).
-    "fast_updater": frozenset(
-        {
-            "submitUpdates((uint256,(uint256,(uint256,uint256),uint256,uint256),bytes,(uint8,bytes32,bytes32)))",
-        }
-    ),
 }
 
 
@@ -273,13 +266,8 @@ def check_consistency(
                     ok = False
                     continue
                 for msig, mrule in crule.methods.items():
-                    # Method name match: support both full-sig keys and bare name keys
-                    # by checking the full sig first, then the name prefix.
                     if msig not in allowed_methods:
-                        # Try bare-name match (e.g. "submitUpdates" against full sig).
-                        bare = msig.split("(", 1)[0]
-                        if not any(s.split("(", 1)[0] == bare for s in allowed_methods):
-                            ok = False
+                        ok = False
                     if str(mrule.max_value_wei) != "0":
                         ok = False
         if not appeared:

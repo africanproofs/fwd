@@ -60,10 +60,9 @@ _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
     "signing-policy-sign": ("signing-policy-sign-{net}", "fsp/signing-policy-{net}"),
     "voter-registration-sign": ("voter-registration-sign-{net}", "fsp/voter-registration-{net}"),
     "protocol-message-sign": ("protocol-message-sign-{net}", "fsp/protocol-message-{net}"),
-    # Three fast-update seats (i=1,2,3): each has a SIGN leg and a SUBMIT leg.
-    "fastupdate-sign-1": ("fastupdate-sign-1-{net}", "fsp/fastupdate-sign-1-{net}"),
-    "fastupdate-sign-2": ("fastupdate-sign-2-{net}", "fsp/fastupdate-sign-2-{net}"),
-    "fastupdate-sign-3": ("fastupdate-sign-3-{net}", "fsp/fastupdate-sign-3-{net}"),
+    # One FAST_UPDATE sign seat on the shared signing wallet (SIGNING_PK).
+    "fastupdate-sign": ("fastupdate-sign-{net}", "fsp/fastupdate-sign-{net}"),
+    # Three EVM-only submit seats for FastUpdater.submitUpdates (FAST_UPDATES_ACCOUNTS).
     "fastupdate-submit-1": ("fastupdate-submit-1-{net}", "perm/fastupdate-submit-1-{net}"),
     "fastupdate-submit-2": ("fastupdate-submit-2-{net}", "perm/fastupdate-submit-2-{net}"),
     "fastupdate-submit-3": ("fastupdate-submit-3-{net}", "perm/fastupdate-submit-3-{net}"),
