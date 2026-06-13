@@ -7,3 +7,4 @@ abis:
   submission: submission.json
   fast_updater: fast_updater.json
   relay: relay.json
+  voter_registry: voter_registry.json

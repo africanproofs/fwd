@@ -157,6 +157,19 @@ def generate_policy(
     # Relay finalization method the system-client FINALIZER submits (it packs its own
     # calldata behind the relay() selector); resolved from the registry, not hand-written.
     relay_sig = _sig_for(registry, "relay", "relay") if FSP_VOTER in caps else None
+    # Epoch-submit methods on the fsp-signing wallet (system-client VOTER role):
+    # signNewSigningPolicy on FlareSystemsManager and registerVoter on VoterRegistry.
+    # Both are signed by SIGNING_PK (= the fsp-signing wallet) and admitted by the
+    # bounded carve-out (_FSP_SELF_SUBMIT_SHAPES extended below).
+    # Note: preRegisterVoter (VoterRegistry) is Coston/testnet-only — out of scope.
+    signing_policy_submit_sig = (
+        _sig_for(registry, "flare_systems_manager", "signNewSigningPolicy")
+        if FSP_VOTER in caps
+        else None
+    )
+    register_voter_sig = (
+        _sig_for(registry, "voter_registry", "registerVoter") if FSP_VOTER in caps else None
+    )
 
     callers: dict[str, Any] = {}
     wallets: dict[str, Any] = {}
@@ -304,9 +317,15 @@ def generate_policy(
                     f"network '{net}' has no 'relay' address in networks.yaml "
                     f"(required for fsp-voter relay-submit role)"
                 )
+            if "voter_registry" not in spec:
+                raise PolicyInitError(
+                    f"network '{net}' has no 'voter_registry' address in networks.yaml "
+                    f"(required for fsp-voter voter-registration-submit role)"
+                )
             submission_addr = spec["submission"]
             fast_updater_addr = spec["fast_updater"]
             relay_addr = spec["relay"]
+            voter_registry_addr = spec["voter_registry"]
 
             signing_wallet = f"fsp-signing-{net}"
             wc_signing = f"wc/fsp-{net}"
@@ -452,6 +471,54 @@ def generate_policy(
                         "chains": [chain_id],
                         "methods": {
                             relay_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                        },
+                    }
+                },
+                "wallet_allowlist": [signing_wallet],
+                "rate": _rate(fsp_rate),
+            }
+
+            # signing-policy-submit: signNewSigningPolicy on FlareSystemsManager,
+            # submitted by the SHARED fsp-signing wallet (SIGNING_PK = system-client
+            # VOTER role). The signature arg is non-scalar → allow_unconstrained_args.
+            # Admitted by the bounded carve-out (flare_systems_manager shape extended
+            # with signNewSigningPolicy in _FSP_SELF_SUBMIT_METHODS), max_value_wei=0.
+            signing_policy_submit_pp = f"perm/signing-policy-submit-{net}"
+            callers[f"signing-policy-submit-{net}"] = {"policy_path": signing_policy_submit_pp}
+            permissions[signing_policy_submit_pp] = {
+                "contracts": {
+                    spec["flare_systems_manager"]: {
+                        "abi": "flare_systems_manager",
+                        "chains": [chain_id],
+                        "methods": {
+                            signing_policy_submit_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                        },
+                    }
+                },
+                "wallet_allowlist": [signing_wallet],
+                "rate": _rate(fsp_rate),
+            }
+
+            # voter-registration-submit: registerVoter on VoterRegistry, submitted by
+            # the SHARED fsp-signing wallet (SIGNING_PK = system-client VOTER role).
+            # The signature arg is non-scalar → allow_unconstrained_args.
+            # Admitted by the bounded carve-out (voter_registry shape in
+            # _FSP_SELF_SUBMIT_SHAPES = {registerVoter sig}), max_value_wei=0.
+            voter_reg_submit_pp = f"perm/voter-registration-submit-{net}"
+            callers[f"voter-registration-submit-{net}"] = {"policy_path": voter_reg_submit_pp}
+            permissions[voter_reg_submit_pp] = {
+                "contracts": {
+                    voter_registry_addr: {
+                        "abi": "voter_registry",
+                        "chains": [chain_id],
+                        "methods": {
+                            register_voter_sig: {
                                 "max_value_wei": "0",
                                 "allow_unconstrained_args": True,
                             },

@@ -59,6 +59,7 @@ def test_load_real_abis_succeeds_with_correct_names() -> None:
             "submission",
             "fast_updater",
             "relay",
+            "voter_registry",
         }
     )
 

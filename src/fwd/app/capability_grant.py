@@ -71,6 +71,13 @@ _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
     "ftso-signature-submit": ("ftso-signature-submit-{net}", "perm/ftso-signature-submit-{net}"),
     # Relay finalization submit on the shared fsp-signing wallet (carve-out).
     "relay-submit": ("relay-submit-{net}", "perm/relay-submit-{net}"),
+    # Epoch-submit roles on the shared fsp-signing wallet (system-client VOTER):
+    # signNewSigningPolicy (FlareSystemsManager) and registerVoter (VoterRegistry).
+    "signing-policy-submit": ("signing-policy-submit-{net}", "perm/signing-policy-submit-{net}"),
+    "voter-registration-submit": (
+        "voter-registration-submit-{net}",
+        "perm/voter-registration-submit-{net}",
+    ),
 }
 
 

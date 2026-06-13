@@ -37,6 +37,10 @@ _FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
     {
         "signUptimeVote(uint24,bytes32,(uint8,bytes32,bytes32))",
         "signRewards(uint24,(uint256,uint256)[],bytes32,(uint8,bytes32,bytes32))",
+        # Epoch-submit: the system-client VOTER submits signNewSigningPolicy to
+        # FlareSystemsManager with SIGNING_PK (= the fsp-signing wallet).
+        # The signature arg is a non-scalar tuple; max_value_wei=0. v1.1.0 epoch-submit.
+        "signNewSigningPolicy(uint24,bytes32,(uint8,bytes32,bytes32))",
     }
 )
 
@@ -55,9 +59,18 @@ _FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
 # max_value_wei=0 keeps the carve-out value-bounded. v1.1.0 relay-submit.
 _FSP_SELF_SUBMIT_RELAY_METHODS: frozenset[str] = frozenset({"relay()"})
 
+# VoterRegistry method exempt under the carve-out. The system-client VOTER role
+# submits registerVoter to VoterRegistry with SIGNING_PK (= the fsp-signing
+# wallet). The _signature arg is a non-scalar tuple; max_value_wei=0 keeps the
+# carve-out value-bounded. v1.1.0 epoch-submit.
+_FSP_SELF_SUBMIT_VOTER_REGISTRY_METHODS: frozenset[str] = frozenset(
+    {"registerVoter(address,(uint8,bytes32,bytes32))"}
+)
+
 _FSP_SELF_SUBMIT_SHAPES: dict[str, frozenset[str]] = {
     "flare_systems_manager": _FSP_SELF_SUBMIT_METHODS,
     "relay": _FSP_SELF_SUBMIT_RELAY_METHODS,
+    "voter_registry": _FSP_SELF_SUBMIT_VOTER_REGISTRY_METHODS,
 }
 
 

@@ -107,11 +107,14 @@ def test_fsp_voter_structure_and_roundtrip(tmp_path: Path) -> None:
         )
 
     # permissions: 3 fastupdate-submit + ftso-price-submit + ftso-signature-submit
-    # + relay-submit (Relay finalization on the shared fsp-signing wallet).
+    # + relay-submit (Relay finalization on the shared fsp-signing wallet)
+    # + signing-policy-submit (signNewSigningPolicy on FSM, fsp-signing wallet)
+    # + voter-registration-submit (registerVoter on VoterRegistry, fsp-signing wallet).
     expected_perm_keys = (
         {f"perm/fastupdate-submit-{i}-songbird" for i in (1, 2, 3)}
         | {"perm/ftso-price-submit-songbird", "perm/ftso-signature-submit-songbird"}
         | {"perm/relay-submit-songbird"}
+        | {"perm/signing-policy-submit-songbird", "perm/voter-registration-submit-songbird"}
     )
     assert set(perms) == expected_perm_keys, (
         f"permissions mismatch.\n  Expected: {sorted(expected_perm_keys)}\n  Got: {sorted(perms)}"
@@ -763,3 +766,318 @@ def test_relay_regression_no_relay_keys_in_claim_fsp(tmp_path: Path) -> None:
     for perm in doc.get("permissions", {}).values():
         for rule in perm.get("contracts", {}).values():
             assert rule["abi"] != "relay", "relay ABI leaked into claim,fsp permissions"
+
+
+# ---------------------------------------------------------------------------
+# signing-policy-submit + voter-registration-submit (epoch-submit, OI-3)
+# ---------------------------------------------------------------------------
+
+
+def test_signing_policy_submit_role(tmp_path: Path) -> None:
+    """fsp-voter emits a signing-policy-submit role: signNewSigningPolicy on
+    FlareSystemsManager, on the SHARED fsp-signing wallet, max_value_wei=0.
+    Round-trip must be clean."""
+    text = _gen("fsp-voter", recipient=None)
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+
+    perm = doc["permissions"]["perm/signing-policy-submit-songbird"]
+    rule = next(iter(perm["contracts"].values()))
+    assert rule["abi"] == "flare_systems_manager"
+    assert rule["chains"] == [_SGB]
+    # Exactly one method — signNewSigningPolicy.
+    assert len(rule["methods"]) == 1
+    sig = next(iter(rule["methods"]))
+    assert sig == "signNewSigningPolicy(uint24,bytes32,(uint8,bytes32,bytes32))"
+    assert rule["methods"][sig]["max_value_wei"] == "0"
+    assert rule["methods"][sig]["allow_unconstrained_args"] is True
+    # Submitted by the SHARED signing wallet (cross-domain over FSM via epoch-submit).
+    assert perm["wallet_allowlist"] == ["fsp-signing-songbird"]
+    # Caller wired.
+    assert doc["callers"]["signing-policy-submit-songbird"] == {
+        "policy_path": "perm/signing-policy-submit-songbird"
+    }
+    # fsp-signing opted into the carve-out.
+    assert "fsp-signing-songbird" in doc.get("fsp_self_submit", [])
+    # Contract address is Songbird FlareSystemsManager.
+    assert next(iter(perm["contracts"])).lower() == "0x421c69e22f48e14fc2d2ee3812c59bfb81c38516"
+
+
+def test_voter_registration_submit_role(tmp_path: Path) -> None:
+    """fsp-voter emits a voter-registration-submit role: registerVoter on
+    VoterRegistry, on the SHARED fsp-signing wallet, max_value_wei=0.
+    Round-trip must be clean."""
+    text = _gen("fsp-voter", recipient=None)
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+
+    perm = doc["permissions"]["perm/voter-registration-submit-songbird"]
+    rule = next(iter(perm["contracts"].values()))
+    assert rule["abi"] == "voter_registry"
+    assert rule["chains"] == [_SGB]
+    # Exactly one method — registerVoter.
+    assert len(rule["methods"]) == 1
+    sig = next(iter(rule["methods"]))
+    assert sig == "registerVoter(address,(uint8,bytes32,bytes32))"
+    assert rule["methods"][sig]["max_value_wei"] == "0"
+    assert rule["methods"][sig]["allow_unconstrained_args"] is True
+    # Submitted by the SHARED signing wallet (cross-domain over VoterRegistry).
+    assert perm["wallet_allowlist"] == ["fsp-signing-songbird"]
+    # Caller wired.
+    assert doc["callers"]["voter-registration-submit-songbird"] == {
+        "policy_path": "perm/voter-registration-submit-songbird"
+    }
+    # fsp-signing opted into the carve-out.
+    assert "fsp-signing-songbird" in doc.get("fsp_self_submit", [])
+    # Contract address is Songbird VoterRegistry (lowercased compare).
+    assert next(iter(perm["contracts"])).lower() == "0x31b9ec65c731c7d973a33ef3fc83b653f540dc8d"
+
+
+def test_fsp_voter_with_all_three_submit_roles_roundtrip(tmp_path: Path) -> None:
+    """fsp + fsp-voter compose: fsp-signing carries FSM (signUptimeVote/signRewards/
+    signNewSigningPolicy) + Relay (relay()) + VoterRegistry (registerVoter) EVM blocks
+    AND signs FSP messages — the carve-out accepts all exempt shapes and the composed
+    policy round-trips clean."""
+    text = _gen("fsp,fsp-voter")
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+    assert "fsp-signing-songbird" in doc["fsp_self_submit"]
+    # All three cross-domain EVM blocks present on the shared signing wallet.
+    assert "perm/relay-submit-songbird" in doc["permissions"]
+    assert "perm/signing-policy-submit-songbird" in doc["permissions"]
+    assert "perm/voter-registration-submit-songbird" in doc["permissions"]
+    # signing-policy-submit uses FSM abi.
+    sp_rule = next(iter(doc["permissions"]["perm/signing-policy-submit-songbird"]["contracts"].values()))
+    assert sp_rule["abi"] == "flare_systems_manager"
+    # voter-registration-submit uses voter_registry abi.
+    vr_rule = next(
+        iter(doc["permissions"]["perm/voter-registration-submit-songbird"]["contracts"].values())
+    )
+    assert vr_rule["abi"] == "voter_registry"
+
+
+def test_standalone_fsp_voter_carve_out_accepts_all_three_abis(tmp_path: Path) -> None:
+    """standalone fsp-voter: fsp-signing carries relay + FSM(signNewSigningPolicy)
+    + voter_registry EVM blocks — the carve-out must accept all three shapes
+    (all three abis in _FSP_SELF_SUBMIT_SHAPES) and round-trip clean."""
+    text = _gen("fsp-voter", recipient=None)
+    assert _roundtrip(tmp_path, text) == []
+
+
+def test_carve_out_negative_voter_registry_non_exempt_method(registry: AbiRegistry) -> None:
+    """CARVE-OUT NEGATIVE: a wallet in fsp_self_submit with a voter_registry block
+    using a method other than registerVoter (e.g. chill) is refused — only
+    registerVoter(address,(uint8,bytes32,bytes32)) is in the exempt set."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {
+                "perm/vr-bad-method": {
+                    "contracts": {
+                        "0x" + "d1" * 20: {
+                            "abi": "voter_registry",
+                            "chains": [_SGB],
+                            "methods": {
+                                # chill is a nonpayable FSM method — not in the exempt set
+                                "chill(bytes20[],uint256)": {
+                                    "max_value_wei": "0",
+                                    "allow_unconstrained_args": True,
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": ["vr-m"],
+                }
+            },
+            "fsp_permissions": {
+                "fsp/vr-m-sign": {
+                    "message_types": ["SIGNING_POLICY"],
+                    "wallet_allowlist": ["vr-m"],
+                    "chain_ids": [_SGB],
+                }
+            },
+            "wallet_constraints": {
+                "wc/vr-m": {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": {"per_hour": 50, "per_day": 500},
+                }
+            },
+            "wallets": {
+                "vr-m": {"policy_path": "wc/vr-m"},
+            },
+            "fsp_self_submit": ["vr-m"],
+        }
+    )
+    wallet = _make_wallet("vr-m", address="0x" + "d2" * 20)
+
+    errors = check_consistency(policy, [], [wallet], registry)
+    refused = [e for e in errors if "carve-out refused" in e]
+    assert refused, (
+        f"Expected 'carve-out refused' for non-exempt voter_registry method but got: {errors}"
+    )
+
+
+def test_carve_out_negative_voter_registry_nonzero_value(registry: AbiRegistry) -> None:
+    """CARVE-OUT NEGATIVE: a wallet in fsp_self_submit with registerVoter but
+    max_value_wei != '0' is refused — value bound is non-negotiable."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {
+                "perm/vr-bad-value": {
+                    "contracts": {
+                        "0x" + "d3" * 20: {
+                            "abi": "voter_registry",
+                            "chains": [_SGB],
+                            "methods": {
+                                "registerVoter(address,(uint8,bytes32,bytes32))": {
+                                    "max_value_wei": "1",  # non-zero — must refuse
+                                    "allow_unconstrained_args": True,
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": ["vr-v"],
+                }
+            },
+            "fsp_permissions": {
+                "fsp/vr-v-sign": {
+                    "message_types": ["VOTER_REGISTRATION"],
+                    "wallet_allowlist": ["vr-v"],
+                    "chain_ids": [_SGB],
+                }
+            },
+            "wallet_constraints": {
+                "wc/vr-v": {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": {"per_hour": 50, "per_day": 500},
+                }
+            },
+            "wallets": {
+                "vr-v": {"policy_path": "wc/vr-v"},
+            },
+            "fsp_self_submit": ["vr-v"],
+        }
+    )
+    wallet = _make_wallet("vr-v", address="0x" + "d4" * 20)
+
+    errors = check_consistency(policy, [], [wallet], registry)
+    refused = [e for e in errors if "carve-out refused" in e]
+    assert refused, (
+        f"Expected 'carve-out refused' for non-zero value on registerVoter but got: {errors}"
+    )
+
+
+def test_carve_out_negative_fsm_non_exempt_method_still_refused(registry: AbiRegistry) -> None:
+    """CARVE-OUT NEGATIVE: after adding signNewSigningPolicy to the FSM exempt set,
+    a non-exempt FSM method (e.g. daemonize) still refuses the carve-out. The
+    extension does not widen the bound beyond the three stated methods."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {
+                "perm/fsm-bad": {
+                    "contracts": {
+                        "0x" + "e1" * 20: {
+                            "abi": "flare_systems_manager",
+                            "chains": [_SGB],
+                            "methods": {
+                                "signNewSigningPolicy(uint24,bytes32,(uint8,bytes32,bytes32))": {
+                                    "max_value_wei": "0",
+                                    "allow_unconstrained_args": True,
+                                },
+                                "daemonize()": {
+                                    "max_value_wei": "0",
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": ["fsm-bad-w"],
+                }
+            },
+            "fsp_permissions": {
+                "fsp/fsm-bad-sign": {
+                    "message_types": ["SIGNING_POLICY"],
+                    "wallet_allowlist": ["fsm-bad-w"],
+                    "chain_ids": [_SGB],
+                }
+            },
+            "wallet_constraints": {
+                "wc/fsm-bad-w": {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": {"per_hour": 50, "per_day": 500},
+                }
+            },
+            "wallets": {
+                "fsm-bad-w": {"policy_path": "wc/fsm-bad-w"},
+            },
+            "fsp_self_submit": ["fsm-bad-w"],
+        }
+    )
+    wallet = _make_wallet("fsm-bad-w", address="0x" + "e2" * 20)
+
+    errors = check_consistency(policy, [], [wallet], registry)
+    refused = [e for e in errors if "carve-out refused" in e]
+    assert refused, (
+        f"Expected 'carve-out refused' for non-exempt FSM method (daemonize) but got: {errors}"
+    )
+
+
+def test_epoch_submit_roles_in_capability_grant() -> None:
+    """_ROLE_CONVENTION derives signing-policy-submit and voter-registration-submit
+    to the correct caller name and policy_path."""
+    roles = ["signing-policy-submit", "voter-registration-submit"]
+    spec = ConsumerSpec.model_validate(
+        {
+            "consumer": "fsp",
+            "network": "songbird",
+            "compat": {"fwd_contract_expected": "v1", "fwd_client": "0.1.0"},
+            "capabilities": [
+                {
+                    "capability_id": f"fsp/songbird/{r}",
+                    "role": r,
+                    "endpoint": "/v1/sign-transaction",
+                    "caller_token_env": f"{r.upper().replace('-', '_')}_TOKEN",
+                    "wallet_env": "WALLET_NAME",
+                    "wallet_name": "fsp-signing-songbird",
+                    "contract": None,
+                    "contract_name": None,
+                    "method": None,
+                    "value_wei": None,
+                    "recipient_pinned": None,
+                    "suggested_rate": None,
+                }
+                for r in roles
+            ],
+        }
+    )
+    by_id = {g.capability_id: g for g in provisioning_plan(spec)}
+
+    g = by_id["fsp/songbird/signing-policy-submit"]
+    assert g.caller_name == "signing-policy-submit-songbird"
+    assert g.policy_path == "perm/signing-policy-submit-songbird"
+
+    g = by_id["fsp/songbird/voter-registration-submit"]
+    assert g.caller_name == "voter-registration-submit-songbird"
+    assert g.policy_path == "perm/voter-registration-submit-songbird"
+
+
+def test_epoch_submit_regression_not_in_claim_fsp(tmp_path: Path) -> None:
+    """REGRESSION: claim,fsp must carry NONE of the epoch-submit keys
+    (signing-policy-submit and voter-registration-submit are fsp-voter-only)."""
+    text = _gen("claim,fsp")
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+    assert "perm/signing-policy-submit-songbird" not in doc.get("permissions", {})
+    assert "signing-policy-submit-songbird" not in doc["callers"]
+    assert "perm/voter-registration-submit-songbird" not in doc.get("permissions", {})
+    assert "voter-registration-submit-songbird" not in doc["callers"]
+    # No voter_registry ABI block anywhere in claim,fsp.
+    for perm in doc.get("permissions", {}).values():
+        for rule in perm.get("contracts", {}).values():
+            assert rule["abi"] != "voter_registry", (
+                "voter_registry ABI leaked into claim,fsp permissions"
+            )
