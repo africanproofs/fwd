@@ -21,7 +21,7 @@ import structlog
 
 from fwd.app.fsp_policy import fsp_gate, release_fsp_rate_after_failure
 from fwd.app.policy_gate import PolicyDenied as PolicyDenied  # re-export for api
-from fwd.domain.fsp_message import UPTIME, build_fsp_message
+from fwd.domain.fsp_message import REWARD_DISTRIBUTION, UPTIME, VOTER_REGISTRATION, build_fsp_message
 from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import WalletNotFoundError
@@ -45,6 +45,11 @@ class SignFspMessageRequest:
     chain_id: int | None = None
     no_of_weight_based_claims: int | None = None
     rewards_hash: str | None = None
+    address: str | None = None
+    signing_policy: str | None = None
+    payload: str | None = None
+    protocol_id: int | None = None
+    registration_variant: str | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,11 @@ async def _audit(
                 "chain_id": request.chain_id,
                 "no_of_weight_based_claims": request.no_of_weight_based_claims,
                 "rewards_hash": request.rewards_hash,
+                "address": request.address,
+                "signing_policy": request.signing_policy,
+                "payload": request.payload,
+                "protocol_id": request.protocol_id,
+                "registration_variant": request.registration_variant,
             }
         ),
         decision_reason=decision_reason,
@@ -135,18 +145,31 @@ async def sign_fsp_message(
         raise
 
     # 3. Reconstruct the FSP messageHash (typed -> bytes; fwd builds it).
-    # For UPTIME, the messageHash has no chain component (chain_id=None in
-    # build_fsp_message). request.chain_id is used at the policy gate (step 4)
-    # to prevent cross-chain replay, but must not be forwarded to the message
-    # builder — the UPTIME preimage is epoch-only and is identical across chains
-    # by protocol design (the policy allowlist is the replay guard).
-    build_chain_id = None if request.message_type == UPTIME else request.chain_id
+    # chain_id is used at the policy gate for replay-scoping across all types,
+    # but is only folded into the message hash for REWARD_DISTRIBUTION and
+    # VOTER_REGISTRATION chain_scoped. UPTIME, SIGNING_POLICY, PROTOCOL_PAYLOAD,
+    # and VOTER_REGISTRATION legacy all keep chain_id out of the hash.
+    build_chain_id: int | None
+    if request.message_type in (UPTIME,):
+        build_chain_id = None
+    elif request.message_type == VOTER_REGISTRATION and request.registration_variant == "legacy":
+        build_chain_id = None
+    elif request.message_type in ("SIGNING_POLICY", "PROTOCOL_PAYLOAD"):
+        build_chain_id = None
+    else:
+        # REWARD_DISTRIBUTION and VOTER_REGISTRATION chain_scoped include chain_id in hash
+        build_chain_id = request.chain_id
     built = build_fsp_message(
         request.message_type,
         request.reward_epoch_id,
         chain_id=build_chain_id,
         no_of_weight_based_claims=request.no_of_weight_based_claims,
         rewards_hash=request.rewards_hash,
+        address=request.address,
+        signing_policy=request.signing_policy,
+        payload=request.payload,
+        protocol_id=request.protocol_id,
+        registration_variant=request.registration_variant,
     )
     if built is None:
         await release_fsp_rate_after_failure(allow=allow, rate_repo=rate_repo, now=now)
