@@ -58,6 +58,7 @@ def test_load_real_abis_succeeds_with_correct_names() -> None:
             "flare_systems_manager",
             "submission",
             "fast_updater",
+            "relay",
         }
     )
 

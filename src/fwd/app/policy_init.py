@@ -154,6 +154,9 @@ def generate_policy(
     submit3_sig = _sig_for(registry, "submission", "submit3") if FSP_VOTER in caps else None
     submitsig_sig = _sig_for(registry, "submission", "submitSignatures") if FSP_VOTER in caps else None
     submit_updates_sig = _sig_for(registry, "fast_updater", "submitUpdates") if FSP_VOTER in caps else None
+    # Relay finalization method the system-client FINALIZER submits (it packs its own
+    # calldata behind the relay() selector); resolved from the registry, not hand-written.
+    relay_sig = _sig_for(registry, "relay", "relay") if FSP_VOTER in caps else None
 
     callers: dict[str, Any] = {}
     wallets: dict[str, Any] = {}
@@ -296,8 +299,14 @@ def generate_policy(
                     f"network '{net}' has no 'fast_updater' address in networks.yaml "
                     f"(required for fsp-voter submit roles)"
                 )
+            if "relay" not in spec:
+                raise PolicyInitError(
+                    f"network '{net}' has no 'relay' address in networks.yaml "
+                    f"(required for fsp-voter relay-submit role)"
+                )
             submission_addr = spec["submission"]
             fast_updater_addr = spec["fast_updater"]
+            relay_addr = spec["relay"]
 
             signing_wallet = f"fsp-signing-{net}"
             wc_signing = f"wc/fsp-{net}"
@@ -307,6 +316,11 @@ def generate_policy(
                 "max_aggregate_value_wei_per_day": "0",
                 "rate": _rate(fsp_rate),
             }
+            # The fsp-signing key now also self-submits Relay finalization (cross-domain
+            # over Relay, per the system-client FINALIZER). Opt it into the segmentation
+            # carve-out here so the fsp-voter policy is valid STANDALONE and composed with
+            # the fsp cap (idempotent: fsp also appends the same wallet; de-dup at emit).
+            fsp_self_submit.append(signing_wallet)
 
             # Four SIGN fsp_permissions blocks on the shared signing wallet:
             # SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, FAST_UPDATE.
@@ -419,6 +433,32 @@ def generate_policy(
                     }
                 },
                 "wallet_allowlist": [sig_submit_wallet],
+                "rate": _rate(fsp_rate),
+            }
+
+            # relay-submit: Relay finalization on the SHARED fsp-signing wallet.
+            # The system-client FINALIZER submits to Relay with SIGNING_PK (= the
+            # fsp-signing wallet), so this is a cross-domain EVM block on the same key
+            # that signs FSP messages — admitted only by the bounded carve-out
+            # (_FSP_SELF_SUBMIT_SHAPES['relay'] = {relay()}), max_value_wei=0. The
+            # finalizer packs its own calldata behind the relay() selector, so the args
+            # are non-scalar/raw → allow_unconstrained_args.
+            relay_submit_pp = f"perm/relay-submit-{net}"
+            callers[f"relay-submit-{net}"] = {"policy_path": relay_submit_pp}
+            permissions[relay_submit_pp] = {
+                "contracts": {
+                    relay_addr: {
+                        "abi": "relay",
+                        "chains": [chain_id],
+                        "methods": {
+                            relay_sig: {
+                                "max_value_wei": "0",
+                                "allow_unconstrained_args": True,
+                            },
+                        },
+                    }
+                },
+                "wallet_allowlist": [signing_wallet],
                 "rate": _rate(fsp_rate),
             }
 

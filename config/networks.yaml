@@ -17,6 +17,7 @@ flare:
   flare_systems_manager: "0x89e50DC0380e597ecE79c8494bAAFD84537AD0D4"
   submission: "0x2cA6571Daa15ce734Bbd0Bf27D5C9D16787fc33f"
   fast_updater: "0xdbf71d7840934eb82fa10173103d4e9fd4054dd1"
+  relay: "0xCcF30790A93F15e24EB909548a2C58a9b0a7FBd4"
 
 songbird:
   chain_id: 19
@@ -24,6 +25,7 @@ songbird:
   flare_systems_manager: "0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"
   submission: "0x2cA6571Daa15ce734Bbd0Bf27D5C9D16787fc33f"
   fast_updater: "0x7d9f73fd9bc4607dacb618ff895585f98bfdd06b"
+  relay: "0xCB86E8Be709001e01897Bf59847406853da8f14b"
 
 coston2:
   chain_id: 114

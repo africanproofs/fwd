@@ -107,9 +107,11 @@ def test_fsp_voter_structure_and_roundtrip(tmp_path: Path) -> None:
         )
 
     # permissions: 3 fastupdate-submit + ftso-price-submit + ftso-signature-submit
+    # + relay-submit (Relay finalization on the shared fsp-signing wallet).
     expected_perm_keys = (
         {f"perm/fastupdate-submit-{i}-songbird" for i in (1, 2, 3)}
         | {"perm/ftso-price-submit-songbird", "perm/ftso-signature-submit-songbird"}
+        | {"perm/relay-submit-songbird"}
     )
     assert set(perms) == expected_perm_keys, (
         f"permissions mismatch.\n  Expected: {sorted(expected_perm_keys)}\n  Got: {sorted(perms)}"
@@ -161,8 +163,10 @@ def test_fastupdate_submit_wallets_not_in_fsp_self_submit(tmp_path: Path) -> Non
         )
     assert "fsp-submit-songbird" not in ss
     assert "fsp-sig-submit-songbird" not in ss
-    # fsp-signing is not in fsp_self_submit for standalone fsp-voter (no FSP Leg-2 submit)
-    assert "fsp-signing-songbird" not in ss
+    # fsp-signing IS in fsp_self_submit for standalone fsp-voter: it self-submits
+    # Relay finalization (the system-client FINALIZER signs with SIGNING_PK), so the
+    # signing wallet is cross-domain over Relay and opts into the bounded carve-out.
+    assert "fsp-signing-songbird" in ss
 
 
 def test_fsp_and_fsp_voter_compose(tmp_path: Path) -> None:
@@ -563,3 +567,199 @@ def test_capability_grant_derives_fsp_voter_roles() -> None:
     g = by_id["fsp/songbird/ftso-signature-submit"]
     assert g.caller_name == "ftso-signature-submit-songbird"
     assert g.policy_path == "perm/ftso-signature-submit-songbird"
+
+
+# ---------------------------------------------------------------------------
+# relay-submit: Relay finalization on the SHARED fsp-signing wallet (carve-out)
+# ---------------------------------------------------------------------------
+
+
+def test_relay_submit_role_on_fsp_signing(tmp_path: Path) -> None:
+    """fsp-voter emits a relay-submit role: a relay() EVM block on the SHARED
+    fsp-signing wallet, max_value_wei=0, and the wallet opts into the carve-out.
+    The full policy must still round-trip clean."""
+    text = _gen("fsp-voter", recipient=None)
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+
+    perm = doc["permissions"]["perm/relay-submit-songbird"]
+    rule = next(iter(perm["contracts"].values()))
+    assert rule["abi"] == "relay"
+    assert rule["chains"] == [_SGB]
+    assert set(rule["methods"].keys()) == {"relay()"}
+    assert rule["methods"]["relay()"]["max_value_wei"] == "0"
+    assert rule["methods"]["relay()"]["allow_unconstrained_args"] is True
+    # Submitted by the SHARED signing wallet (cross-domain over Relay).
+    assert perm["wallet_allowlist"] == ["fsp-signing-songbird"]
+    # Caller wired.
+    assert doc["callers"]["relay-submit-songbird"] == {"policy_path": "perm/relay-submit-songbird"}
+    # fsp-signing opted into the carve-out.
+    assert "fsp-signing-songbird" in doc.get("fsp_self_submit", [])
+    # The Relay contract address is the verified Songbird Relay (lowercased compare).
+    assert next(iter(perm["contracts"])).lower() == "0xcb86e8be709001e01897bf59847406853da8f14b"
+
+
+def test_relay_carve_out_passes_with_fsm_and_relay_blocks(tmp_path: Path) -> None:
+    """fsp + fsp-voter compose: fsp-signing carries FSM (signUptimeVote/signRewards)
+    AND Relay (relay()) EVM blocks AND signs FSP messages — the carve-out must accept
+    BOTH exempt shapes and the composed policy round-trips clean."""
+    text = _gen("fsp,fsp-voter")
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+    # fsp-signing is reachable from FSM submit blocks, the relay-submit block, AND
+    # multiple fsp_permissions sign blocks — the carve-out admits it.
+    assert "fsp-signing-songbird" in doc["fsp_self_submit"]
+    # Both exempt EVM shapes present on the same signing wallet.
+    relay_rule = next(iter(doc["permissions"]["perm/relay-submit-songbird"]["contracts"].values()))
+    assert relay_rule["abi"] == "relay"
+    fsm_block = doc["permissions"]["perm/uptime-submit-songbird"]
+    assert "fsp-signing-songbird" in fsm_block["wallet_allowlist"]
+
+
+def test_relay_carve_out_negative_nonzero_value(registry: AbiRegistry) -> None:
+    """CARVE-OUT NEGATIVE (proves the relay bound): a wallet in fsp_self_submit whose
+    relay() EVM block carries max_value_wei != '0' is refused."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {
+                "perm/relay-bad-value": {
+                    "contracts": {
+                        "0x" + "c1" * 20: {
+                            "abi": "relay",
+                            "chains": [_SGB],
+                            "methods": {
+                                "relay()": {
+                                    "max_value_wei": "1",  # non-zero — must refuse
+                                    "allow_unconstrained_args": True,
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": ["relay-w"],
+                }
+            },
+            "fsp_permissions": {
+                "fsp/relay-sign": {
+                    "message_types": ["PROTOCOL_PAYLOAD"],
+                    "wallet_allowlist": ["relay-w"],
+                    "chain_ids": [_SGB],
+                }
+            },
+            "wallet_constraints": {
+                "wc/relay-w": {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": {"per_hour": 50, "per_day": 500},
+                }
+            },
+            "wallets": {
+                "relay-w": {"policy_path": "wc/relay-w"},
+            },
+            "fsp_self_submit": ["relay-w"],
+        }
+    )
+    wallet = _make_wallet("relay-w", address="0x" + "c2" * 20)
+
+    errors = check_consistency(policy, [], [wallet], registry)
+    refused = [e for e in errors if "carve-out refused" in e]
+    assert refused, (
+        f"Expected 'carve-out refused' for non-zero value on relay() but got: {errors}"
+    )
+
+
+def test_relay_carve_out_negative_non_exempt_relay_method(registry: AbiRegistry) -> None:
+    """CARVE-OUT NEGATIVE: a wallet in fsp_self_submit with a relay-ABI block using a
+    method OTHER than relay() (e.g. setSigningPolicy) is refused — only relay() is exempt."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {
+                "perm/relay-bad-method": {
+                    "contracts": {
+                        "0x" + "c3" * 20: {
+                            "abi": "relay",
+                            "chains": [_SGB],
+                            "methods": {
+                                "setSigningPolicy((uint24,uint32,uint16,uint256,address[],uint16[]))": {
+                                    "max_value_wei": "0",
+                                    "allow_unconstrained_args": True,
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": ["relay-m"],
+                }
+            },
+            "fsp_permissions": {
+                "fsp/relay-m-sign": {
+                    "message_types": ["PROTOCOL_PAYLOAD"],
+                    "wallet_allowlist": ["relay-m"],
+                    "chain_ids": [_SGB],
+                }
+            },
+            "wallet_constraints": {
+                "wc/relay-m": {
+                    "max_aggregate_value_wei_per_day": "0",
+                    "rate": {"per_hour": 50, "per_day": 500},
+                }
+            },
+            "wallets": {
+                "relay-m": {"policy_path": "wc/relay-m"},
+            },
+            "fsp_self_submit": ["relay-m"],
+        }
+    )
+    wallet = _make_wallet("relay-m", address="0x" + "c4" * 20)
+
+    errors = check_consistency(policy, [], [wallet], registry)
+    refused = [e for e in errors if "carve-out refused" in e]
+    assert refused, (
+        f"Expected 'carve-out refused' for non-exempt relay method but got: {errors}"
+    )
+
+
+def test_relay_submit_role_in_capability_grant() -> None:
+    """_ROLE_CONVENTION derives the relay-submit role to caller/policy_path."""
+    spec = ConsumerSpec.model_validate(
+        {
+            "consumer": "fsp",
+            "network": "songbird",
+            "compat": {"fwd_contract_expected": "v1", "fwd_client": "0.1.0"},
+            "capabilities": [
+                {
+                    "capability_id": "fsp/songbird/relay-submit",
+                    "role": "relay-submit",
+                    "endpoint": "/v1/sign-transaction",
+                    "caller_token_env": "RELAY_SUBMIT_TOKEN",
+                    "wallet_env": "WALLET_NAME",
+                    "wallet_name": "fsp-signing-songbird",
+                    "contract": None,
+                    "contract_name": None,
+                    "method": None,
+                    "value_wei": None,
+                    "recipient_pinned": None,
+                    "suggested_rate": None,
+                }
+            ],
+        }
+    )
+    by_id = {g.capability_id: g for g in provisioning_plan(spec)}
+    g = by_id["fsp/songbird/relay-submit"]
+    assert g.caller_name == "relay-submit-songbird"
+    assert g.policy_path == "perm/relay-submit-songbird"
+
+
+def test_relay_regression_no_relay_keys_in_claim_fsp(tmp_path: Path) -> None:
+    """REGRESSION: claim,fsp must carry NONE of the relay-submit keys (relay is
+    fsp-voter-only); no relay() leaks onto fsp-signing under claim,fsp."""
+    text = _gen("claim,fsp")
+    assert _roundtrip(tmp_path, text) == []
+    doc = yaml.safe_load(text)
+    assert "perm/relay-submit-songbird" not in doc.get("permissions", {})
+    assert "relay-submit-songbird" not in doc["callers"]
+    # No relay-ABI block anywhere in claim,fsp.
+    for perm in doc.get("permissions", {}).values():
+        for rule in perm.get("contracts", {}).values():
+            assert rule["abi"] != "relay", "relay ABI leaked into claim,fsp permissions"

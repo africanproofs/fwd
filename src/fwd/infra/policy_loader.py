@@ -47,8 +47,17 @@ _FSP_SELF_SUBMIT_METHODS: frozenset[str] = frozenset(
 # Extending this map (adding a new abi or a new method to an existing abi) is the
 # ONLY way to admit a new cross-domain wallet shape — the negative test enforces
 # the bound. v1.1.0a7.
+# The Relay finalization method exempt under the carve-out. The system-client
+# FINALIZER submits to the Relay contract with cfg.Credentials.SigningPolicyPrivateKey
+# (= the fsp-signing wallet), so fsp-signing is cross-domain over Relay as well as
+# FlareSystemsManager. The finalizer packs its own calldata behind the relay()
+# selector (relayABI.Methods["relay"].ID), so the exempt method sig is relay().
+# max_value_wei=0 keeps the carve-out value-bounded. v1.1.0 relay-submit.
+_FSP_SELF_SUBMIT_RELAY_METHODS: frozenset[str] = frozenset({"relay()"})
+
 _FSP_SELF_SUBMIT_SHAPES: dict[str, frozenset[str]] = {
     "flare_systems_manager": _FSP_SELF_SUBMIT_METHODS,
+    "relay": _FSP_SELF_SUBMIT_RELAY_METHODS,
 }
 
 

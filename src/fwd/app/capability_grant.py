@@ -69,6 +69,8 @@ _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
     # EVM-only submit roles for Submission contract.
     "ftso-price-submit": ("ftso-price-submit-{net}", "perm/ftso-price-submit-{net}"),
     "ftso-signature-submit": ("ftso-signature-submit-{net}", "perm/ftso-signature-submit-{net}"),
+    # Relay finalization submit on the shared fsp-signing wallet (carve-out).
+    "relay-submit": ("relay-submit-{net}", "perm/relay-submit-{net}"),
 }
 
 
