@@ -33,6 +33,9 @@ _MAX_UINT24 = 16_777_215
 _HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
+_MAX_UINT256 = 2**256 - 1
+
+
 class SignFspMessageBody(BaseModel):
     wallet: str = Field(..., min_length=1, max_length=64)
     message_type: Literal[
@@ -41,6 +44,7 @@ class SignFspMessageBody(BaseModel):
         "SIGNING_POLICY",
         "VOTER_REGISTRATION",
         "PROTOCOL_PAYLOAD",
+        "FAST_UPDATE",
     ]
     reward_epoch_id: int = Field(..., ge=0, le=_MAX_UINT24)
     chain_id: int | None = Field(default=None, ge=1)
@@ -51,9 +55,20 @@ class SignFspMessageBody(BaseModel):
     payload: str | None = Field(default=None)
     protocol_id: int | None = Field(default=None, ge=0)
     registration_variant: Literal["legacy", "chain_scoped"] | None = None
+    block_number: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    replicate: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    gamma_x: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    gamma_y: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    c: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    s: int | None = Field(default=None, ge=0, le=_MAX_UINT256)
+    deltas: str | None = Field(default=None)
 
     @model_validator(mode="after")
     def _shape(self) -> SignFspMessageBody:
+        _fast_update_fields = (
+            self.block_number, self.replicate, self.gamma_x,
+            self.gamma_y, self.c, self.s, self.deltas,
+        )
         if self.message_type == "UPTIME":
             if (
                 self.chain_id is not None
@@ -64,6 +79,7 @@ class SignFspMessageBody(BaseModel):
                 or self.payload is not None
                 or self.protocol_id is not None
                 or self.registration_variant is not None
+                or any(f is not None for f in _fast_update_fields)
             ):
                 raise ValueError("UPTIME takes only reward_epoch_id")
         elif self.message_type == "REWARD_DISTRIBUTION":
@@ -84,8 +100,9 @@ class SignFspMessageBody(BaseModel):
                 or self.payload is not None
                 or self.protocol_id is not None
                 or self.registration_variant is not None
+                or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("REWARD_DISTRIBUTION does not accept address/signing_policy/payload/protocol_id/registration_variant")
+                raise ValueError("REWARD_DISTRIBUTION does not accept address/signing_policy/payload/protocol_id/registration_variant/fast_update fields")
         elif self.message_type == "VOTER_REGISTRATION":
             if self.address is None:
                 raise ValueError("VOTER_REGISTRATION requires address")
@@ -103,8 +120,9 @@ class SignFspMessageBody(BaseModel):
                 or self.signing_policy is not None
                 or self.payload is not None
                 or self.protocol_id is not None
+                or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("VOTER_REGISTRATION does not accept reward fields, signing_policy, payload, or protocol_id")
+                raise ValueError("VOTER_REGISTRATION does not accept reward fields, signing_policy, payload, protocol_id, or fast_update fields")
         elif self.message_type == "SIGNING_POLICY":
             if self.signing_policy is None:
                 raise ValueError("SIGNING_POLICY requires signing_policy")
@@ -116,9 +134,10 @@ class SignFspMessageBody(BaseModel):
                 or self.payload is not None
                 or self.protocol_id is not None
                 or self.registration_variant is not None
+                or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("SIGNING_POLICY does not accept chain_id/address/reward/payload/protocol_id/registration_variant fields")
-        else:  # PROTOCOL_PAYLOAD
+                raise ValueError("SIGNING_POLICY does not accept chain_id/address/reward/payload/protocol_id/registration_variant/fast_update fields")
+        elif self.message_type == "PROTOCOL_PAYLOAD":
             if self.payload is None:
                 raise ValueError("PROTOCOL_PAYLOAD requires payload")
             if (
@@ -127,8 +146,26 @@ class SignFspMessageBody(BaseModel):
                 or self.rewards_hash is not None
                 or self.signing_policy is not None
                 or self.registration_variant is not None
+                or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("PROTOCOL_PAYLOAD does not accept address/reward/signing_policy/registration_variant fields")
+                raise ValueError("PROTOCOL_PAYLOAD does not accept address/reward/signing_policy/registration_variant/fast_update fields")
+        else:  # FAST_UPDATE
+            if any(f is None for f in _fast_update_fields):
+                raise ValueError(
+                    "FAST_UPDATE requires block_number, replicate, gamma_x, gamma_y, c, s, deltas"
+                )
+            if (
+                self.no_of_weight_based_claims is not None
+                or self.rewards_hash is not None
+                or self.address is not None
+                or self.signing_policy is not None
+                or self.payload is not None
+                or self.protocol_id is not None
+                or self.registration_variant is not None
+            ):
+                raise ValueError(
+                    "FAST_UPDATE does not accept reward/address/signing_policy/payload/protocol_id/registration_variant fields"
+                )
         return self
 
 
@@ -164,6 +201,13 @@ async def post_sign_fsp_message(
         payload=body.payload,
         protocol_id=body.protocol_id,
         registration_variant=body.registration_variant,
+        block_number=body.block_number,
+        replicate=body.replicate,
+        gamma_x=body.gamma_x,
+        gamma_y=body.gamma_y,
+        c=body.c,
+        s=body.s,
+        deltas=body.deltas,
     )
     try:
         async with scope_cm as scope:

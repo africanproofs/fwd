@@ -21,7 +21,7 @@ import structlog
 
 from fwd.app.fsp_policy import fsp_gate, release_fsp_rate_after_failure
 from fwd.app.policy_gate import PolicyDenied as PolicyDenied  # re-export for api
-from fwd.domain.fsp_message import REWARD_DISTRIBUTION, UPTIME, VOTER_REGISTRATION, build_fsp_message
+from fwd.domain.fsp_message import FAST_UPDATE, REWARD_DISTRIBUTION, UPTIME, VOTER_REGISTRATION, build_fsp_message
 from fwd.infra.audit_repo import _canonical_json
 from fwd.infra.sealed_master import SealError
 from fwd.infra.wallet_repo import WalletNotFoundError
@@ -50,6 +50,13 @@ class SignFspMessageRequest:
     payload: str | None = None
     protocol_id: int | None = None
     registration_variant: str | None = None
+    block_number: int | None = None
+    replicate: int | None = None
+    gamma_x: int | None = None
+    gamma_y: int | None = None
+    c: int | None = None
+    s: int | None = None
+    deltas: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,13 @@ async def _audit(
                 "payload": request.payload,
                 "protocol_id": request.protocol_id,
                 "registration_variant": request.registration_variant,
+                "block_number": request.block_number,
+                "replicate": request.replicate,
+                "gamma_x": request.gamma_x,
+                "gamma_y": request.gamma_y,
+                "c": request.c,
+                "s": request.s,
+                "deltas": request.deltas,
             }
         ),
         decision_reason=decision_reason,
@@ -154,7 +168,7 @@ async def sign_fsp_message(
         build_chain_id = None
     elif request.message_type == VOTER_REGISTRATION and request.registration_variant == "legacy":
         build_chain_id = None
-    elif request.message_type in ("SIGNING_POLICY", "PROTOCOL_PAYLOAD"):
+    elif request.message_type in ("SIGNING_POLICY", "PROTOCOL_PAYLOAD", FAST_UPDATE):
         build_chain_id = None
     else:
         # REWARD_DISTRIBUTION and VOTER_REGISTRATION chain_scoped include chain_id in hash
@@ -170,6 +184,13 @@ async def sign_fsp_message(
         payload=request.payload,
         protocol_id=request.protocol_id,
         registration_variant=request.registration_variant,
+        block_number=request.block_number,
+        replicate=request.replicate,
+        gamma_x=request.gamma_x,
+        gamma_y=request.gamma_y,
+        c=request.c,
+        s=request.s,
+        deltas=request.deltas,
     )
     if built is None:
         await release_fsp_rate_after_failure(allow=allow, rate_repo=rate_repo, now=now)

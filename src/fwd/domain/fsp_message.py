@@ -20,12 +20,19 @@ Byte-verified against flare-system-client@29d2c78:
   SIGNING_POLICY      SigningPolicyHash(policy_bytes) — iterative keccak chain over 32-byte chunks
   PROTOCOL_PAYLOAD    keccak256(payload_bytes)
 
+Byte-verified against fast-updates@go-client/updates/updates.go (PrepareUpdates):
+  FAST_UPDATE         sha256( abi.encode(['uint256','uint256','uint256','uint256','uint256','uint256','bytes'],
+                                         [block_number, replicate, gamma_x, gamma_y, c, s, deltas]) )
+  The Go client then applies EIP-191 (crypto.Sign(keccak256(prefix||sha256_digest), key))
+  which equals sign_fsp_eip191(sha256_digest) — signer reused unchanged.
+
 Returns None on any malformed input (default-deny; mirrors decode_intent).
-Pure: stdlib + eth_utils + eth_abi only; NO fwd.* imports.
+Pure: stdlib + eth_utils + eth_abi + hashlib only; NO fwd.* imports.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -37,9 +44,12 @@ REWARD_DISTRIBUTION = "REWARD_DISTRIBUTION"
 SIGNING_POLICY = "SIGNING_POLICY"
 VOTER_REGISTRATION = "VOTER_REGISTRATION"
 PROTOCOL_PAYLOAD = "PROTOCOL_PAYLOAD"
-_MESSAGE_TYPES = frozenset({UPTIME, REWARD_DISTRIBUTION, SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD})
+FAST_UPDATE = "FAST_UPDATE"
+_MESSAGE_TYPES = frozenset({UPTIME, REWARD_DISTRIBUTION, SIGNING_POLICY, VOTER_REGISTRATION, PROTOCOL_PAYLOAD, FAST_UPDATE})
 _MAX_UINT24 = 16_777_215  # signing-tool parseRewardEpochId range (defense-in-depth)
 _MAX_PAYLOAD_BYTES = 4096
+_MAX_DELTAS_BYTES = 4096
+_MAX_UINT256 = 2**256 - 1
 _HEX_ADDR = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
@@ -91,6 +101,13 @@ def build_fsp_message(
     payload: str | None = None,
     protocol_id: int | None = None,
     registration_variant: str | None = None,
+    block_number: int | None = None,
+    replicate: int | None = None,
+    gamma_x: int | None = None,
+    gamma_y: int | None = None,
+    c: int | None = None,
+    s: int | None = None,
+    deltas: str | None = None,
 ) -> FspMessage | None:
     """Reconstruct the FSP messageHash. None on ANY malformed input."""
     try:
@@ -112,6 +129,13 @@ def build_fsp_message(
                 or payload is not None
                 or protocol_id is not None
                 or registration_variant is not None
+                or block_number is not None
+                or replicate is not None
+                or gamma_x is not None
+                or gamma_y is not None
+                or c is not None
+                or s is not None
+                or deltas is not None
             ):
                 return None
             second = keccak(b"\x00" * 32)
@@ -125,6 +149,13 @@ def build_fsp_message(
                 or payload is not None
                 or protocol_id is not None
                 or registration_variant is not None
+                or block_number is not None
+                or replicate is not None
+                or gamma_x is not None
+                or gamma_y is not None
+                or c is not None
+                or s is not None
+                or deltas is not None
             ):
                 return None
             if not isinstance(chain_id, int) or isinstance(chain_id, bool) or chain_id <= 0:
@@ -163,6 +194,13 @@ def build_fsp_message(
                 or signing_policy is not None
                 or payload is not None
                 or protocol_id is not None
+                or block_number is not None
+                or replicate is not None
+                or gamma_x is not None
+                or gamma_y is not None
+                or c is not None
+                or s is not None
+                or deltas is not None
             ):
                 return None
             # address required and must be valid 0x + 40 hex
@@ -199,6 +237,13 @@ def build_fsp_message(
                 or payload is not None
                 or protocol_id is not None
                 or registration_variant is not None
+                or block_number is not None
+                or replicate is not None
+                or gamma_x is not None
+                or gamma_y is not None
+                or c is not None
+                or s is not None
+                or deltas is not None
             ):
                 return None
             policy_bytes = _decode_hex(signing_policy)
@@ -208,7 +253,7 @@ def build_fsp_message(
                 return None
             message_hash = _signing_policy_hash(policy_bytes)
 
-        else:  # PROTOCOL_PAYLOAD
+        elif message_type == PROTOCOL_PAYLOAD:
             # Foreign fields forbidden
             if (
                 address is not None
@@ -216,6 +261,13 @@ def build_fsp_message(
                 or rewards_hash is not None
                 or signing_policy is not None
                 or registration_variant is not None
+                or block_number is not None
+                or replicate is not None
+                or gamma_x is not None
+                or gamma_y is not None
+                or c is not None
+                or s is not None
+                or deltas is not None
             ):
                 return None
             payload_bytes = _decode_hex(payload)
@@ -225,6 +277,37 @@ def build_fsp_message(
                 return None
             # protocol_id and chain_id are audit-only; not in the hash
             message_hash = keccak(payload_bytes)
+
+        else:  # FAST_UPDATE
+            # Foreign fields forbidden
+            if (
+                no_of_weight_based_claims is not None
+                or rewards_hash is not None
+                or address is not None
+                or signing_policy is not None
+                or payload is not None
+                or protocol_id is not None
+                or registration_variant is not None
+            ):
+                return None
+            # All six ints required; must be non-bool ints in [0, 2**256-1]
+            for _val in (block_number, replicate, gamma_x, gamma_y, c, s):
+                if not isinstance(_val, int) or isinstance(_val, bool):
+                    return None
+                if _val < 0 or _val > _MAX_UINT256:
+                    return None
+            # deltas: required 0x-hex, decoded, length bound <= 4096 bytes
+            deltas_bytes = _decode_hex(deltas)
+            if deltas_bytes is None:
+                return None
+            if len(deltas_bytes) > _MAX_DELTAS_BYTES:
+                return None
+            # chain_id is gate-scoping only; NOT in the hash
+            packed = eth_abi.encode(  # type: ignore[attr-defined]
+                ["uint256", "uint256", "uint256", "uint256", "uint256", "uint256", "bytes"],
+                [block_number, replicate, gamma_x, gamma_y, c, s, deltas_bytes],
+            )
+            message_hash = hashlib.sha256(packed).digest()
 
         return FspMessage(
             message_type=message_type,
