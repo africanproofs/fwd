@@ -65,17 +65,22 @@ def test_fsp_only_songbird_roundtrips_with_carveout(tmp_path: Path) -> None:
     # carve-out: the signing wallet is opted into fsp_self_submit AND appears in
     # both an fsp_permissions and an EVM permissions allowlist.
     assert doc["fsp_self_submit"] == ["fsp-signing-songbird"]
-    submit = doc["permissions"]["perm/fsp-submit-songbird"]
-    # default is now per-network: fsp-sender-songbird (not shared fsp-sender)
-    assert submit["wallet_allowlist"] == ["fsp-signing-songbird", "fsp-sender-songbird"]
-    assert submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["chains"] == [19]
-    for m in submit["contracts"]["0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"]["methods"].values():
-        # signUptimeVote(tuple) and signRewards(tuple[], tuple) are non-scalar —
-        # allow_unconstrained_args must be True; chain binding via fsp_permissions.chain_ids.
-        assert m["allow_unconstrained_args"] is True
-    # FSP-CROSSCHAIN-001: UPTIME requires chain_ids — generated policy must include them.
-    fsp_perm = doc["fsp_permissions"]["fsp/songbird"]
-    assert fsp_perm["chain_ids"] == [19]
+    _fsm = "0x421c69E22f48e14Fc2d2Ee3812c59bfb81c38516"
+    # Per-message-type least-privilege (ADR-0004): ONE submit block per FSM method, each
+    # authorizing exactly one method; both share the signing+sender wallet allowlist.
+    for pp in ("perm/uptime-submit-songbird", "perm/reward-submit-songbird"):
+        submit = doc["permissions"][pp]
+        assert submit["wallet_allowlist"] == ["fsp-signing-songbird", "fsp-sender-songbird"]
+        assert submit["contracts"][_fsm]["chains"] == [19]
+        methods = submit["contracts"][_fsm]["methods"]
+        assert len(methods) == 1  # exactly one method per submit caller
+        for m in methods.values():
+            # signUptimeVote / signRewards are non-scalar — allow_unconstrained_args True.
+            assert m["allow_unconstrained_args"] is True
+    # ONE fsp_permissions block per message type; FSP-CROSSCHAIN-001: chain_ids required.
+    assert doc["fsp_permissions"]["fsp/uptime-songbird"]["message_types"] == ["UPTIME"]
+    assert doc["fsp_permissions"]["fsp/uptime-songbird"]["chain_ids"] == [19]
+    assert doc["fsp_permissions"]["fsp/reward-songbird"]["message_types"] == ["REWARD_DISTRIBUTION"]
 
 
 def test_claim_and_fsp_multinetwork_roundtrips(tmp_path: Path) -> None:
@@ -130,9 +135,10 @@ def test_fsp_sender_mode_per_network_yields_per_net_wallet(tmp_path: Path) -> No
     assert doc["wallets"]["fsp-sender-songbird"]["policy_path"] == "wc/fsp-sender-songbird"
     assert "wc/fsp-sender-songbird" in doc["wallet_constraints"]
 
-    # Submit permission wallet_allowlist includes fsp-sender-songbird.
-    submit = doc["permissions"]["perm/fsp-submit-songbird"]
+    # Submit permission wallet_allowlist includes fsp-sender-songbird (per-method blocks).
+    submit = doc["permissions"]["perm/uptime-submit-songbird"]
     assert "fsp-sender-songbird" in submit["wallet_allowlist"]
+    assert "fsp-sender-songbird" in doc["permissions"]["perm/reward-submit-songbird"]["wallet_allowlist"]
 
     # fsp-signing-songbird still present in fsp_self_submit.
     assert "fsp-signing-songbird" in doc["fsp_self_submit"]
@@ -147,10 +153,10 @@ def test_fsp_sender_mode_per_network_multinetwork(tmp_path: Path) -> None:
     assert "fsp-sender-songbird" in doc["wallets"]
     assert "fsp-sender" not in doc["wallets"]
 
-    flare_submit = doc["permissions"]["perm/fsp-submit-flare"]
+    flare_submit = doc["permissions"]["perm/uptime-submit-flare"]
     assert "fsp-sender-flare" in flare_submit["wallet_allowlist"]
 
-    sgb_submit = doc["permissions"]["perm/fsp-submit-songbird"]
+    sgb_submit = doc["permissions"]["perm/uptime-submit-songbird"]
     assert "fsp-sender-songbird" in sgb_submit["wallet_allowlist"]
 
 
@@ -222,12 +228,19 @@ def test_merge_adds_network_preserves_existing(tmp_path: Path) -> None:
     assert {
         "claim-songbird",
         "claim-flare",
-        "fsp-sign-songbird",
-        "fsp-sign-flare",
-        "fsp-submit-songbird",
-        "fsp-submit-flare",
+        "uptime-vote-sign-songbird",
+        "uptime-vote-sign-flare",
+        "reward-distribution-sign-songbird",
+        "uptime-vote-submit-songbird",
+        "uptime-vote-submit-flare",
+        "reward-distribution-submit-songbird",
     } <= set(doc["callers"])
-    assert {"fsp/songbird", "fsp/flare"} <= set(doc["fsp_permissions"])
+    assert {
+        "fsp/uptime-songbird",
+        "fsp/uptime-flare",
+        "fsp/reward-songbird",
+        "fsp/reward-flare",
+    } <= set(doc["fsp_permissions"])
     assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]
 
     # every songbird rule is byte-for-byte preserved (the flare run touched none)

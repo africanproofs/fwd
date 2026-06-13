@@ -194,8 +194,11 @@ def generate_policy(
             }
 
         if FSP in caps:
-            sign_caller = f"fsp-sign-{net}"
-            submit_caller = f"fsp-submit-{net}"
+            # Per-message-type least-privilege (ADR-0004): each SIGN caller authorizes
+            # exactly ONE FSP message type (UPTIME vs REWARD_DISTRIBUTION) on the shared
+            # signing-policy wallet; each SUBMIT caller authorizes exactly ONE
+            # FlareSystemsManager method on the shared sender wallet. An uptime token cannot
+            # sign a reward distribution, and vice-versa.
             signing_wallet = f"fsp-signing-{net}"
             if fsp_sender_mode == "per-network":
                 sender_wallet = f"fsp-sender-{net}"
@@ -203,51 +206,56 @@ def generate_policy(
             else:
                 sender_wallet = "fsp-sender"  # shared across networks
                 wc_sender = "wc/fsp-sender"
-            fsp_pp = f"fsp/{net}"
-            submit_pp = f"perm/fsp-submit-{net}"
             wc_signing = f"wc/fsp-{net}"
-
-            callers[sign_caller] = {"policy_path": fsp_pp}
-            callers[submit_caller] = {"policy_path": submit_pp}
             wallets[signing_wallet] = {"policy_path": wc_signing}
             wallets[sender_wallet] = {"policy_path": wc_sender}
 
-            fsp_permissions[fsp_pp] = {
-                "message_types": ["UPTIME", "REWARD_DISTRIBUTION"],
-                "wallet_allowlist": [signing_wallet],
-                "rate": _rate(fsp_rate),
-                # Required: UPTIME has no epoch-bound chain context and is replayable
-                # across chains without an explicit allowlist (FSP-CROSSCHAIN-001).
-                "chain_ids": [chain_id],
-            }
-            permissions[submit_pp] = {
-                "contracts": {
-                    spec["flare_systems_manager"]: {
-                        "abi": "flare_systems_manager",
-                        "chains": [chain_id],
-                        "methods": {
-                            uptime_sig: {
-                                "max_value_wei": "0",
-                                # True required: signUptimeVote(tuple _signature) is
-                                # non-scalar; chain_ids in fsp_permissions pins the chain.
-                                "allow_unconstrained_args": True,
-                                "arg_predicates": {"_rewardEpochId": "any"},
+            # SIGN legs (Leg-1, /v1/sign-fsp-message) — one caller + fsp_permissions block
+            # per message type; both reference the shared signing wallet.
+            uptime_sign_pp = f"fsp/uptime-{net}"
+            reward_sign_pp = f"fsp/reward-{net}"
+            callers[f"uptime-vote-sign-{net}"] = {"policy_path": uptime_sign_pp}
+            callers[f"reward-distribution-sign-{net}"] = {"policy_path": reward_sign_pp}
+            for _pp, _mt in ((uptime_sign_pp, "UPTIME"), (reward_sign_pp, "REWARD_DISTRIBUTION")):
+                fsp_permissions[_pp] = {
+                    "message_types": [_mt],
+                    "wallet_allowlist": [signing_wallet],
+                    "rate": _rate(fsp_rate),
+                    # UPTIME has no epoch-bound chain context and is replayable across chains
+                    # without an explicit allowlist (FSP-CROSSCHAIN-001); chain_ids pins it.
+                    "chain_ids": [chain_id],
+                }
+
+            # SUBMIT legs (Leg-2, /v1/sign-transaction → FlareSystemsManager) — one caller +
+            # permissions block per method.
+            uptime_submit_pp = f"perm/uptime-submit-{net}"
+            reward_submit_pp = f"perm/reward-submit-{net}"
+            callers[f"uptime-vote-submit-{net}"] = {"policy_path": uptime_submit_pp}
+            callers[f"reward-distribution-submit-{net}"] = {"policy_path": reward_submit_pp}
+            _fsm = spec["flare_systems_manager"]
+            for _pp, _method in ((uptime_submit_pp, uptime_sig), (reward_submit_pp, rewards_sig)):
+                permissions[_pp] = {
+                    "contracts": {
+                        _fsm: {
+                            "abi": "flare_systems_manager",
+                            "chains": [chain_id],
+                            "methods": {
+                                _method: {
+                                    "max_value_wei": "0",
+                                    # signUptimeVote(tuple _signature) / signRewards(tuple[],
+                                    # tuple) are non-scalar; chain_ids in fsp_permissions pins
+                                    # the chain, epoch constraint via arg_predicates.
+                                    "allow_unconstrained_args": True,
+                                    "arg_predicates": {"_rewardEpochId": "any"},
+                                },
                             },
-                            rewards_sig: {
-                                "max_value_wei": "0",
-                                # True required: signRewards(tuple[], tuple) are
-                                # non-scalar; epoch constraint via arg_predicates.
-                                "allow_unconstrained_args": True,
-                                "arg_predicates": {"_rewardEpochId": "any"},
-                            },
-                        },
-                    }
-                },
-                # The signing wallet self-submits (carve-out) + the dedicated
-                # sole-submitter sender pays gas. Both must be allowlisted here.
-                "wallet_allowlist": [signing_wallet, sender_wallet],
-                "rate": _rate(fsp_rate),
-            }
+                        }
+                    },
+                    # The signing wallet self-submits (carve-out) + the dedicated
+                    # sole-submitter sender pays gas. Both must be allowlisted here.
+                    "wallet_allowlist": [signing_wallet, sender_wallet],
+                    "rate": _rate(fsp_rate),
+                }
             # The signing-policy key signs FSP messages AND appears as a
             # self-submit EVM signer — opt into the segmentation carve-out.
             fsp_self_submit.append(signing_wallet)

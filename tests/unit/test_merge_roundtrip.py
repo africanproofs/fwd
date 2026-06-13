@@ -256,8 +256,8 @@ def test_merge_shared_sender_multinetwork_roundtrips(tmp_path: Path) -> None:
     assert "fsp-sender-flare" not in doc["wallets"]
     assert "fsp-sender-songbird" not in doc["wallets"]
     # the shared sender is allowlisted in BOTH networks' submit permissions
-    assert "fsp-sender" in doc["permissions"]["perm/fsp-submit-flare"]["wallet_allowlist"]
-    assert "fsp-sender" in doc["permissions"]["perm/fsp-submit-songbird"]["wallet_allowlist"]
+    assert "fsp-sender" in doc["permissions"]["perm/uptime-submit-flare"]["wallet_allowlist"]
+    assert "fsp-sender" in doc["permissions"]["perm/uptime-submit-songbird"]["wallet_allowlist"]
 
 
 def test_merge_three_networks_shared_sender_roundtrips(tmp_path: Path) -> None:

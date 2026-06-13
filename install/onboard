@@ -595,8 +595,8 @@ caller_ensure() {  # name policy outvar [capability_id]
 # outbox (FWD_HANDOFF_DIR is host-only — not mounted into fwd; the consumer pulls). Token
 # VALUES travel the stdin/stdout capture PIPE (never argv); a failure is a non-fatal
 # warn (the bundle is re-emittable — a re-onboard rotates).
-bundle_emit() {  # net claim_tok sign_tok submit_tok
-  _be_net="$1"; _be_ct="$2"; _be_st="$3"; _be_sub="$4"
+bundle_emit() {  # net claim_tok uptime_sign_tok reward_sign_tok uptime_submit_tok reward_submit_tok
+  _be_net="$1"; _be_ct="$2"; _be_usign="$3"; _be_rsign="$4"; _be_usub="$5"; _be_rsub="$6"
   _be_out="$FWD_HANDOFF_DIR/$CONSUMER-$_be_net.json"
   # v2 config (consumer-contract-v1 §4) — the NON-SECRET network config that was
   # previously written into clif's .env, now relocated INTO the bundle. Composed
@@ -613,15 +613,23 @@ bundle_emit() {  # net claim_tok sign_tok submit_tok
   fi
   _be_tuples=""
   if [ "$HAS_CLAIM" -eq 1 ] && [ -n "$_be_ct" ]; then
-    _be_tuples="$_be_tuples$(printf 'claim/%s/ftso-reward\tFWD_CALLER_TOKEN\t%s\tclaimer-%s' "$_be_net" "$_be_ct" "$_be_net")
+    _be_tuples="$_be_tuples$(printf 'claim/%s/ftso-reward-claim\tFWD_CALLER_TOKEN\t%s\tclaimer-%s' "$_be_net" "$_be_ct" "$_be_net")
 "
   fi
-  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_st" ]; then
-    _be_tuples="$_be_tuples$(printf 'claim/%s/fsp-sign\tFSP_SIGN_CALLER_TOKEN\t%s\tfsp-signing-%s' "$_be_net" "$_be_st" "$_be_net")
+  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_usign" ]; then
+    _be_tuples="$_be_tuples$(printf 'claim/%s/uptime-vote-sign\tFSP_UPTIME_SIGN_CALLER_TOKEN\t%s\tfsp-signing-%s' "$_be_net" "$_be_usign" "$_be_net")
 "
   fi
-  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_sub" ]; then
-    _be_tuples="$_be_tuples$(printf 'claim/%s/fsp-submit\tFSP_SUBMIT_CALLER_TOKEN\t%s\t%s' "$_be_net" "$_be_sub" "$(sender_name "$_be_net")")
+  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_rsign" ]; then
+    _be_tuples="$_be_tuples$(printf 'claim/%s/reward-distribution-sign\tFSP_REWARD_SIGN_CALLER_TOKEN\t%s\tfsp-signing-%s' "$_be_net" "$_be_rsign" "$_be_net")
+"
+  fi
+  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_usub" ]; then
+    _be_tuples="$_be_tuples$(printf 'claim/%s/uptime-vote-submit\tFSP_UPTIME_SUBMIT_CALLER_TOKEN\t%s\t%s' "$_be_net" "$_be_usub" "$(sender_name "$_be_net")")
+"
+  fi
+  if [ "$HAS_FSP" -eq 1 ] && [ -n "$_be_rsub" ]; then
+    _be_tuples="$_be_tuples$(printf 'claim/%s/reward-distribution-submit\tFSP_REWARD_SUBMIT_CALLER_TOKEN\t%s\t%s' "$_be_net" "$_be_rsub" "$(sender_name "$_be_net")")
 "
   fi
   [ -n "$_be_tuples" ] || { warn "bundle: no minted tokens for $_be_net — skipping bundle"; return 0; }
@@ -661,9 +669,12 @@ if [ "$HAS_FSP" -eq 1 ]; then
       fi
     fi
     # callers ALWAYS rotate (revoke + re-mint via caller_ensure) — even on reissue.
-    caller_ensure "fsp-sign-$net"   "fsp/$net"             _t_sign "claim/$net/fsp-sign"
-    caller_ensure "fsp-submit-$net" "perm/fsp-submit-$net" _t_sub  "claim/$net/fsp-submit"
-    eval "TOK_FSPSIGN_$net=\$_t_sign"; eval "TOK_FSPSUBMIT_$net=\$_t_sub"
+    caller_ensure "uptime-vote-sign-$net"           "fsp/uptime-$net"         _t_usign "claim/$net/uptime-vote-sign"
+    caller_ensure "reward-distribution-sign-$net"   "fsp/reward-$net"         _t_rsign "claim/$net/reward-distribution-sign"
+    caller_ensure "uptime-vote-submit-$net"         "perm/uptime-submit-$net" _t_usub  "claim/$net/uptime-vote-submit"
+    caller_ensure "reward-distribution-submit-$net" "perm/reward-submit-$net" _t_rsub  "claim/$net/reward-distribution-submit"
+    eval "TOK_USIGN_$net=\$_t_usign"; eval "TOK_RSIGN_$net=\$_t_rsign"
+    eval "TOK_USUB_$net=\$_t_usub";   eval "TOK_RSUB_$net=\$_t_rsub"
     if [ "$REISSUE" -eq 0 ]; then
       if wallet_exists "$_sender"; then seed_nonce_or_defer "$_sender" "$cid"
       else warn "$_sender not present (import deferred) — seed its nonce after importing: clifwd nonce init --wallet $_sender --chain $cid --starting-nonce <n>"; fi
@@ -687,7 +698,7 @@ if [ "$HAS_CLAIM" -eq 1 ]; then
       fi
     fi
     # caller ALWAYS rotates (revoke + re-mint via caller_ensure) — even on reissue.
-    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "claim/$net/ftso-reward"
+    caller_ensure "claim-$net" "perm/claim-$net" _t_claim "claim/$net/ftso-reward-claim"
     eval "TOK_CLAIM_$net=\$_t_claim"
     if [ "$REISSUE" -eq 0 ]; then
       if wallet_exists "claimer-$net"; then seed_nonce_or_defer "claimer-$net" "$cid"
@@ -701,8 +712,10 @@ printf '\n\033[1;35m═══════════════ handoff bundle
 printf '   Publishing the one-shot handoff bundle to fwd'"'"'s outbox %s (caller tokens + wallet names; 0600, TTL ~10min).\n' "$FWD_HANDOFF_DIR"
 printf '   fwd never reads or writes a consumer'"'"'s .env or directory (Invariant #5 + membrane) — the consumer pulls: clifctl import-credentials.\n'
 for net in $NETLIST; do
-  eval "_w_ct=\${TOK_CLAIM_$net:-}"; eval "_w_st=\${TOK_FSPSIGN_$net:-}"; eval "_w_sub=\${TOK_FSPSUBMIT_$net:-}"
-  bundle_emit "$net" "$_w_ct" "$_w_st" "$_w_sub"
+  eval "_w_ct=\${TOK_CLAIM_$net:-}"
+  eval "_w_usign=\${TOK_USIGN_$net:-}"; eval "_w_rsign=\${TOK_RSIGN_$net:-}"
+  eval "_w_usub=\${TOK_USUB_$net:-}";   eval "_w_rsub=\${TOK_RSUB_$net:-}"
+  bundle_emit "$net" "$_w_ct" "$_w_usign" "$_w_rsign" "$_w_usub" "$_w_rsub"
 done
 
 # Post-provisioning consistency gate

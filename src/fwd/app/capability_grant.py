@@ -49,11 +49,14 @@ _CAPABILITY_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]*/[a-z0-9-]+/[a-z0-9-]+$"
 # capability's role because `clif spec --json` carries the wallet NAME but not
 # the fwd caller name / policy_path. A role outside this set cannot be derived
 # (the operator maps it by hand) — provisioning_plan leaves it un-derived.
+# ADR-0004 role taxonomy (<context>-<noun>-<verb>). FSP signing is split per message-type
+# (least-privilege): a sign caller authorizes ONE message type, a submit caller ONE method.
 _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
-    "ftso-reward": ("claim-{net}", "perm/claim-{net}"),  # ADR-0004: the `claim` consumer's reward role
-    "claim": ("claim-{net}", "perm/claim-{net}"),  # legacy clif role name (back-compat)
-    "fsp-sign": ("fsp-sign-{net}", "fsp/{net}"),
-    "fsp-submit": ("fsp-submit-{net}", "perm/fsp-submit-{net}"),
+    "ftso-reward-claim": ("claim-{net}", "perm/claim-{net}"),
+    "uptime-vote-sign": ("uptime-vote-sign-{net}", "fsp/uptime-{net}"),
+    "reward-distribution-sign": ("reward-distribution-sign-{net}", "fsp/reward-{net}"),
+    "uptime-vote-submit": ("uptime-vote-submit-{net}", "perm/uptime-submit-{net}"),
+    "reward-distribution-submit": ("reward-distribution-submit-{net}", "perm/reward-submit-{net}"),
 }
 
 

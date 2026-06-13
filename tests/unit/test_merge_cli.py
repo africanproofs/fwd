@@ -244,12 +244,12 @@ def test_merge_adds_network_preserves_existing(
     assert {
         "claim-songbird",
         "claim-flare",
-        "fsp-sign-songbird",
-        "fsp-sign-flare",
-        "fsp-submit-songbird",
-        "fsp-submit-flare",
+        "uptime-vote-sign-songbird",
+        "uptime-vote-sign-flare",
+        "uptime-vote-submit-songbird",
+        "uptime-vote-submit-flare",
     } <= set(doc["callers"])
-    assert {"fsp/songbird", "fsp/flare"} <= set(doc["fsp_permissions"])
+    assert {"fsp/uptime-songbird", "fsp/uptime-flare"} <= set(doc["fsp_permissions"])
     assert sorted(doc["fsp_self_submit"]) == ["fsp-signing-flare", "fsp-signing-songbird"]
 
     # SUPERSET: every songbird key/value the original had survives unchanged.
@@ -294,7 +294,7 @@ def test_merge_three_way_chain_preserves_all(
         _clear()
 
     assert {"claimer-songbird", "claimer-flare", "claimer-coston2"} <= set(doc["wallets"])
-    assert {"fsp/songbird", "fsp/flare", "fsp/coston2"} <= set(doc["fsp_permissions"])
+    assert {"fsp/uptime-songbird", "fsp/uptime-flare", "fsp/uptime-coston2"} <= set(doc["fsp_permissions"])
 
     # songbird survived BOTH subsequent adds, byte-identical to the first gen.
     for section in ("callers", "wallets", "permissions", "wallet_constraints", "fsp_permissions"):

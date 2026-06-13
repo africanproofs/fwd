@@ -19,13 +19,13 @@ from fwd.app.capability_grant import (
 )
 
 _VALID_SPEC = {
-    "consumer": "clif",
+    "consumer": "claim",
     "network": "songbird",
-    "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "clif": "0.5.37"},
+    "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "claim": "0.5.37"},
     "capabilities": [
         {
-            "capability_id": "clif/songbird/claim",
-            "role": "claim",
+            "capability_id": "claim/songbird/ftso-reward-claim",
+            "role": "ftso-reward-claim",
             "endpoint": "/v1/sign-transaction",
             "caller_token_env": "FWD_CALLER_TOKEN",
             "wallet_env": "FWD_WALLET_NAME",
@@ -38,12 +38,12 @@ _VALID_SPEC = {
             "suggested_rate": "8/day",
         },
         {
-            "capability_id": "clif/songbird/fsp-sign",
-            "role": "fsp-sign",
+            "capability_id": "claim/songbird/uptime-vote-sign",
+            "role": "uptime-vote-sign",
             "endpoint": "/v1/sign-fsp-message",
             "caller_token_env": "FSP_SIGN_CALLER_TOKEN",
             "wallet_env": "FSP_SIGNING_WALLET_NAME",
-            "wallet_name": "fsp-sign-songbird",
+            "wallet_name": "fsp-signing-songbird",
             "contract": None,
             "contract_name": None,
             "method": "signUptimeVote / signRewards",
@@ -52,8 +52,8 @@ _VALID_SPEC = {
             "suggested_rate": "16/day",
         },
         {
-            "capability_id": "clif/songbird/fsp-submit",
-            "role": "fsp-submit",
+            "capability_id": "claim/songbird/uptime-vote-submit",
+            "role": "uptime-vote-submit",
             "endpoint": "/v1/sign-transaction",
             "caller_token_env": "FSP_SUBMIT_CALLER_TOKEN",
             "wallet_env": "FSP_SENDER_WALLET_NAME",
@@ -83,12 +83,12 @@ def _spec_text(overrides: dict | None = None) -> str:
 
 def test_parse_valid_spec() -> None:
     spec = parse_spec(_spec_text())
-    assert spec.consumer == "clif"
+    assert spec.consumer == "claim"
     assert spec.network == "songbird"
     assert [c.capability_id for c in spec.capabilities] == [
-        "clif/songbird/claim",
-        "clif/songbird/fsp-sign",
-        "clif/songbird/fsp-submit",
+        "claim/songbird/ftso-reward-claim",
+        "claim/songbird/uptime-vote-sign",
+        "claim/songbird/uptime-vote-submit",
     ]
 
 
@@ -135,7 +135,7 @@ def test_parse_empty_capabilities_raises() -> None:
 
 def test_render_diff_contains_ids_envs_and_approve() -> None:
     diff = render_custody_diff(parse_spec(_spec_text()))
-    for cid in ("clif/songbird/claim", "clif/songbird/fsp-sign", "clif/songbird/fsp-submit"):
+    for cid in ("claim/songbird/ftso-reward-claim", "claim/songbird/uptime-vote-sign", "claim/songbird/uptime-vote-submit"):
         assert cid in diff
     assert "FWD_CALLER_TOKEN" in diff  # env NAME only
     assert "approve / reject" in diff
@@ -156,12 +156,12 @@ def test_render_diff_carries_no_token_value() -> None:
 def test_plan_derives_clif_convention() -> None:
     plan = provisioning_plan(parse_spec(_spec_text()))
     by_id = {g.capability_id: g for g in plan}
-    assert by_id["clif/songbird/claim"].caller_name == "claim-songbird"
-    assert by_id["clif/songbird/claim"].policy_path == "perm/claim-songbird"
-    assert by_id["clif/songbird/fsp-sign"].caller_name == "fsp-sign-songbird"
-    assert by_id["clif/songbird/fsp-sign"].policy_path == "fsp/songbird"
-    assert by_id["clif/songbird/fsp-submit"].caller_name == "fsp-submit-songbird"
-    assert by_id["clif/songbird/fsp-submit"].policy_path == "perm/fsp-submit-songbird"
+    assert by_id["claim/songbird/ftso-reward-claim"].caller_name == "claim-songbird"
+    assert by_id["claim/songbird/ftso-reward-claim"].policy_path == "perm/claim-songbird"
+    assert by_id["claim/songbird/uptime-vote-sign"].caller_name == "uptime-vote-sign-songbird"
+    assert by_id["claim/songbird/uptime-vote-sign"].policy_path == "fsp/uptime-songbird"
+    assert by_id["claim/songbird/uptime-vote-submit"].caller_name == "uptime-vote-submit-songbird"
+    assert by_id["claim/songbird/uptime-vote-submit"].policy_path == "perm/uptime-submit-songbird"
 
 
 def test_plan_unknown_role_left_underived() -> None:
@@ -169,7 +169,7 @@ def test_plan_unknown_role_left_underived() -> None:
     spec["capabilities"] = [
         {
             **spec["capabilities"][0],
-            "capability_id": "clif/songbird/exotic",
+            "capability_id": "claim/songbird/exotic",
             "role": "exotic",
         }
     ]

@@ -96,14 +96,14 @@ def test_three_networks_claim_fsp_all_present(tmp_path: Path) -> None:
         assert f"fsp-signing-{net}" in final["wallets"]
         assert f"fsp-sender-{net}" in final["wallets"]
         assert f"claim-{net}" in final["callers"]
-        assert f"fsp-sign-{net}" in final["callers"]
-        assert f"fsp-submit-{net}" in final["callers"]
+        assert f"uptime-vote-sign-{net}" in final["callers"]
+        assert f"uptime-vote-submit-{net}" in final["callers"]
         assert f"perm/claim-{net}" in final["permissions"]
-        assert f"perm/fsp-submit-{net}" in final["permissions"]
+        assert f"perm/uptime-submit-{net}" in final["permissions"]
         assert f"wc/claimer-{net}" in final["wallet_constraints"]
         assert f"wc/fsp-{net}" in final["wallet_constraints"]
         assert f"wc/fsp-sender-{net}" in final["wallet_constraints"]
-        assert f"fsp/{net}" in final["fsp_permissions"]
+        assert f"fsp/uptime-{net}" in final["fsp_permissions"]
         assert f"fsp-signing-{net}" in final["fsp_self_submit"]
 
     assert sorted(final["fsp_self_submit"]) == [
@@ -157,11 +157,11 @@ def test_add_fsp_only_preserves_claim_only_network(tmp_path: Path) -> None:
     assert "perm/claim-songbird" in doc["permissions"]
     # flare fsp appears
     assert "fsp-signing-flare" in doc["wallets"]
-    assert "perm/fsp-submit-flare" in doc["permissions"]
-    assert "fsp/flare" in doc["fsp_permissions"]
+    assert "perm/uptime-submit-flare" in doc["permissions"]
+    assert "fsp/uptime-flare" in doc["fsp_permissions"]
     # songbird claim-only network gained NO fsp keys
     assert "fsp-signing-songbird" not in doc["wallets"]
-    assert "fsp/songbird" not in doc.get("fsp_permissions", {})
+    assert "fsp/uptime-songbird" not in doc.get("fsp_permissions", {})
     # flare fsp-only network gained NO claim keys
     assert "claimer-flare" not in doc["wallets"]
     assert "perm/claim-flare" not in doc["permissions"]
@@ -180,8 +180,8 @@ def test_add_claim_fsp_to_claim_only_network_same_net_unions(tmp_path: Path) -> 
     _assert_superset(sb_doc, doc)
     # fsp keys now present for songbird
     assert "fsp-signing-songbird" in doc["wallets"]
-    assert "fsp/songbird" in doc["fsp_permissions"]
-    assert "perm/fsp-submit-songbird" in doc["permissions"]
+    assert "fsp/uptime-songbird" in doc["fsp_permissions"]
+    assert "perm/uptime-submit-songbird" in doc["permissions"]
     assert "fsp-signing-songbird" in doc["fsp_self_submit"]
     assert _roundtrip(tmp_path, merged) == []
 
@@ -207,7 +207,7 @@ def test_heterogeneous_three_net_mix(tmp_path: Path) -> None:
     # flare: claim only, no fsp
     assert "claimer-flare" in doc["wallets"]
     assert "fsp-signing-flare" not in doc["wallets"]
-    assert "fsp/flare" not in doc.get("fsp_permissions", {})
+    assert "fsp/uptime-flare" not in doc.get("fsp_permissions", {})
     # coston2: fsp only, no claim
     assert "fsp-signing-coston2" in doc["wallets"]
     assert "claimer-coston2" not in doc["wallets"]
@@ -241,8 +241,8 @@ def test_shared_fsp_sender_merges_without_collision(tmp_path: Path) -> None:
     assert "fsp-sender-flare" not in doc["wallets"]
     assert "wc/fsp-sender" in doc["wallet_constraints"]
     # both networks' submit perms allowlist the shared sender
-    assert "fsp-sender" in doc["permissions"]["perm/fsp-submit-songbird"]["wallet_allowlist"]
-    assert "fsp-sender" in doc["permissions"]["perm/fsp-submit-flare"]["wallet_allowlist"]
+    assert "fsp-sender" in doc["permissions"]["perm/uptime-submit-songbird"]["wallet_allowlist"]
+    assert "fsp-sender" in doc["permissions"]["perm/uptime-submit-flare"]["wallet_allowlist"]
     assert _roundtrip(tmp_path, merged) == []
 
 
@@ -276,7 +276,7 @@ def test_three_net_shared_sender_single_sender(tmp_path: Path) -> None:
     senders = [w for w in doc["wallets"] if w.startswith("fsp-sender")]
     assert senders == ["fsp-sender"], f"expected only the shared sender, got {senders}"
     for net in ("songbird", "flare", "coston2"):
-        assert "fsp-sender" in doc["permissions"][f"perm/fsp-submit-{net}"]["wallet_allowlist"]
+        assert "fsp-sender" in doc["permissions"][f"perm/uptime-submit-{net}"]["wallet_allowlist"]
     assert _roundtrip(tmp_path, c2) == []
 
 
@@ -299,12 +299,12 @@ def test_mixed_sender_mode_per_net_then_shared(tmp_path: Path) -> None:
     assert "fsp-sender" in doc["wallets"]
     assert "wc/fsp-sender" in doc["wallet_constraints"]
     # songbird submit-perm still allowlists its OWN per-net sender (unaltered)
-    assert doc["permissions"]["perm/fsp-submit-songbird"]["wallet_allowlist"] == [
+    assert doc["permissions"]["perm/uptime-submit-songbird"]["wallet_allowlist"] == [
         "fsp-signing-songbird",
         "fsp-sender-songbird",
     ]
     # flare submit-perm allowlists the shared sender
-    assert "fsp-sender" in doc["permissions"]["perm/fsp-submit-flare"]["wallet_allowlist"]
+    assert "fsp-sender" in doc["permissions"]["perm/uptime-submit-flare"]["wallet_allowlist"]
     assert _roundtrip(tmp_path, merged) == []
 
 

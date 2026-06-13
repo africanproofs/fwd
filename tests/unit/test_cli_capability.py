@@ -23,13 +23,13 @@ runner = CliRunner()
 
 _SPEC = json.dumps(
     {
-        "consumer": "clif",
+        "consumer": "claim",
         "network": "songbird",
-        "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "clif": "0.5.37"},
+        "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "claim": "0.5.37"},
         "capabilities": [
             {
-                "capability_id": "clif/songbird/claim",
-                "role": "claim",
+                "capability_id": "claim/songbird/ftso-reward-claim",
+                "role": "ftso-reward-claim",
                 "endpoint": "/v1/sign-transaction",
                 "caller_token_env": "FWD_CALLER_TOKEN",
                 "wallet_env": "FWD_WALLET_NAME",
@@ -56,7 +56,7 @@ def test_grant_render_only_default_deny() -> None:
         result = runner.invoke(app, ["capability", "grant"], input=_SPEC)
     assert result.exit_code == 0
     out = _combined(result)
-    assert "clif/songbird/claim" in out
+    assert "claim/songbird/ftso-reward-claim" in out
     assert "approve / reject" in out
     assert "review-only" in out
     mock_post.assert_not_called()
@@ -85,7 +85,7 @@ def test_grant_approve_mints_with_capability_id(monkeypatch: pytest.MonkeyPatch)
     assert result.exit_code == 0
     # capability_id + derived name/policy_path threaded into the mint.
     sent = mock_post.call_args.kwargs["json"]
-    assert sent["capability_id"] == "clif/songbird/claim"
+    assert sent["capability_id"] == "claim/songbird/ftso-reward-claim"
     assert sent["name"] == "claim-songbird"
     assert sent["policy_path"] == "perm/claim-songbird"
     # The return-once token is emitted to stdout as <env>=<token> for capture.
@@ -166,13 +166,13 @@ def test_grant_emit_bundle_partial_failure_writes_no_bundle(
 
 _SPEC_NULL_WALLET = json.dumps(
     {
-        "consumer": "clif",
+        "consumer": "claim",
         "network": "songbird",
-        "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "clif": "0.5.37"},
+        "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "claim": "0.5.37"},
         "capabilities": [
             {
-                "capability_id": "clif/songbird/claim",
-                "role": "claim",
+                "capability_id": "claim/songbird/ftso-reward-claim",
+                "role": "ftso-reward-claim",
                 "endpoint": "/v1/sign-transaction",
                 "caller_token_env": "FWD_CALLER_TOKEN",
                 "wallet_env": "FWD_WALLET_NAME",
@@ -327,7 +327,7 @@ def test_grant_malformed_config_item_exits_2() -> None:
 _CAPS_BODY = {
     "capabilities": [
         {
-            "capability_id": "clif/songbird/claim",
+            "capability_id": "claim/songbird/ftso-reward-claim",
             "caller_name": "claim-songbird",
             "policy_path": "perm/claim-songbird",
             "status": "active",
@@ -344,7 +344,7 @@ def test_capability_list_human_table(monkeypatch: pytest.MonkeyPatch) -> None:
     with patch("fwd.cli.capability.httpx.get", return_value=fake):
         result = runner.invoke(app, ["capability", "list"])
     assert result.exit_code == 0
-    assert "clif/songbird/claim" in result.stdout
+    assert "claim/songbird/ftso-reward-claim" in result.stdout
     assert "active" in result.stdout
 
 
@@ -358,7 +358,7 @@ def test_capability_list_json_parseable_and_secretless(
         result = runner.invoke(app, ["capability", "list", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.stdout)
-    assert parsed["capabilities"][0]["capability_id"] == "clif/songbird/claim"
+    assert parsed["capabilities"][0]["capability_id"] == "claim/songbird/ftso-reward-claim"
     assert "hash" not in result.stdout.lower()
     assert "api_key" not in result.stdout
     assert "fwd_live_" not in result.stdout

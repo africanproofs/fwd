@@ -243,9 +243,9 @@ def test_chained_merges_accumulate_all_networks(tmp_path: Path) -> None:
         assert f"fsp-signing-{net}" in accumulated["wallets"]
         assert f"fsp-sender-{net}" in accumulated["wallets"]
         assert f"claim-{net}" in accumulated["callers"]
-        assert f"fsp-sign-{net}" in accumulated["callers"]
+        assert f"uptime-vote-sign-{net}" in accumulated["callers"]
         assert f"perm/claim-{net}" in accumulated["permissions"]
-        assert f"fsp/{net}" in accumulated["fsp_permissions"]
+        assert f"fsp/uptime-{net}" in accumulated["fsp_permissions"]
         assert f"fsp-signing-{net}" in accumulated["fsp_self_submit"]
 
     assert _roundtrip(tmp_path, policy_text) == []
@@ -300,7 +300,7 @@ def test_merge_into_base_missing_a_section_still_supersets() -> None:
     merged = yaml.safe_load(_gen("flare", "fsp", merge_into=base))
     _assert_superset(base_doc, merged)
     # the add introduced the fsp sections
-    assert "fsp/flare" in merged["fsp_permissions"]
+    assert "fsp/uptime-flare" in merged["fsp_permissions"]
     assert "fsp-signing-flare" in merged["fsp_self_submit"]
     # and the claim caller from the base is still there
     assert "claim-flare" in merged["callers"]

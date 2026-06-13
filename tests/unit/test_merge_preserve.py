@@ -322,16 +322,16 @@ def test_adding_claim_only_network_preserves_existing_fsp(tmp_path: Path) -> Non
     doc = yaml.safe_load(merged)
 
     # songbird's FSP machinery is entirely preserved
-    assert "fsp/songbird" in doc["fsp_permissions"]
-    assert doc["fsp_permissions"]["fsp/songbird"] == sb_doc["fsp_permissions"]["fsp/songbird"]
+    assert "fsp/uptime-songbird" in doc["fsp_permissions"]
+    assert doc["fsp_permissions"]["fsp/uptime-songbird"] == sb_doc["fsp_permissions"]["fsp/uptime-songbird"]
     assert "fsp-signing-songbird" in doc["fsp_self_submit"]
-    assert "perm/fsp-submit-songbird" in doc["permissions"]
+    assert "perm/uptime-submit-songbird" in doc["permissions"]
     assert (
-        doc["permissions"]["perm/fsp-submit-songbird"]
-        == sb_doc["permissions"]["perm/fsp-submit-songbird"]
+        doc["permissions"]["perm/uptime-submit-songbird"]
+        == sb_doc["permissions"]["perm/uptime-submit-songbird"]
     )
     # flare added claim-only: no flare FSP keys, but flare claim present
-    assert "fsp/flare" not in doc["fsp_permissions"]
+    assert "fsp/uptime-flare" not in doc["fsp_permissions"]
     assert "claim-flare" in doc["callers"]
 
     assert _roundtrip(tmp_path, merged) == []
