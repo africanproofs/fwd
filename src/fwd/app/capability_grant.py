@@ -50,7 +50,8 @@ _CAPABILITY_ID_PATTERN = r"^[a-z0-9][a-z0-9_-]*/[a-z0-9-]+/[a-z0-9-]+$"
 # the fwd caller name / policy_path. A role outside this set cannot be derived
 # (the operator maps it by hand) — provisioning_plan leaves it un-derived.
 _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
-    "claim": ("claim-{net}", "perm/claim-{net}"),
+    "ftso-reward": ("claim-{net}", "perm/claim-{net}"),  # ADR-0004: the `claim` consumer's reward role
+    "claim": ("claim-{net}", "perm/claim-{net}"),  # legacy clif role name (back-compat)
     "fsp-sign": ("fsp-sign-{net}", "fsp/{net}"),
     "fsp-submit": ("fsp-submit-{net}", "perm/fsp-submit-{net}"),
 }
