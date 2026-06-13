@@ -72,13 +72,23 @@ def grant(
         None,
         "--emit-bundle",
         help=(
-            "Write the minted tokens into a 0600 v1 bundle at this path instead of stdout. "
-            "NOTE: this CLI runs in-container, so the path is container-relative — point it at a "
-            "host-visible mount, or use `fwd onboard` for the host-side bundle next to clif's .env."
+            "Write the minted tokens + --config entries into a 0600 COMPLETE v2 bundle at this "
+            "path instead of stdout. NOTE: this CLI runs in-container, so the path is "
+            "container-relative — point it at a host-visible mount, or use `fwd onboard` for the "
+            "host-side bundle next to clif's .env."
         ),
     ),
     ttl_seconds: int = typer.Option(
         600, "--ttl-seconds", help="Bundle TTL in seconds (only with --emit-bundle)."
+    ),
+    config: list[str] = typer.Option(  # noqa: B008
+        [],
+        "--config",
+        help=(
+            "Repeatable KEY=VALUE config entry for the v2 bundle's `config` section "
+            "(non-secret consumer env — MUST include NETWORK; only with --emit-bundle). "
+            "Example: --config NETWORK=songbird --config FWD_ENDPOINT=http://fwd:8080"
+        ),
     ),
 ) -> None:
     """Ingest a consumer spec, re-render the custody diff, and (with --approve) mint by capability_id.
@@ -90,6 +100,20 @@ def grant(
     Exit: 0 = rendered (no --approve) or all capabilities minted; 1 = one or more
     capabilities failed/were skipped; 2 = bad input / unreachable / no admin key.
     """
+    # Parse --config KEY=VALUE entries into the v2 bundle config dict. Each item
+    # MUST contain '=' with a non-empty key; a repeated key is last-one-wins. No
+    # secret/character validation here — compose_bundle applies the Core-#7 guard.
+    cfg: dict[str, str] = {}
+    for item in config:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            typer.echo(
+                f"malformed --config entry {item!r}: expected KEY=VALUE with a non-empty key",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        cfg[key] = value
+
     if spec_file is not None:
         try:
             text = spec_file.read_text()
@@ -135,6 +159,35 @@ def grant(
                     err=True,
                 )
         return
+
+    # PRE-MINT conformance gate. Minted tokens are return-once — fwd retains no
+    # plaintext, so a post-mint refusal would strand fresh tokens and force a
+    # rotation. Refuse a non-conformant --emit-bundle request BEFORE any mint.
+    if emit_bundle is not None:
+        for g in plan:
+            if not g.wallet_name:
+                typer.echo(
+                    f"refusing --emit-bundle: capability {g.capability_id} has no configured "
+                    "wallet (spec shows configured:false) — configure the wallet first; a v2 "
+                    "bundle with a null wallet_name is rejected by the importer",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+        if "NETWORK" not in cfg:
+            typer.echo(
+                f"refusing --emit-bundle: --config NETWORK={spec.network} is required "
+                "(consumer-contract-v1 §4: the v2 config MUST carry the consumer's network "
+                "selector; without it the consumer silently defaults to flare)",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if cfg["NETWORK"] != spec.network:
+            typer.echo(
+                f"refusing --emit-bundle: --config NETWORK={cfg['NETWORK']} contradicts the "
+                f"spec's network {spec.network}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
 
     # --approve: instantiate via the audited admin mint, keyed by capability_id.
     url = os.environ.get("FWD_URL", "http://127.0.0.1:8080")
@@ -216,6 +269,7 @@ def grant(
                 network=spec.network,
                 ttl_seconds=ttl_seconds,
                 capabilities=minted,
+                config=cfg,
             )
             write_bundle(bundle, emit_bundle)
         except (BundleEmitError, OSError) as exc:

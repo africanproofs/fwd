@@ -70,16 +70,17 @@ COPY config/abis/ /app/config/abis/
 # (never broaden to `COPY config/` — Core invariant #12 / v1.1.0a28).
 COPY config/networks.yaml /app/config/networks.yaml
 
-# D16 promises `docker exec fwd clifwd audit verify` as the canonical
+# D16 promises `docker exec fwd fwdctl audit verify` as the canonical
 # walker invocation, but `poetry install --no-root` does not install the
-# fwd package, so the pyproject `clifwd` console-script is never created.
-# Ship a thin shim so the documented command resolves on PATH. `fwdctl` is an
-# invocation alias (symlink) for the identical app — both resolve on PATH and
-# exec the same `fwd.cli.main:app`.
+# fwd package, so the pyproject console-script is never created. Ship a thin
+# shim so the documented command resolves on PATH. `fwdctl` is the canonical
+# custody CLI name (a consumer's name does not lead the custody tool); `clifwd`
+# is the compatibility alias (symlink) for the identical app — both resolve on
+# PATH and exec the same `fwd.cli.main:app`. The full in-app rename stays deferred.
 RUN printf '#!/bin/sh\nexec python -c "from fwd.cli.main import app; app()" "$@"\n' \
-        > /usr/local/bin/clifwd \
-    && chmod 755 /usr/local/bin/clifwd \
-    && ln -s clifwd /usr/local/bin/fwdctl
+        > /usr/local/bin/fwdctl \
+    && chmod 755 /usr/local/bin/fwdctl \
+    && ln -s fwdctl /usr/local/bin/clifwd
 
 ENV PYTHONPATH=/app/src
 

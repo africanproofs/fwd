@@ -126,7 +126,10 @@ def test_grant_emit_bundle_writes_0600_no_stdout_token(
     with patch("fwd.cli.capability.httpx.post", return_value=fake) as mock_post:
         result = runner.invoke(
             app,
-            ["capability", "grant", "--approve", "--replace", "--emit-bundle", str(out)],
+            [
+                "capability", "grant", "--approve", "--replace",
+                "--emit-bundle", str(out), "--config", "NETWORK=songbird",
+            ],
             input=_SPEC,
         )
     assert result.exit_code == 0, result.output
@@ -150,10 +153,173 @@ def test_grant_emit_bundle_partial_failure_writes_no_bundle(
     out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
     with patch("fwd.cli.capability.httpx.post", return_value=fake):
         result = runner.invoke(
-            app, ["capability", "grant", "--approve", "--emit-bundle", str(out)], input=_SPEC
+            app,
+            [
+                "capability", "grant", "--approve",
+                "--emit-bundle", str(out), "--config", "NETWORK=songbird",
+            ],
+            input=_SPEC,
         )
     assert result.exit_code == 1
     assert not out.exists()
+
+
+_SPEC_NULL_WALLET = json.dumps(
+    {
+        "consumer": "clif",
+        "network": "songbird",
+        "compat": {"fwd_contract_expected": "v1.1.0a69", "fwd_client": "0.1.0", "clif": "0.5.37"},
+        "capabilities": [
+            {
+                "capability_id": "clif/songbird/claim",
+                "role": "claim",
+                "endpoint": "/v1/sign-transaction",
+                "caller_token_env": "FWD_CALLER_TOKEN",
+                "wallet_env": "FWD_WALLET_NAME",
+                "wallet_name": None,  # not yet configured
+                "contract": "0xE26AD68b17224951b5740F33926Cc438764eB9a7",
+                "contract_name": "RewardManager",
+                "method": "claim(address,address,uint24,bool,(bytes32[],(uint24,bytes20,uint120,uint8))[])",
+                "value_wei": "0",
+                "recipient_pinned": "0x7c3579aB3E647395c96a1EfC98aF9A31C5Ecc294",
+                "suggested_rate": "8/day",
+            }
+        ],
+    }
+)
+
+
+def test_grant_emit_bundle_v2_full_config_and_wallets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """--emit-bundle with --config NETWORK + another key → conformant v2 bundle."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    token = "fwd_live_" + "a" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {"name": "claim-songbird", "api_key_prefix": "aaaaaaaa", "api_key": token},
+    )
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post", return_value=fake):
+        result = runner.invoke(
+            app,
+            [
+                "capability", "grant", "--approve", "--emit-bundle", str(out),
+                "--config", "NETWORK=songbird",
+                "--config", "FWD_ENDPOINT=http://fwd:8080",
+            ],
+            input=_SPEC,
+        )
+    assert result.exit_code == 0, result.output
+    bundle = json.loads(out.read_text())
+    assert bundle["version"] == 2
+    assert bundle["config"] == {"NETWORK": "songbird", "FWD_ENDPOINT": "http://fwd:8080"}
+    assert all(c["wallet_name"] for c in bundle["capabilities"])
+
+
+def test_grant_emit_bundle_missing_network_refused_pre_mint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """No --config NETWORK → exit 2 BEFORE any mint (the pre-mint conformance gate)."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post") as mock_post:
+        result = runner.invoke(
+            app,
+            ["capability", "grant", "--approve", "--emit-bundle", str(out)],
+            input=_SPEC,
+        )
+    assert result.exit_code == 2
+    assert "NETWORK=songbird is required" in _combined(result)
+    mock_post.assert_not_called()  # refused before minting (tokens are return-once)
+    assert not out.exists()
+
+
+def test_grant_emit_bundle_network_contradiction_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """--config NETWORK disagreeing with the spec's network → exit 2, 'contradicts'."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post") as mock_post:
+        result = runner.invoke(
+            app,
+            [
+                "capability", "grant", "--approve", "--emit-bundle", str(out),
+                "--config", "NETWORK=flare",
+            ],
+            input=_SPEC,
+        )
+    assert result.exit_code == 2
+    assert "contradicts" in _combined(result)
+    mock_post.assert_not_called()
+
+
+def test_grant_emit_bundle_null_wallet_refused_pre_mint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """A spec capability with a null wallet_name → exit 2 BEFORE any mint."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post") as mock_post:
+        result = runner.invoke(
+            app,
+            [
+                "capability", "grant", "--approve", "--emit-bundle", str(out),
+                "--config", "NETWORK=songbird",
+            ],
+            input=_SPEC_NULL_WALLET,
+        )
+    assert result.exit_code == 2
+    assert "no configured wallet" in _combined(result)
+    mock_post.assert_not_called()
+    assert not out.exists()
+
+
+def test_grant_emit_bundle_private_key_config_refused_by_guard(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    """A *PRIVATE_KEY* config key trips the Core-#7 guard in compose_bundle (no bundle)."""
+    from pathlib import Path
+
+    monkeypatch.setenv("FWD_ADMIN_KEY", "admin-key")
+    token = "fwd_live_" + "a" * 43
+    fake = MagicMock(
+        status_code=201,
+        json=lambda: {"name": "claim-songbird", "api_key_prefix": "aaaaaaaa", "api_key": token},
+    )
+    out = Path(str(tmp_path)) / ".fwd-bundle.songbird.json"
+    with patch("fwd.cli.capability.httpx.post", return_value=fake):
+        result = runner.invoke(
+            app,
+            [
+                "capability", "grant", "--approve", "--emit-bundle", str(out),
+                "--config", "NETWORK=songbird",
+                "--config", "SOME_PRIVATE_KEY=0xdead",
+            ],
+            input=_SPEC,
+        )
+    assert result.exit_code != 0
+    assert not out.exists()  # the guard refuses to WRITE a secret
+
+
+def test_grant_malformed_config_item_exits_2() -> None:
+    """A --config item without '=' → exit 2."""
+    result = runner.invoke(
+        app,
+        ["capability", "grant", "--approve", "--emit-bundle", "/tmp/x", "--config", "NOEQUALS"],
+        input=_SPEC,
+    )
+    assert result.exit_code == 2
+    assert "malformed --config" in _combined(result)
 
 
 # --- capability list (the doctor fwd=granted leg) ---------------------------

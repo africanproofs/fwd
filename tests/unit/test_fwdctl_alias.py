@@ -6,10 +6,11 @@ is DEFERRED (ADR-0002). These tests assert only the additive alias plumbing:
 
   - install/fwdctl is a byte-faithful copy of install/clifwd, differing ONLY in
     the header lead and the final delegation token (the FWD_DIR / FWD_CONTAINER /
-    COMPOSE_PROJECT_NAME / CLIF_ENV_DIR exports + the onboard routing block are
-    preserved verbatim, so fwdctl behaves identically to clifwd);
-  - the Dockerfile wires /usr/local/bin/fwdctl to the same in-container app as
-    clifwd (a symlink to the shared shim);
+    COMPOSE_PROJECT_NAME exports + the onboard routing block are preserved
+    verbatim, so fwdctl behaves identically to clifwd);
+  - the Dockerfile ships /usr/local/bin/fwdctl as the canonical shim and wires
+    clifwd to it as a compatibility symlink (the full in-app rename stays
+    deferred — a consumer's name does not lead the custody tool);
   - install.sh installs the fwdctl wrapper alongside clifwd (clifwd untouched).
 """
 
@@ -43,10 +44,12 @@ def test_fwdctl_wrapper_exists_and_executable() -> None:
 
 
 def test_fwdctl_exports_block_byte_identical_to_clifwd() -> None:
-    # The 4 export lines carry the runbook contract and MUST be verbatim.
+    # The 3 export lines carry the runbook contract and MUST be verbatim
+    # (CLIF_ENV_DIR was deleted in a102; the remaining 3 are FWD_DIR /
+    # FWD_CONTAINER / COMPOSE_PROJECT_NAME).
     exports = _export_lines(_FWDCTL)
     assert exports == _export_lines(_CLIFWD)
-    assert len(exports) == 4
+    assert len(exports) == 3
 
 
 def test_fwdctl_onboard_routing_byte_identical_to_clifwd() -> None:
@@ -55,8 +58,8 @@ def test_fwdctl_onboard_routing_byte_identical_to_clifwd() -> None:
 
 
 def test_fwdctl_delegation_targets_fwdctl_in_container() -> None:
-    assert 'exec docker exec "${FWD_CONTAINER:-fwd}" clifwd "$@"' in _CLIFWD.read_text()
-    assert 'exec docker exec "${FWD_CONTAINER:-fwd}" fwdctl "$@"' in _FWDCTL.read_text()
+    assert 'exec docker exec -i "${FWD_CONTAINER:-fwd}" clifwd "$@"' in _CLIFWD.read_text()
+    assert 'exec docker exec -i "${FWD_CONTAINER:-fwd}" fwdctl "$@"' in _FWDCTL.read_text()
 
 
 def test_fwdctl_header_leads_with_fwdctl() -> None:
@@ -66,10 +69,10 @@ def test_fwdctl_header_leads_with_fwdctl() -> None:
 
 def test_dockerfile_wires_fwdctl_alias_to_same_app() -> None:
     df = _DOCKERFILE.read_text()
-    # The clifwd shim is still created verbatim ...
-    assert "> /usr/local/bin/clifwd" in df
-    # ... and fwdctl is symlinked to it, so both exec the identical app.
-    assert "ln -s clifwd /usr/local/bin/fwdctl" in df
+    # fwdctl is the canonical shim file ...
+    assert "> /usr/local/bin/fwdctl" in df
+    # ... and clifwd is the compatibility symlink to it, so both exec the identical app.
+    assert "ln -s fwdctl /usr/local/bin/clifwd" in df
 
 
 def test_install_sh_installs_fwdctl_alongside_clifwd() -> None:
