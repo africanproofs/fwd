@@ -412,6 +412,7 @@ def _voter_reg_legacy_body(**overrides):  # type: ignore[no-untyped-def]
         "wallet": _BASE_WALLET,
         "message_type": "VOTER_REGISTRATION",
         "reward_epoch_id": _EPOCH,
+        "chain_id": _CHAIN_ID,  # required gate field; legacy carries it for scoping, excluded from hash
         "address": _ADDR,
         "registration_variant": "legacy",
         **overrides,
@@ -435,6 +436,7 @@ def _signing_policy_body(**overrides):  # type: ignore[no-untyped-def]
         "wallet": _BASE_WALLET,
         "message_type": "SIGNING_POLICY",
         "reward_epoch_id": _EPOCH,
+        "chain_id": _CHAIN_ID,  # required gate field; excluded from the SIGNING_POLICY hash
         "signing_policy": _POLICY_HEX,
         **overrides,
     }
@@ -445,6 +447,7 @@ def _protocol_payload_body(**overrides):  # type: ignore[no-untyped-def]
         "wallet": _BASE_WALLET,
         "message_type": "PROTOCOL_PAYLOAD",
         "reward_epoch_id": _EPOCH,
+        "chain_id": _CHAIN_ID,  # required gate field
         "payload": _PAYLOAD_HEX,
         **overrides,
     }
@@ -453,7 +456,7 @@ def _protocol_payload_body(**overrides):  # type: ignore[no-untyped-def]
 def test_api_voter_reg_legacy_valid() -> None:
     b = SignFspMessageBody(**_voter_reg_legacy_body())
     assert b.registration_variant == "legacy"
-    assert b.chain_id is None
+    assert b.chain_id == _CHAIN_ID  # legacy now carries chain_id for gate-scoping (excluded from hash)
 
 
 def test_api_voter_reg_chain_scoped_valid() -> None:
@@ -462,9 +465,12 @@ def test_api_voter_reg_chain_scoped_valid() -> None:
     assert b.chain_id == _CHAIN_ID
 
 
-def test_api_voter_reg_legacy_with_chain_id_raises() -> None:
+def test_api_voter_reg_legacy_missing_chain_id_raises() -> None:
+    # chain_id is now a universal required gate field — legacy must carry it too.
+    body = _voter_reg_legacy_body()
+    del body["chain_id"]
     with pytest.raises(ValidationError):
-        SignFspMessageBody(**_voter_reg_legacy_body(chain_id=_CHAIN_ID))
+        SignFspMessageBody(**body)
 
 
 def test_api_voter_reg_chain_scoped_missing_chain_id_raises() -> None:
@@ -484,6 +490,7 @@ def test_api_voter_reg_missing_address_raises() -> None:
             wallet=_BASE_WALLET,
             message_type="VOTER_REGISTRATION",
             reward_epoch_id=_EPOCH,
+            chain_id=_CHAIN_ID,
             registration_variant="legacy",
         )
 
@@ -504,12 +511,16 @@ def test_api_signing_policy_missing_raises() -> None:
             wallet=_BASE_WALLET,
             message_type="SIGNING_POLICY",
             reward_epoch_id=_EPOCH,
+            chain_id=_CHAIN_ID,
         )
 
 
-def test_api_signing_policy_with_chain_id_raises() -> None:
+def test_api_signing_policy_missing_chain_id_raises() -> None:
+    # SIGNING_POLICY now requires chain_id (gate replay-scoping; excluded from hash).
+    body = _signing_policy_body()
+    del body["chain_id"]
     with pytest.raises(ValidationError):
-        SignFspMessageBody(**_signing_policy_body(chain_id=_CHAIN_ID))
+        SignFspMessageBody(**body)
 
 
 def test_api_signing_policy_with_rewards_hash_raises() -> None:
@@ -528,6 +539,7 @@ def test_api_protocol_payload_missing_raises() -> None:
             wallet=_BASE_WALLET,
             message_type="PROTOCOL_PAYLOAD",
             reward_epoch_id=_EPOCH,
+            chain_id=_CHAIN_ID,
         )
 
 
@@ -551,8 +563,21 @@ def test_api_uptime_regression() -> None:
         wallet=_BASE_WALLET,
         message_type="UPTIME",
         reward_epoch_id=0,
+        chain_id=_CHAIN_ID,  # UPTIME now carries chain_id (gate replay-scoping; excluded from hash)
     )
     assert b.message_type == "UPTIME"
+    assert b.chain_id == _CHAIN_ID
+
+
+def test_api_uptime_missing_chain_id_raises() -> None:
+    # The structurally-unsignable bug: UPTIME used to forbid chain_id while the gate required it.
+    # chain_id is now required; a UPTIME body without it fails at the API boundary (422), not silently.
+    with pytest.raises(ValidationError):
+        SignFspMessageBody(
+            wallet=_BASE_WALLET,
+            message_type="UPTIME",
+            reward_epoch_id=0,
+        )
 
 
 def test_api_uptime_with_new_fields_raises() -> None:
@@ -561,5 +586,6 @@ def test_api_uptime_with_new_fields_raises() -> None:
             wallet=_BASE_WALLET,
             message_type="UPTIME",
             reward_epoch_id=0,
+            chain_id=_CHAIN_ID,
             address=_ADDR,
         )

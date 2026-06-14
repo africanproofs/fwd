@@ -205,6 +205,7 @@ def test_api_accepts_valid_fast_update_shape():
         wallet="test-wallet",
         message_type="FAST_UPDATE",
         reward_epoch_id=0,
+        chain_id=14,  # required gate field (excluded from the FAST_UPDATE hash)
         block_number=_BLOCK_NUMBER,
         replicate=_REPLICATE,
         gamma_x=_GAMMA_X,

@@ -47,7 +47,7 @@ class SignFspMessageBody(BaseModel):
         "FAST_UPDATE",
     ]
     reward_epoch_id: int = Field(..., ge=0, le=_MAX_UINT24)
-    chain_id: int | None = Field(default=None, ge=1)
+    chain_id: int = Field(..., ge=1)  # universal gate replay-scoping field; required on every FSP message
     no_of_weight_based_claims: int | None = Field(default=None, ge=0)
     rewards_hash: str | None = Field(default=None)
     address: str | None = Field(default=None)
@@ -71,8 +71,7 @@ class SignFspMessageBody(BaseModel):
         )
         if self.message_type == "UPTIME":
             if (
-                self.chain_id is not None
-                or self.no_of_weight_based_claims is not None
+                self.no_of_weight_based_claims is not None
                 or self.rewards_hash is not None
                 or self.address is not None
                 or self.signing_policy is not None
@@ -81,7 +80,7 @@ class SignFspMessageBody(BaseModel):
                 or self.registration_variant is not None
                 or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("UPTIME takes only reward_epoch_id")
+                raise ValueError("UPTIME takes only reward_epoch_id + chain_id")
         elif self.message_type == "REWARD_DISTRIBUTION":
             if (
                 self.chain_id is None
@@ -110,10 +109,6 @@ class SignFspMessageBody(BaseModel):
                 raise ValueError("address must be 0x + 40 hex")
             if self.registration_variant not in ("legacy", "chain_scoped"):
                 raise ValueError("VOTER_REGISTRATION requires registration_variant: legacy or chain_scoped")
-            if self.registration_variant == "chain_scoped" and self.chain_id is None:
-                raise ValueError("VOTER_REGISTRATION chain_scoped requires chain_id")
-            if self.registration_variant == "legacy" and self.chain_id is not None:
-                raise ValueError("VOTER_REGISTRATION legacy must not include chain_id")
             if (
                 self.no_of_weight_based_claims is not None
                 or self.rewards_hash is not None
@@ -127,8 +122,7 @@ class SignFspMessageBody(BaseModel):
             if self.signing_policy is None:
                 raise ValueError("SIGNING_POLICY requires signing_policy")
             if (
-                self.chain_id is not None
-                or self.address is not None
+                self.address is not None
                 or self.no_of_weight_based_claims is not None
                 or self.rewards_hash is not None
                 or self.payload is not None
@@ -136,7 +130,7 @@ class SignFspMessageBody(BaseModel):
                 or self.registration_variant is not None
                 or any(f is not None for f in _fast_update_fields)
             ):
-                raise ValueError("SIGNING_POLICY does not accept chain_id/address/reward/payload/protocol_id/registration_variant/fast_update fields")
+                raise ValueError("SIGNING_POLICY does not accept address/reward/payload/protocol_id/registration_variant/fast_update fields")
         elif self.message_type == "PROTOCOL_PAYLOAD":
             if self.payload is None:
                 raise ValueError("PROTOCOL_PAYLOAD requires payload")

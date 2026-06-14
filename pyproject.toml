@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fwd"
-version = "1.1.0a104"
+version = "1.1.0a105"
 description = "Flare Wallet Daemon — policy-gated signing service for AP backend keys"
 authors = ["African Proofs <khosimorafo@yahoo.com>"]
 readme = "README.md"
