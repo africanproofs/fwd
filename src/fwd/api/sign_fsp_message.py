@@ -140,6 +140,8 @@ class SignFspMessageBody(BaseModel):
         elif self.message_type == "PROTOCOL_PAYLOAD":
             if self.payload is None:
                 raise ValueError("PROTOCOL_PAYLOAD requires payload")
+            if self.protocol_id is None:
+                raise ValueError("PROTOCOL_PAYLOAD requires protocol_id")
             if (
                 self.address is not None
                 or self.no_of_weight_based_claims is not None

@@ -89,6 +89,7 @@ def _make_policy(
     fsp_path: str = POLICY_PATH,
     caller_name: str = CALLER_NAME,
     also_in_evm_permissions: bool = False,
+    allowed_protocol_ids: list[int] | None = None,
 ) -> Policy:
     if message_types is None:
         message_types = ["UPTIME", "REWARD_DISTRIBUTION"]
@@ -107,6 +108,8 @@ def _make_policy(
         # override this explicitly.
         "chain_ids": [14],
     }
+    if allowed_protocol_ids is not None:
+        fsp_block["allowed_protocol_ids"] = allowed_protocol_ids
     if rate_dict:
         fsp_block["rate"] = rate_dict
 
@@ -138,6 +141,8 @@ def _make_request(
     caller: str = CALLER_NAME,
     reward_epoch_id: int = 42,
     chain_id: int = 14,
+    payload: str | None = None,
+    protocol_id: int | None = None,
 ) -> SignFspMessageRequest:
     return SignFspMessageRequest(
         wallet=wallet,
@@ -146,6 +151,8 @@ def _make_request(
         reward_epoch_id=reward_epoch_id,
         # chain_id required for UPTIME (FSP-CROSSCHAIN-001).
         chain_id=chain_id,
+        payload=payload,
+        protocol_id=protocol_id,
     )
 
 
@@ -322,6 +329,85 @@ async def test_message_type_not_permitted(session: AsyncSession) -> None:
     rows = await _get_audit_rows(session)
     denied = [r for r in rows if r["decision"] == "denied"]
     assert len(denied) >= 1
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_protocol_payload_requires_allowed_protocol_ids(session: AsyncSession) -> None:
+    """Step 5: a PROTOCOL_PAYLOAD block with no allowed_protocol_ids signs nothing (fail-closed)."""
+    policy = _make_policy(message_types=["PROTOCOL_PAYLOAD"])  # no allowed_protocol_ids
+    caller = _make_caller()
+    signer = _mock_signer()
+    rate_repo = RateRepo(session)
+    audit_repo = AuditRepo(session)
+
+    with pytest.raises(PolicyDenied) as exc_info:
+        await sign_fsp_message(
+            _make_request(message_type="PROTOCOL_PAYLOAD", payload="0x" + "ab" * 38, protocol_id=100),
+            signer,
+            caller=caller,
+            policy=policy,
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
+        )
+    assert exc_info.value.step == 5
+    assert "allowed_protocol_ids" in exc_info.value.reason
+    signer.sign_fsp_eip191.assert_not_awaited()
+
+    rows = await _get_audit_rows(session)
+    assert [r for r in rows if r["decision"] == "denied"]
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_protocol_payload_id_not_in_allowlist(session: AsyncSession) -> None:
+    """Step 5: a protocol_id outside the allowlist is denied."""
+    policy = _make_policy(message_types=["PROTOCOL_PAYLOAD"], allowed_protocol_ids=[100, 200])
+    caller = _make_caller()
+    signer = _mock_signer()
+    rate_repo = RateRepo(session)
+    audit_repo = AuditRepo(session)
+
+    with pytest.raises(PolicyDenied) as exc_info:
+        await sign_fsp_message(
+            _make_request(message_type="PROTOCOL_PAYLOAD", payload="0x" + "ab" * 38, protocol_id=999),
+            signer,
+            caller=caller,
+            policy=policy,
+            rate_repo=rate_repo,
+            audit_repo=audit_repo,
+        )
+    assert exc_info.value.step == 5
+    assert "999" in exc_info.value.reason
+    signer.sign_fsp_eip191.assert_not_awaited()
+
+    rows = await _get_audit_rows(session)
+    assert [r for r in rows if r["decision"] == "denied"]
+    await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_protocol_payload_allowed_id_signs(session: AsyncSession) -> None:
+    """Happy path: a permitted protocol_id within the allowlist signs once."""
+    policy = _make_policy(message_types=["PROTOCOL_PAYLOAD"], allowed_protocol_ids=[100, 200])
+    caller = _make_caller()
+    signer = _mock_signer()
+    rate_repo = RateRepo(session)
+    audit_repo = AuditRepo(session)
+
+    result = await sign_fsp_message(
+        _make_request(message_type="PROTOCOL_PAYLOAD", payload="0x" + "ab" * 38, protocol_id=100),
+        signer,
+        caller=caller,
+        policy=policy,
+        rate_repo=rate_repo,
+        audit_repo=audit_repo,
+    )
+    assert isinstance(result, SignFspMessageResult)
+    signer.sign_fsp_eip191.assert_awaited_once()
+
+    rows = await _get_audit_rows(session)
+    assert [r for r in rows if r["decision"] == "approved"]
     await session.rollback()
 
 

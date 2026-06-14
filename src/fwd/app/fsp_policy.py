@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from fwd.app.policy_engine import DenyDecision
 from fwd.app.policy_gate import PolicyDenied
-from fwd.domain.fsp_message import UPTIME
+from fwd.domain.fsp_message import PROTOCOL_PAYLOAD, UPTIME
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -82,6 +82,28 @@ async def evaluate_fsp(
             )
         if request.message_type not in perm.message_types:
             return DenyDecision(step=5, reason="message_type not permitted")
+        # PROTOCOL_PAYLOAD signs opaque protocol bytes (the path-(i) compromise).
+        # Bound it to an explicit subprotocol-id allowlist — parallel to UPTIME's
+        # chain_ids — so a compromised protocol-message token cannot sign for an
+        # arbitrary subprotocol. Fail-closed: a PROTOCOL_PAYLOAD block with no
+        # allowed_protocol_ids signs nothing.
+        if request.message_type == PROTOCOL_PAYLOAD:
+            if not perm.allowed_protocol_ids:
+                return DenyDecision(
+                    step=5,
+                    reason=(
+                        "PROTOCOL_PAYLOAD requires explicit allowed_protocol_ids — "
+                        "configure to bound the opaque-payload signing surface"
+                    ),
+                )
+            if request.protocol_id not in perm.allowed_protocol_ids:
+                return DenyDecision(
+                    step=5,
+                    reason=(
+                        f"protocol_id {request.protocol_id} not in permitted "
+                        "allowed_protocol_ids"
+                    ),
+                )
         if request.wallet not in perm.wallet_allowlist:
             return DenyDecision(step=6, reason="wallet not in fsp allowlist")
         ok = await rate_repo.check_and_increment_fsp_caller(

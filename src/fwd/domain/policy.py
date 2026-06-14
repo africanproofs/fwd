@@ -82,6 +82,12 @@ class FspPermissionBlock(BaseModel):
     message_types: list[str]
     wallet_allowlist: list[str]
     chain_ids: list[int] = Field(default_factory=list)
+    # PROTOCOL_PAYLOAD signs an opaque protocol-bytes preimage (the one path-(i)
+    # membrane compromise). When the block permits PROTOCOL_PAYLOAD, this list
+    # bounds which subprotocol ids may be signed (e.g. FTSO scaling 100, FDC 200)
+    # — parallel to chain_ids for UPTIME. Empty = unconstrained for other types;
+    # the fsp_policy gate REQUIRES it non-empty for PROTOCOL_PAYLOAD (fail-closed).
+    allowed_protocol_ids: list[int] = Field(default_factory=list)
     rate: RateLimit | None = None
 
 
