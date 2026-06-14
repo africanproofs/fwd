@@ -108,7 +108,13 @@ def generate_policy(
     networks_file: Path,
     fsp_sender_mode: str = "per-network",
     claim_rate: tuple[int, int] = (4, 8),
-    fsp_rate: tuple[int, int] = (50, 500),
+    # FSP rate is a runaway-caller SAFETY CEILING, not a duty-cycle target. It must
+    # exceed the HIGHEST legitimate FSP cadence — per-block fast-updates (~2000/hr) and
+    # per-round PROTOCOL_PAYLOAD across FTSO+FDC sharing one bucket — or it self-denies
+    # healthy signing. (50,500) did exactly that (adversary round 2, 2026-06-14). Rate is
+    # NOT the primary blast control for these value=0 consensus keys (scoping + audit are);
+    # per-message-type tiers + protocol_id-scoped buckets are the canary-informed follow-up.
+    fsp_rate: tuple[int, int] = (5000, 120000),
     merge_into: str | None = None,
 ) -> str:
     """Build a policy.yaml string. See module docstring.
