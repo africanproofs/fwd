@@ -350,17 +350,12 @@ def generate_policy(
                 (f"fsp/fastupdate-sign-{net}", "FAST_UPDATE", f"fastupdate-sign-{net}"),
             ):
                 callers[_caller] = {"policy_path": _pp}
-                _block = {
+                fsp_permissions[_pp] = {
                     "message_types": [_mt],
                     "wallet_allowlist": [signing_wallet],
                     "rate": _rate(fsp_rate),
                     "chain_ids": [chain_id],
                 }
-                if _mt == "PROTOCOL_PAYLOAD":
-                    # Bound the opaque-payload signing surface to the provider's
-                    # subprotocols: FTSO scaling (100) + FDC (200).
-                    _block["allowed_protocol_ids"] = [100, 200]
-                fsp_permissions[_pp] = _block
 
             # Three EVM-only SUBMIT wallets for FastUpdater.submitUpdates.
             # These are the FAST_UPDATES_ACCOUNTS (submitUpdates tx senders only);

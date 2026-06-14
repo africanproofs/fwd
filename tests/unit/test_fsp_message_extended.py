@@ -446,7 +446,6 @@ def _protocol_payload_body(**overrides):  # type: ignore[no-untyped-def]
         "message_type": "PROTOCOL_PAYLOAD",
         "reward_epoch_id": _EPOCH,
         "payload": _PAYLOAD_HEX,
-        "protocol_id": 100,  # required since fwd binds PROTOCOL_PAYLOAD to a protocol-id allowlist
         **overrides,
     }
 
