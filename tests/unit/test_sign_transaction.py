@@ -18,6 +18,7 @@ from eth_utils import to_checksum_address
 
 from fwd.app.sign_transaction import (
     NonceNotInitialized,
+    NonceWedged,
     SignTransactionRequest,
     SignTransactionResult,
     TxParamsRejected,
@@ -68,6 +69,8 @@ def _tx_repo() -> MagicMock:
     r.create = AsyncMock(return_value=MagicMock())
     r.add_hash = AsyncMock(return_value=MagicMock())
     r.get_by_idempotency_key = AsyncMock(return_value=None)
+    # No stale nonce hole by default (the wedge guard is a no-op for these tests).
+    r.has_stale_reservation = AsyncMock(return_value=False)
     return r
 
 
@@ -290,6 +293,21 @@ async def test_nonce_not_initialized_raises() -> None:
         pytest.raises(NonceNotInitialized),
     ):
         await sign_transaction(_request(), _signer(), _tx_repo(), nonce_repo, **_policy_kwargs())
+
+
+@pytest.mark.asyncio
+async def test_nonce_wedge_guard_refuses_on_stale_hole() -> None:
+    """A wallet with a STALE pending reservation → NonceWedged (409, fail closed); the guard
+    fires BEFORE nonce reservation, so no deeper nonce is reserved."""
+    tx_repo = _tx_repo()
+    tx_repo.has_stale_reservation = AsyncMock(return_value=True)
+    nonce_repo = _nonce_repo()
+    with (
+        patch("fwd.app.sign_transaction.gate", new=AsyncMock(return_value=_allow_decision())),
+        pytest.raises(NonceWedged),
+    ):
+        await sign_transaction(_request(), _signer(), tx_repo, nonce_repo, **_policy_kwargs())
+    nonce_repo.reserve_next.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -561,12 +561,38 @@ async def post_sign_replacement(
         new_seq = len(all_attempts) + 1
 
         # 5. Re-sign same intent, same nonce.
-        # Extract original calldata from the stored request_json.
+        # Extract original calldata from the stored request_json. FAIL CLOSED: a replacement
+        # MUST re-sign the SAME recorded intent (Core invariant #11). If the stored request
+        # JSON is missing/malformed or carries no calldata, refuse — signing an empty-calldata
+        # tx at the same nonce would broadcast a DIFFERENT intent than the one reserved.
+        original_data: str | None = None
         try:
             req = _json.loads(tx.request_json)
-            original_data = req.get("data", "0x")
-        except (ValueError, TypeError, AttributeError):
-            original_data = "0x"
+            if isinstance(req, dict):
+                raw_data = req.get("data")
+                if isinstance(raw_data, str):
+                    original_data = raw_data
+        except (ValueError, TypeError):
+            original_data = None
+        if not original_data:
+            await scope.audit_repo.append(
+                action="tx-replacement",
+                decision="denied",
+                caller=caller.name,
+                request_json=_canonical_json({"tx_id": tx_id}),
+                decision_reason="replacement_intent_unrecoverable",
+            )
+            await scope.audit_repo.commit()  # Core #5/#19
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "replacement_intent_unrecoverable",
+                    "message": (
+                        "stored request calldata is missing or malformed; "
+                        "refusing to replace with a different intent"
+                    ),
+                },
+            )
 
         tx_dict = {
             "type": 2,

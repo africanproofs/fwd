@@ -447,6 +447,7 @@ async def test_sign_transaction_records_attempt_1_and_reserved_at() -> None:
     tx_repo.get_by_idempotency_key = AsyncMock(return_value=None)
     tx_repo.create = AsyncMock(return_value=MagicMock())
     tx_repo.add_hash = AsyncMock(return_value=MagicMock())
+    tx_repo.has_stale_reservation = AsyncMock(return_value=False)
 
     nonce_repo = MagicMock()
     nonce_repo.reserve_next = AsyncMock(return_value=7)
@@ -612,6 +613,46 @@ async def test_sign_replacement_happy_path(db_session: AsyncSession) -> None:
     assert outcome["prev_seq"] == 1
     assert outcome["new_seq"] == 2
     assert outcome["nonce"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_request_json",
+    [
+        "{not valid json",  # malformed → json.loads raises
+        '{"wallet": "w", "chain": 14}',  # valid JSON but no "data" key
+        '{"data": null}',  # data present but null
+    ],
+)
+async def test_sign_replacement_corrupted_intent_fails_closed(
+    db_session: AsyncSession, bad_request_json: str
+) -> None:
+    """A submitted tx whose stored request_json cannot yield calldata → 409 (refuse to
+    replace with a DIFFERENT intent); the signer is never called (no empty-calldata tx)."""
+    tx_id = "018f0001-a13-0009-0000-000000000009"
+    await _seed_tx(
+        db_session, tx_id=tx_id, status="submitted", nonce=7, request_json=bad_request_json
+    )
+
+    mock_signer = MagicMock()
+    mock_signer.sign_transaction = AsyncMock()
+
+    caller = _make_caller(CALLER_A)
+    scope_cm = _RealReplacementScopeCM(db_session, signer=mock_signer)
+    client = _make_replacement_client(caller, scope_cm)
+
+    r = client.post(
+        f"/v1/transactions/{tx_id}/sign-replacement",
+        json={
+            "gas": 21_000,
+            "max_fee_per_gas": 2_000_000_000,
+            "max_priority_fee_per_gas": 600_000_000,
+        },
+        headers={"Authorization": "Bearer fwd_live_x"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"]["error"] == "replacement_intent_unrecoverable"
+    mock_signer.sign_transaction.assert_not_called()
 
 
 @pytest.mark.asyncio

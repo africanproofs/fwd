@@ -329,6 +329,28 @@ class TransactionRepo:
             for row in result
         ]
 
+    async def has_stale_reservation(
+        self, wallet: str, chain: int, older_than: datetime
+    ) -> bool:
+        """True if (wallet, chain) has a pending reservation older than *older_than*.
+
+        Wallet-scoped existence check behind the sign-path nonce-wedge guard: an orphan
+        pending nonce (signed but never reported broadcast) wedges every higher nonce
+        (EVM nonce ordering), so fwd refuses to reserve more until the operator resolves it.
+        """
+        result = await self._session.execute(
+            select(transactions.c.tx_id)
+            .where(
+                transactions.c.wallet == wallet,
+                transactions.c.chain == chain,
+                transactions.c.status == "pending",
+                transactions.c.reserved_at.isnot(None),
+                transactions.c.reserved_at < older_than,
+            )
+            .limit(1)
+        )
+        return result.first() is not None
+
     async def list_stale_reservations(self, older_than: datetime) -> list[Transaction]:
         """Return pending transactions whose reserved_at is older than *older_than*.
 

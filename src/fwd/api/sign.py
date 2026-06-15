@@ -17,6 +17,7 @@ from fwd.app.policy_gate import PolicyDenied
 from fwd.app.sign_transaction import (
     IdempotencyConflict,
     NonceNotInitialized,
+    NonceWedged,
     SignTransactionRequest,
     TxParamsRejected,
     VaultUnavailableError,
@@ -138,6 +139,10 @@ async def post_sign_transaction(
                 "error": "idempotency_conflict",
                 "message": f"Idempotency-Key reused with a different request body: {exc}",
             },
+        ) from exc
+    except NonceWedged as exc:
+        raise HTTPException(
+            status_code=409, detail={"error": "nonce_wedged", "message": str(exc)}
         ) from exc
     except NonceNotInitialized as exc:
         raise HTTPException(

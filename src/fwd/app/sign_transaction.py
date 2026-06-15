@@ -18,7 +18,7 @@ are the CLIENT's responsibility. fwd signs and returns the raw bytes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import structlog
@@ -80,6 +80,13 @@ class VaultUnavailableError(Exception):
 class NonceNotInitialized(Exception):  # noqa: N818
     """409 - no nonces row for (wallet, chain); call POST /v1/admin/nonce-init
     (zero-egress: fwd cannot seed next_nonce from chain)."""
+
+
+class NonceWedged(Exception):  # noqa: N818
+    """409 - (wallet, chain) has a STALE pending reservation (an orphan nonce that never
+    confirmed or released, older than FWD_RESERVATION_LEASE_SEC). Reserving a higher nonce
+    would deepen the gap and wedge the wallet (EVM nonce ordering). Fail closed until the
+    operator resolves it via GET /v1/admin/nonce/holes."""
 
 
 class TxParamsRejected(Exception):  # noqa: N818
@@ -269,6 +276,36 @@ async def sign_transaction(
         # call release_rate_after_failure).
         await audit_repo.commit()
         raise
+
+    # 3b. Fail-closed nonce-wedge guard: refuse if this (wallet, chain) already has a STALE
+    # pending reservation (an orphan nonce older than the lease). Reserving a higher nonce
+    # would only deepen the gap and wedge the wallet — EVM nonce ordering means nothing mines
+    # until the stuck nonce resolves. The operator resolves it via GET /v1/admin/nonce/holes
+    # (broadcast the stored signed_raw, replace, or release). (Adversary round 2, finding #5.)
+    cutoff = now - timedelta(seconds=s.fwd_reservation_lease_sec)
+    if await tx_repo.has_stale_reservation(request.wallet, request.chain, cutoff):
+        await release_rate_after_failure(
+            allow=allow,
+            caller=caller,
+            wallet=wallet,
+            request=request,
+            policy=policy,
+            rate_repo=rate_repo,
+            now=now,
+        )
+        await _audit(
+            audit_repo,
+            request,
+            caller,
+            decision="denied",
+            decision_reason="wallet_has_stale_nonce_hole",
+            outcome=None,
+        )
+        await audit_repo.commit()  # Core #5/#19
+        raise NonceWedged(
+            f"(wallet={request.wallet}, chain={request.chain}) has an unresolved stale "
+            f"nonce reservation; refusing to sign until resolved (GET /v1/admin/nonce/holes)"
+        )
 
     # 4. Reserve nonce — DB is the source of truth (zero-egress: no chain seed).
     try:
