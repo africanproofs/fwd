@@ -67,10 +67,25 @@ _FSP_SELF_SUBMIT_VOTER_REGISTRY_METHODS: frozenset[str] = frozenset(
     {"registerVoter(address,(uint8,bytes32,bytes32))"}
 )
 
+# EntityManager method exempt under the carve-out. The ONE-TIME entity
+# registration confirms the signing-policy address by submitting
+# confirmSigningPolicyAddressRegistration to EntityManager with SIGNING_PK
+# (= the fsp-signing wallet), so fsp-signing is cross-domain over EntityManager
+# for the bootstrap. The _voter arg is a SCALAR address pinned to the provider's
+# identity in the policy arg-predicate; max_value_wei=0 keeps the carve-out
+# value-bounded. Only confirmSigningPolicyAddressRegistration is exempt — the
+# submit / submit-signatures confirms run on EVM-only wallets (fsp-submit /
+# fsp-sig-submit) that are NOT in fsp_self_submit and so never reach this gate.
+# Granted by the revocable `fsp-register` capability (policy_init). v1.1.0 fsp-register.
+_FSP_SELF_SUBMIT_ENTITY_MANAGER_METHODS: frozenset[str] = frozenset(
+    {"confirmSigningPolicyAddressRegistration(address)"}
+)
+
 _FSP_SELF_SUBMIT_SHAPES: dict[str, frozenset[str]] = {
     "flare_systems_manager": _FSP_SELF_SUBMIT_METHODS,
     "relay": _FSP_SELF_SUBMIT_RELAY_METHODS,
     "voter_registry": _FSP_SELF_SUBMIT_VOTER_REGISTRY_METHODS,
+    "entity_manager": _FSP_SELF_SUBMIT_ENTITY_MANAGER_METHODS,
 }
 
 

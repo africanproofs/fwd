@@ -1,0 +1,29 @@
+[
+  {
+    "inputs": [
+      { "internalType": "address", "name": "_voter", "type": "address" }
+    ],
+    "name": "confirmSubmitAddressRegistration",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "_voter", "type": "address" }
+    ],
+    "name": "confirmSubmitSignaturesAddressRegistration",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      { "internalType": "address", "name": "_voter", "type": "address" }
+    ],
+    "name": "confirmSigningPolicyAddressRegistration",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]

@@ -8,3 +8,4 @@ abis:
   fast_updater: fast_updater.json
   relay: relay.json
   voter_registry: voter_registry.json
+  entity_manager: entity_manager.json

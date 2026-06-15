@@ -19,6 +19,7 @@ flare:
   fast_updater: "0xdbf71d7840934eb82fa10173103d4e9fd4054dd1"
   relay: "0xCcF30790A93F15e24EB909548a2C58a9b0a7FBd4"
   voter_registry: "0x2580101692366e2f331e891180d9ffdf861fce83"
+  entity_manager: "0x134b3311C6BdeD895556807a30C7f047D99DfdC2"
 
 songbird:
   chain_id: 19
@@ -28,8 +29,10 @@ songbird:
   fast_updater: "0x7d9f73fd9bc4607dacb618ff895585f98bfdd06b"
   relay: "0xCB86E8Be709001e01897Bf59847406853da8f14b"
   voter_registry: "0x31b9ec65c731c7d973a33ef3fc83b653f540dc8d"
+  entity_manager: "0x46C417D0760198E94fee455CE0e223262a3D0049"
 
 coston2:
   chain_id: 114
   reward_manager: "0xB4f43E342c5c77e6fe060c0481Fe313Ff2503454"
   flare_systems_manager: "0xbC1F76CEB521Eb5484b8943B5462D08ea96617A1"
+  entity_manager: "0xE62c5557210a5D095BfC2fDc8B2b5D64609cfDf1"

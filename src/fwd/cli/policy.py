@@ -160,6 +160,12 @@ def init(
         "--recipient",
         help="Claim recipient address, pinned in the claim arg-predicate (required for 'claim').",
     ),
+    identity: Optional[str] = typer.Option(  # noqa: B008,UP007
+        None,
+        "--identity",
+        help="Provider identity address, pinned in every confirm _voter arg-predicate "
+        "(required for 'fsp-register').",
+    ),
     fsp_sender: str = typer.Option(  # noqa: B008
         "per-network",
         "--fsp-sender",
@@ -204,6 +210,7 @@ def init(
             networks=networks.split(","),
             capabilities=capabilities.split(","),
             recipient=recipient,
+            identity=identity,
             abis_dir=Path(s.fwd_abis_dir),
             networks_file=Path(s.fwd_networks_file),
             fsp_sender_mode=fsp_sender,

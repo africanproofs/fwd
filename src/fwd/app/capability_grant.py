@@ -78,6 +78,16 @@ _ROLE_CONVENTION: dict[str, tuple[str, str]] = {
         "voter-registration-submit-{net}",
         "perm/voter-registration-submit-{net}",
     ),
+    # One-time, revocable entity-registration confirm roles (fsp-register
+    # capability): the 3 EntityManager confirm*Registration calls a keyless
+    # provider self-signs to register its hot addresses. Granted at onboard,
+    # exercised once, then revoked — bootstrap authority, not steady-state.
+    "entity-confirm-submit": ("entity-confirm-submit-{net}", "perm/entity-confirm-submit-{net}"),
+    "entity-confirm-sig-submit": (
+        "entity-confirm-sig-submit-{net}",
+        "perm/entity-confirm-sig-submit-{net}",
+    ),
+    "entity-confirm-signing": ("entity-confirm-signing-{net}", "perm/entity-confirm-signing-{net}"),
 }
 
 

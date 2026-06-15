@@ -60,6 +60,7 @@ def test_load_real_abis_succeeds_with_correct_names() -> None:
             "fast_updater",
             "relay",
             "voter_registry",
+            "entity_manager",
         }
     )
 

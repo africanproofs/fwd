@@ -27,12 +27,20 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
-__all__ = ["CLAIM", "FSP", "FSP_VOTER", "PolicyInitError", "generate_policy"]
+__all__ = ["CLAIM", "FSP", "FSP_REGISTER", "FSP_VOTER", "PolicyInitError", "generate_policy"]
 
 CLAIM = "claim"
 FSP = "fsp"
 FSP_VOTER = "fsp-voter"
-_VALID_CAPS = (CLAIM, FSP, FSP_VOTER)
+# One-time, revocable entity-registration capability: the 3 EntityManager
+# confirm*Registration calls a keyless provider must self-sign to register its
+# own submit / submit-signatures / signing-policy addresses (the proposes +
+# registerPublicKey are signed by the COLD identity key, never fwd). Granted at
+# onboard, exercised once, then revoked — registration authority is bootstrap-
+# only, not steady-state. Requires fsp-voter (it reuses those wallets) + the
+# provider's --identity (pinned in every confirm's _voter arg-predicate).
+FSP_REGISTER = "fsp-register"
+_VALID_CAPS = (CLAIM, FSP, FSP_VOTER, FSP_REGISTER)
 
 
 class PolicyInitError(Exception):
@@ -104,6 +112,7 @@ def generate_policy(
     networks: Iterable[str],
     capabilities: Iterable[str],
     recipient: str | None,
+    identity: str | None = None,
     abis_dir: Path,
     networks_file: Path,
     fsp_sender_mode: str = "per-network",
@@ -140,6 +149,11 @@ def generate_policy(
         )
     if CLAIM in caps and not recipient:
         raise PolicyInitError("recipient is required when 'claim' is in capabilities")
+    if FSP_REGISTER in caps and not identity:
+        raise PolicyInitError(
+            "identity is required when 'fsp-register' is in capabilities "
+            "(pinned in every confirm's _voter arg-predicate)"
+        )
 
     table = _load_networks(networks_file)
     unknown = [n for n in nets if n not in table]
@@ -175,6 +189,22 @@ def generate_policy(
     )
     register_voter_sig = (
         _sig_for(registry, "voter_registry", "registerVoter") if FSP_VOTER in caps else None
+    )
+    # fsp-register confirm method sigs (resolved from the entity_manager ABI).
+    confirm_submit_sig = (
+        _sig_for(registry, "entity_manager", "confirmSubmitAddressRegistration")
+        if FSP_REGISTER in caps
+        else None
+    )
+    confirm_sig_submit_sig = (
+        _sig_for(registry, "entity_manager", "confirmSubmitSignaturesAddressRegistration")
+        if FSP_REGISTER in caps
+        else None
+    )
+    confirm_signing_sig = (
+        _sig_for(registry, "entity_manager", "confirmSigningPolicyAddressRegistration")
+        if FSP_REGISTER in caps
+        else None
     )
 
     callers: dict[str, Any] = {}
@@ -534,6 +564,68 @@ def generate_policy(
                 "wallet_allowlist": [signing_wallet],
                 "rate": _rate(fsp_rate),
             }
+
+        if FSP_REGISTER in caps:
+            # One-time, revocable entity-registration confirms. Each confirm is
+            # SENT BY the address being registered and proves it belongs to the
+            # provider (the _voter arg is pinned to --identity). The matching
+            # propose*Address calls + registerPublicKey are signed by the COLD
+            # identity key OFF fwd, so they are deliberately NOT here — fwd only
+            # holds the three hot addresses, so it only signs their three confirms.
+            if "entity_manager" not in spec:
+                raise PolicyInitError(
+                    f"network '{net}' has no 'entity_manager' address in networks.yaml "
+                    f"(required for fsp-register)"
+                )
+            em_addr = spec["entity_manager"]
+            # (caller, wallet, wallet_constraint_path, perm_path, confirm sig).
+            # The wallets + their wallet_constraints are owned by fsp-voter; this
+            # block reuses them (defensive setdefault keeps a merge-only
+            # `--capabilities fsp-register --merge` generation referentially valid).
+            for _caller, _wallet, _wc, _pp, _sig in (
+                (
+                    f"entity-confirm-submit-{net}",
+                    f"fsp-submit-{net}",
+                    f"wc/fsp-submit-{net}",
+                    f"perm/entity-confirm-submit-{net}",
+                    confirm_submit_sig,
+                ),
+                (
+                    f"entity-confirm-sig-submit-{net}",
+                    f"fsp-sig-submit-{net}",
+                    f"wc/fsp-sig-submit-{net}",
+                    f"perm/entity-confirm-sig-submit-{net}",
+                    confirm_sig_submit_sig,
+                ),
+                (
+                    f"entity-confirm-signing-{net}",
+                    f"fsp-signing-{net}",
+                    f"wc/fsp-{net}",
+                    f"perm/entity-confirm-signing-{net}",
+                    confirm_signing_sig,
+                ),
+            ):
+                callers[_caller] = {"policy_path": _pp}
+                wallets.setdefault(_wallet, {"policy_path": _wc})
+                permissions[_pp] = {
+                    "contracts": {
+                        em_addr: {
+                            "abi": "entity_manager",
+                            "chains": [chain_id],
+                            "methods": {
+                                _sig: {
+                                    "max_value_wei": "0",
+                                    # _voter is a SCALAR address — pin it to the
+                                    # provider identity (NO allow_unconstrained_args;
+                                    # tighter than the non-scalar submit/sign methods).
+                                    "arg_predicates": {"_voter": identity},
+                                },
+                            },
+                        }
+                    },
+                    "wallet_allowlist": [_wallet],
+                    "rate": _rate(fsp_rate),
+                }
 
     policy: dict[str, Any] = {
         "version": 1,
