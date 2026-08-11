@@ -166,14 +166,17 @@ def check_consistency(
                 f"caller '{caller.name}' policy_path '{caller.policy_path}' "
                 f"drifts from policy binding '{binding.policy_path}'"
             )
-        # Check 1c: caller binding's policy_path not in policy.permissions or fsp_permissions.
+        # Check 1c: caller binding's policy_path not in policy.permissions,
+        # fsp_permissions, or native_transfers.
         if (
             binding.policy_path not in policy.permissions
             and binding.policy_path not in policy.fsp_permissions
+            and binding.policy_path not in policy.native_transfers
         ):
             errors.append(
                 f"caller '{caller.name}' binding policy_path "
-                f"'{binding.policy_path}' not in permissions or fsp_permissions"
+                f"'{binding.policy_path}' not in permissions, fsp_permissions, "
+                f"or native_transfers"
             )
 
     # Check 1d: capability_id uniqueness across CallerBindings. The
@@ -226,6 +229,15 @@ def check_consistency(
                 errors.append(
                     f"permission '{perm_path}' allowlists wallet '{wallet_name}' "
                     f"with no policy.wallets binding (no wallet constraint)"
+                )
+
+    # Check 4c: native_transfers wallet_allowlist entries must resolve to known
+    # wallets (mirrors Check 4 for the EVM permissions path).
+    for nt_path, nt_rule in policy.native_transfers.items():
+        for wallet_name in nt_rule.wallet_allowlist:
+            if wallet_name not in known_wallet_names:
+                errors.append(
+                    f"native_transfers '{nt_path}' allowlists unknown wallet '{wallet_name}'"
                 )
 
     # Check 5: policy.wallets bindings must point to wallet_constraints keys.

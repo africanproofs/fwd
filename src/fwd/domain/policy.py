@@ -85,6 +85,24 @@ class FspPermissionBlock(BaseModel):
     rate: RateLimit | None = None
 
 
+class NativeTransferBlock(BaseModel):
+    """Permissions for value-only (empty-calldata) native transfers.
+
+    Caller-keyed like PermissionBlock, but there is no contract/method/ABI to
+    decode — the intent is (to, value). The gate is a recipient allowlist + a
+    per-tx value cap + wallet allowlist + rate. Recipients are lowercased 0x
+    addresses; comparison is case-insensitive at evaluation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    chains: list[int] = Field(min_length=1)
+    recipient_allowlist: list[str] = Field(min_length=1)
+    max_value_wei: str  # decimal string; per-tx cap, coerced to int at evaluation
+    wallet_allowlist: list[str]
+    rate: RateLimit | None = None
+
+
 class CallerBinding(BaseModel):
     """Binds a caller name to a policy_path (→ PermissionBlock key).
 
@@ -125,6 +143,7 @@ class Policy(BaseModel):
     permissions: dict[str, PermissionBlock] = Field(default_factory=dict)
     wallet_constraints: dict[str, WalletConstraint] = Field(default_factory=dict)
     fsp_permissions: dict[str, FspPermissionBlock] = Field(default_factory=dict)
+    native_transfers: dict[str, NativeTransferBlock] = Field(default_factory=dict)
     # Wallet names explicitly authorized to be the FSP signing-policy wallet
     # (in an fsp_permissions allowlist) AND that same key's own Leg-2 tx
     # sender (in an EVM permissions allowlist) — the narrow "signer pays gas"

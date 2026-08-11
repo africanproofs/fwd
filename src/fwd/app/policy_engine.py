@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from fwd.app.sign_transaction import SignTransactionRequest
-    from fwd.domain.policy import Policy
+    from fwd.domain.policy import NativeTransferBlock, Policy
     from fwd.infra.abi_registry import AbiRegistry
     from fwd.infra.caller_repo import Caller
     from fwd.infra.rate_repo import RateRepo
@@ -44,6 +44,11 @@ class DenyDecision:
 
     step: int  # 0 = unexpected error; 1..9 = the failing D14 step
     reason: str  # human-readable, e.g. "policy_denied step=5: max_value_wei exceeded"
+
+
+# Synthetic method label for native (value-only) transfers — the rate-bucket
+# "method" key and the audited intent signature (there is no ABI method).
+_NT_METHOD = "nativeTransfer(address,uint256)"
 
 
 async def evaluate(
@@ -96,6 +101,32 @@ async def _evaluate_inner(
     # Cross-check: caller.policy_path must match the binding's policy_path.
     if caller.policy_path != binding.policy_path:
         return DenyDecision(step=1, reason="caller policy_path drift")
+
+    # Native-transfer branch: an empty-calldata request (value-only transfer) is
+    # gated by a native_transfers rule, NOT the ABI decode path. If the caller's
+    # policy_path names a native_transfers block, evaluate here and return.
+    # (Default-deny preserved: no such block ⇒ fall through to the ABI path,
+    # whose Step 3 denies empty calldata as before.)
+    data = request.data
+    hex_data = data[2:] if data.startswith(("0x", "0X")) else data
+    is_value_only = len(hex_data) == 0
+    nt_rule = policy.native_transfers.get(binding.policy_path)
+    if nt_rule is not None:
+        if not is_value_only:
+            return DenyDecision(
+                step=2, reason="native_transfers caller may sign value-only transfers only"
+            )
+        return await _evaluate_native_transfer(
+            request=request,
+            caller=caller,
+            wallet=wallet,
+            policy=policy,
+            rule=nt_rule,
+            rate_repo=rate_repo,
+            now=now,
+        )
+    if is_value_only:
+        return DenyDecision(step=3, reason="calldata too short")
 
     perm = policy.permissions.get(binding.policy_path)
     if perm is None:
@@ -259,3 +290,93 @@ async def _evaluate_inner(
 
     # Step 10: All checks passed — allow.
     return AllowDecision(decoded=decoded, matched_policy_path=binding.policy_path)
+
+
+async def _evaluate_native_transfer(
+    *,
+    request: SignTransactionRequest,
+    caller: Caller,
+    wallet: Wallet,
+    policy: Policy,
+    rule: NativeTransferBlock,
+    rate_repo: RateRepo,
+    now: datetime,
+) -> AllowDecision | DenyDecision:
+    # chain
+    if request.chain not in rule.chains:
+        return DenyDecision(step=2, reason=f"native transfer not permitted on chain {request.chain}")
+    # recipient allowlist (case-insensitive)
+    to_lower = request.to.lower()
+    if to_lower not in {r.lower() for r in rule.recipient_allowlist}:
+        return DenyDecision(step=2, reason="recipient not in native_transfers allowlist")
+    # per-tx value cap; value must be > 0 (a zero-value empty-calldata tx funds nothing)
+    try:
+        max_value = int(rule.max_value_wei)
+        request_value = int(request.value_wei)
+    except (ValueError, TypeError):
+        return DenyDecision(step=5, reason="bad value_wei")
+    if request_value <= 0:
+        return DenyDecision(step=5, reason="native transfer value must be > 0")
+    if request_value > max_value:
+        return DenyDecision(step=5, reason="max_value_wei exceeded")
+    # wallet allowlist
+    if request.wallet not in rule.wallet_allowlist:
+        return DenyDecision(step=7, reason="wallet not in native_transfers allowlist")
+    # Step 8: per-caller rate (reuse the same limiter as the ABI path; the
+    # synthesized method label doubles as the rate-bucket "method" key and the
+    # recipient as "contract" — mirrors the ABI path's Step 8 call site).
+    if rule.rate is not None:
+        caller_ok = await rate_repo.check_and_increment_caller(
+            caller=caller.name,
+            wallet=request.wallet,
+            contract=to_lower,
+            method=_NT_METHOD,
+            rate=rule.rate,
+            now=now,
+        )
+        if not caller_ok:
+            return DenyDecision(step=8, reason="native transfer caller rate limit exceeded")
+    # Step 9: per-wallet aggregate + rate constraint. This is THE value-moving
+    # path, so the wallet's daily aggregate-value cap MUST bind here exactly as
+    # the ABI path (Step 9); fail closed if there is no constraint binding. On a
+    # deny after Step 8 incremented, release the caller increment first (mirrors
+    # the ABI path).
+    wb = policy.wallets.get(wallet.name)
+    if wb is None:
+        if rule.rate is not None:
+            await rate_repo.release_caller(
+                caller=caller.name,
+                wallet=request.wallet,
+                contract=to_lower,
+                method=_NT_METHOD,
+                rate=rule.rate,
+                now=now,
+            )
+        return DenyDecision(step=9, reason="wallet has no constraint binding")
+    constraint = policy.wallet_constraints.get(wb.policy_path)
+    wallet_ok = await rate_repo.check_and_increment_wallet(
+        wallet=wallet.name,
+        constraint=constraint,
+        value_wei=request_value,
+        now=now,
+    )
+    if not wallet_ok:
+        if rule.rate is not None:
+            await rate_repo.release_caller(
+                caller=caller.name,
+                wallet=request.wallet,
+                contract=to_lower,
+                method=_NT_METHOD,
+                rate=rule.rate,
+                now=now,
+            )
+        return DenyDecision(step=9, reason="wallet constraint exceeded")
+    # Synthesize the decoded intent for the audit + response (Core #3/#5): the
+    # intent IS the transfer. No opaque bytes — to + value fully specify it.
+    decoded = DecodedIntent(
+        contract=to_lower,
+        method_signature=_NT_METHOD,
+        selector="0x",
+        args={"to": to_lower, "value": request_value},
+    )
+    return AllowDecision(decoded=decoded, matched_policy_path=caller.policy_path)
