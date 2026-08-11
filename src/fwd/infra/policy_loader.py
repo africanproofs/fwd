@@ -350,15 +350,21 @@ def check_consistency(
 def policy_path_exists(policy: Policy, policy_path: str, kind: str) -> bool:
     """Return True iff *policy_path* is a valid key for the given *kind*.
 
-    kind='caller': True iff policy_path is a key in policy.permissions
-      (a caller binding's policy_path must resolve to a PermissionBlock).
+    kind='caller': True iff policy_path is a key in policy.permissions,
+      policy.fsp_permissions, or policy.native_transfers (a caller binding's
+      policy_path must resolve to one of the three permission-block kinds;
+      mirrors policy_loader.check_consistency Check 1c and policy_engine).
     kind='wallet': True iff policy_path is a key in policy.wallet_constraints.
 
     Used by the admin endpoints (v0.5.0a6) to validate policy_path on
     POST /v1/admin/callers and POST /v1/admin/wallets before inserting.
     """
     if kind == "caller":
-        return policy_path in policy.permissions or policy_path in policy.fsp_permissions
+        return (
+            policy_path in policy.permissions
+            or policy_path in policy.fsp_permissions
+            or policy_path in policy.native_transfers
+        )
     if kind == "wallet":
         return policy_path in policy.wallet_constraints
     return False

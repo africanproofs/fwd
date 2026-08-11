@@ -474,3 +474,28 @@ def test_policy_loader_fsp_type_set_matches_domain() -> None:
         f"policy_loader rejected domain-valid message types: {type_errors}\n"
         f"Domain MESSAGE_TYPES = {MESSAGE_TYPES}"
     )
+
+
+def test_policy_path_exists_native_transfer_path_accepted() -> None:
+    """A caller binding may resolve to a native_transfers block (a110 — the
+    admin caller-create gate must accept the value-only-transfer capability,
+    mirroring check_consistency Check 1c and policy_engine)."""
+    policy = Policy.model_validate(
+        {
+            "version": 1,
+            "callers": {},
+            "permissions": {},
+            "fsp_permissions": {},
+            "native_transfers": {
+                "perm/funding-flare": {
+                    "chains": [14],
+                    "recipient_allowlist": ["0x" + "44" * 20],
+                    "max_value_wei": "400000000000000000000",
+                    "wallet_allowlist": ["ap-funder"],
+                }
+            },
+            "wallet_constraints": {},
+        }
+    )
+    assert policy_path_exists(policy, "perm/funding-flare", "caller") is True
+    assert policy_path_exists(policy, "perm/funding-songbird", "caller") is False
